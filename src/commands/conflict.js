@@ -1,11 +1,11 @@
 import { spawnSync, execFileSync } from 'node:child_process';
-import { existsSync, readSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { resolveMR } from '../resolve.js';
 import { CliError } from '../errors.js';
 import { expandHome } from '../config.js';
 import { ensureMRPipeline, findJob, startJob } from '../pipeline.js';
-import { waitJob } from '../ui.js';
+import { waitJob, confirm } from '../ui.js';
 
 // gl-helper conflict <mr|ветка> [--agent claude|pi]
 // Решает конфликт силами headless-агента во временном worktree, пушит в ветку MR,
@@ -137,20 +137,4 @@ function buildPrompt({ repo, mr }) {
     '',
     'В конце ответа кратко перечисли: какие файлы изменены, как решён каждый конфликт, что проверено, хэш последнего коммита.',
   ].join('\n');
-}
-
-// Простое подтверждение из stdin (работает и при неинтерактивном запуске — тогда отказ).
-function confirm(msg) {
-  process.stderr.write(msg);
-  const buf = Buffer.alloc(1);
-  let line = '';
-  while (true) {
-    const n = readSync(0, buf, 0, 1);
-    if (n === 0) break;
-    const ch = buf.toString('utf8');
-    if (ch === '\n') break;
-    line += ch;
-  }
-  process.stderr.write('\n');
-  return ['y', 'yes', 'д', 'да'].includes(line.trim().toLowerCase());
 }

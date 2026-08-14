@@ -7,6 +7,7 @@ import { cmdJobs } from './commands/jobs.js';
 import { cmdRun } from './commands/run.js';
 import { cmdDeploy } from './commands/deploy.js';
 import { cmdConflict } from './commands/conflict.js';
+import { cmdCommit } from './commands/commit.js';
 
 const USAGE = `gl-helper — обёртка над glab для работы с MR и пайплайнами.
 
@@ -19,6 +20,7 @@ const USAGE = `gl-helper — обёртка над glab для работы с M
   jobs <mr|ветка>         Джобы последнего MR-пайплайна
   run <джоба> <mr|ветка>  Запустить manual-джобу (по имени или id)
   deploy <mr|ветка> [N]   build → ждать → deploy_dev (или deploy_dev2…10) → ждать
+  commit [--agent]        Сформировать и сделать коммит по паттерну (агент, без push)
   config init|show        Настроить/показать ~/.config/gl-helper/config.json
   help                    Эта справка
 
@@ -26,8 +28,8 @@ const USAGE = `gl-helper — обёртка над glab для работы с M
   -R, --repo <repo>       Репозиторий (дефолт из конфига / GL_HELPER_REPO)
   --host <hostname>       GitLab-хост (дефолт из конфига)
   --json                  Вывод в JSON (mrs, mr, jobs, run, deploy) — удобно агентам
-  --agent claude|pi       Агент для conflict (дефолт из конфига)
-  --project-dir <dir>     Каталог проекта для worktree (conflict)
+  --agent claude|pi       Агент для conflict/commit (дефолт из конфига)
+  --project-dir <dir>     Каталог проекта для worktree (conflict) / коммита (commit)
   -B, --build-job <имя>   Имя build-джобы (deploy, conflict; дефолт build_image)
   -w, --watch             В run: ждать завершения джобы
   -y, --yes               В conflict: не спрашивать подтверждение
@@ -38,6 +40,7 @@ const USAGE = `gl-helper — обёртка над glab для работы с M
   gl-helper mrs
   gl-helper mr special-offer
   gl-helper conflict !2547 --agent pi
+  gl-helper commit --agent pi
   gl-helper jobs fix/main-banner
   gl-helper run build_image fix/main-banner -w
   gl-helper deploy feat/premium-banner 3
@@ -93,6 +96,14 @@ export async function main(argv) {
           buildJob: opts.buildJob,
           yes: opts.yes,
           keepWorktree: opts.keepWorktree,
+          agentArgs: (cfg.agentArgs || {})[opts.agent || cfg.agent] || [],
+        });
+        return 0;
+      case 'commit':
+        await cmdCommit(args, {
+          agent: opts.agent || cfg.agent,
+          projectDir: opts.projectDir,
+          yes: opts.yes,
           agentArgs: (cfg.agentArgs || {})[opts.agent || cfg.agent] || [],
         });
         return 0;
