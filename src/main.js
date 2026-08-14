@@ -32,6 +32,7 @@ const USAGE = `gl-helper — обёртка над glab для работы с M
   -w, --watch             В run: ждать завершения джобы
   -y, --yes               В conflict: не спрашивать подтверждение
   --keep-worktree         В conflict: не удалять временный worktree
+  --rebuild               В deploy: перезапустить build и deploy, даже если они уже success
 
 Примеры:
   gl-helper mrs
@@ -83,7 +84,7 @@ export async function main(argv) {
         await cmdRun(g, repo, args, { json: opts.json, watch: opts.watch });
         return 0;
       case 'deploy':
-        await cmdDeploy(g, repo, args, { json: opts.json, buildJob: opts.buildJob });
+        await cmdDeploy(g, repo, args, { json: opts.json, buildJob: opts.buildJob, rebuild: opts.rebuild });
         return 0;
       case 'conflict':
         await cmdConflict(g, repo, args, {
@@ -137,7 +138,7 @@ function requireConfig() {
 function parseArgs(argv) {
   const opts = {
     json: false, repo: null, host: null, agent: null, projectDir: null, buildJob: null,
-    watch: false, yes: false, keepWorktree: false, help: false,
+    watch: false, yes: false, keepWorktree: false, rebuild: false, help: false,
   };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -151,6 +152,7 @@ function parseArgs(argv) {
     else if (a === '-w' || a === '--watch') opts.watch = true;
     else if (a === '-y' || a === '--yes') opts.yes = true;
     else if (a === '--keep-worktree') opts.keepWorktree = true;
+    else if (a === '--rebuild') opts.rebuild = true;
     else if (a === '-h' || a === '--help') opts.help = true;
     else if (a.startsWith('-')) throw new CliError(`Неизвестный флаг "${a}". См. gl-helper help.`);
     else rest.push(a);

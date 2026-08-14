@@ -42,6 +42,7 @@ test/*.test.js          node --test, мокнутый exec — без сети
 | `getJobs(repo, pid)` | `GET /pipelines/{pid}/jobs?per_page=100` |
 | `getJob(repo, jid)` | `GET /jobs/{jid}` |
 | `playJob(repo, jid)` | `POST /jobs/{jid}/play` |
+| `retryJob(repo, jid)` | `POST /jobs/{jid}/retry` — retry создаёт НОВУЮ джобу (новый id) |
 | `createMRPipeline(repo, iid)` | `POST /merge_requests/{iid}/pipelines` |
 
 Каждый вызов идёт с `--hostname <host из конфига>` (иначе glab выберет хост по git remote cwd — источник загадочных 404) и ретраями GET до 5 раз (флапающий GitLab).
@@ -51,7 +52,7 @@ test/*.test.js          node --test, мокнутый exec — без сети
 1. `src/commands/<имя>.js`: `export async function cmdX(g, repo, args, opts)`.
    - `args` — позиционные аргументы после команды; `opts` — флаги (словарь из `parseArgs` в main.js).
    - Для «найти MR по номеру/ветке» — `resolveMR(g, repo, query)`.
-   - Для работы с джобами — `ensureMRPipeline` (head-пайплайн или новый) и `findJob`.
+   - Для запуска джоб всегда используй `startJob(g, repo, job, {force})` из `pipeline.js`: manual → play, failed/canceled → retry, force — retry даже success. Возвращает актуальный `{id, status}` — retry меняет id, ждать нужно по нему.
 2. `src/main.js`: добавь `case` в `switch`, строку в `USAGE`. Новый флаг — в `parseArgs` и в описание флагов.
 3. Тест в `test/`: мокай `g` объектом с `async`-методами (см. `resolve.test.js`) или проверяй чистые функции (`pipeline-format.test.js`).
 4. Обнови таблицу команд в README.md.
