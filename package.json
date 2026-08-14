@@ -1,0 +1,16 @@
+{
+  "name": "gl-helper",
+  "version": "0.1.0",
+  "description": "CLI-обёртка над glab: MR, конфликты, пайплайны, деплой. Для людей и AI-агентов.",
+  "type": "module",
+  "bin": {
+    "gl-helper": "bin/gl-helper.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "license": "MIT"
+}

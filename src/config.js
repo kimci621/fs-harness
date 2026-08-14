@@ -1,0 +1,52 @@
+import { homedir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { CliError } from './errors.js';
+
+export const CONFIG_PATH = path.join(homedir(), '.config', 'gl-helper', 'config.json');
+
+export const DEFAULTS = {
+  repo: process.env.GL_HELPER_REPO || 'fitstars/fitstars-nuxt',
+  host: 'fitstars.gitlab.yandexcloud.net',
+  projectDir: '~/Projects/fitstars-frontend',
+  agent: 'claude',
+  agentArgs: {
+    claude: ['--dangerously-skip-permissions'],
+    pi: [],
+  },
+};
+
+export function loadConfig(env = process.env) {
+  const cfg = { ...DEFAULTS, agentArgs: { ...DEFAULTS.agentArgs } };
+  if (existsSync(CONFIG_PATH)) {
+    try {
+      const user = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+      cfg.repo = user.repo || cfg.repo;
+      cfg.host = user.host || cfg.host;
+      cfg.projectDir = user.projectDir || cfg.projectDir;
+      cfg.agent = user.agent || cfg.agent;
+      cfg.agentArgs = { ...cfg.agentArgs, ...(user.agentArgs || {}) };
+    } catch (err) {
+      throw new CliError(`Конфиг ${CONFIG_PATH} повреждён (${err.message}). Поправь или удали файл.`);
+    }
+  }
+  if (env.GL_HELPER_REPO) cfg.repo = env.GL_HELPER_REPO;
+  return cfg;
+}
+
+export function expandHome(p) {
+  return p.startsWith('~') ? path.join(homedir(), p.slice(1)) : p;
+}
+
+export function writeDefaultConfig() {
+  mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+  writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULTS, null, 2) + '\n');
+  return CONFIG_PATH;
+}
+
+export function configInit() {
+  if (existsSync(CONFIG_PATH)) {
+    throw new CliError(`Конфиг уже есть: ${CONFIG_PATH}. Отредактируй его или удали перед повторным init.`);
+  }
+  return writeDefaultConfig();
+}
