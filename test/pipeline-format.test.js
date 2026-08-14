@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { findJob, deployJobName, mapLimit } from '../src/pipeline.js';
+import { cmdDeploy } from '../src/commands/deploy.js';
 import { commentStats, fmtComments, fmtMRRow, humanize } from '../src/format.js';
 import { CliError } from '../src/errors.js';
 
@@ -76,4 +77,29 @@ test('mapLimit: конкурентность и порядок', async () => {
   });
   assert.deepEqual(out, [2, 4, 6, 8, 10]);
   assert.ok(maxActive <= 2);
+});
+
+test('cmdDeploy: buildJob null → дефолт build_image', async () => {
+  const calls = [];
+  const g = {
+    getMR: async () => ({ iid: 1, sha: 'abc', source_branch: 'feature/x', target_branch: 'dev', head_pipeline: { id: 9, sha: 'abc' } }),
+    listOpenMRs: async () => [],
+    getJobs: async (_r, pid) => {
+      calls.push(['getJobs', pid]);
+      if (calls.filter((c) => c[0] === 'getJobs').length === 1) {
+        return [
+          { id: 1, name: 'build_image', stage: 'build', status: 'success' },
+          { id: 2, name: 'deploy_dev2', stage: 'deploy_dev', status: 'success' },
+        ];
+      }
+      return [
+        { id: 1, name: 'build_image', stage: 'build', status: 'success' },
+        { id: 2, name: 'deploy_dev2', stage: 'deploy_dev', status: 'success' },
+      ];
+    },
+    playJob: async (_r, jid) => { calls.push(['play', jid]); return { status: 'pending' }; },
+  };
+  // buildJob явно null (так приходит из parseArgs) — должен отработать дефолт.
+  await cmdDeploy(g, 'r/repo', ['1', '2'], { buildJob: null, intervalMs: 1 });
+  assert.ok(calls.some((c) => c[0] === 'getJobs'));
 });

@@ -5,22 +5,23 @@ import { waitJob } from '../ui.js';
 
 // gl-helper deploy <mr|ветка> [N]
 // build → ждём success → deploy_dev[ N] → ждём итог.
-export async function cmdDeploy(g, repo, args, { json, buildJob = 'build_image', intervalMs } = {}) {
+export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs } = {}) {
   const [mrQuery, n] = args;
   if (!mrQuery) throw new CliError('Использование: gl-helper deploy <mr|ветка> [N]');
 
+  const jobName = buildJob || 'build_image';
   const mr = await resolveMR(g, repo, mrQuery);
   const pipeline = await ensureMRPipeline(g, repo, mr);
   const deployName = deployJobName(n);
   const waitOpts = { g, repo, pipelineId: pipeline.id, ...(intervalMs ? { intervalMs } : {}) };
 
-  if (json) console.log(JSON.stringify({ pipeline: pipeline.id, build_job: buildJob, deploy_job: deployName }, null, 2));
+  if (json) console.log(JSON.stringify({ pipeline: pipeline.id, build_job: jobName, deploy_job: deployName }, null, 2));
 
   // 1. build
   let jobs = await g.getJobs(repo, pipeline.id);
-  let build = findJob(jobs, buildJob);
+  let build = findJob(jobs, jobName);
   if (!build) {
-    throw new CliError(`Build-джоба "${buildJob}" не найдена в пайплайне #${pipeline.id}.\nДоступные: ${jobs.map((j) => j.name).join(', ')}`);
+    throw new CliError(`Build-джоба "${jobName}" не найдена в пайплайне #${pipeline.id}.\nДоступные: ${jobs.map((j) => j.name).join(', ')}`);
   }
   console.log(`▶ Сборка: ${build.name} (#${build.id})`);
   if (build.status === 'manual') {
