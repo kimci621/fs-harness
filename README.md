@@ -51,6 +51,7 @@ gl-helper config show
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id |
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
 | `deploy <ветка\|mr> [N]` | build → ждать ✅ → запустить `deploy_dev` (или `deploy_dev2`…`deploy_dev10`) → ждать итог. С `--rebuild` — перезапускает build и deploy даже при success (когда кто-то перезаписал слот своим MR) |
+| `commit` | Агент формирует сообщение коммита по паттерну и коммитит все изменения (без push). Паттерн — встроенный или из `.llm-commit-pattern` проекта |
 | `config init\|show` | Конфиг |
 | `help` | Справка |
 
@@ -65,6 +66,7 @@ gl-helper jobs fix/main-banner
 gl-helper run build_image fix/main-banner -w
 gl-helper deploy feat/premium-banner 3      # deploy_dev3
 gl-helper deploy feat/premium-banner 2 --rebuild  # перезаписать слот dev2 своим кодом
+gl-helper commit --agent pi
 gl-helper conflict !2547 --agent pi
 gl-helper -R other/repo mrs --json          # JSON для агентов/скриптов
 ```
@@ -79,6 +81,26 @@ gl-helper -R other/repo mrs --json          # JSON для агентов/скр�
 6. В любом случае убирает за собой: worktree, временная ветка. `--keep-worktree` отключает очистку.
 
 Перед запуском спрашивает подтверждение (отключить — `-y`).
+
+## Команда commit
+
+Агент (`claude` или `pi`) смотрит `git status`/`git diff`, формулирует сообщение коммита по паттерну и выполняет `git add -A && git commit`. Push не делает.
+
+**Встроенный паттерн** (файл `src/prompts/commit.md`):
+
+```
+<имя текущей ветки> <тип>(<область>): <описание>
+feature/FD-5466 refactor(components): убрал дублирование логики
+```
+
+Префикс — имя ветки ровно как есть (1в1). Тип: feat/fix/refactor/chore/style/perf/test/docs/ci. Область — компонент/модуль/директория. Описание — что сделано.
+
+**Свой паттерн на проект**: положи файл `.llm-commit-pattern` в корень репозитория — его содержимое полностью заменит встроенный промпт (инструкция «изучи изменения и закоммить» добавляется автоматически).
+
+```bash
+gl-helper commit --agent pi      # в текущей директории
+gh commit -y                     # без подтверждения
+```
 
 ## Вывод
 

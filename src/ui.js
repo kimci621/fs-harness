@@ -1,3 +1,4 @@
+import { readSync } from 'node:fs';
 // Анимации и живой вывод. Всё пишется в stderr, чтобы stdout (--json) оставался чистым.
 import { statusIcon, fmtDuration } from './format.js';
 
@@ -126,4 +127,20 @@ export async function waitJob({ g, repo, pipelineId, jobId, intervalMs = 5000, t
 
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Простое подтверждение из stdin (при неинтерактивном запуске — отказ).
+export function confirm(msg) {
+  process.stderr.write(msg);
+  const buf = Buffer.alloc(1);
+  let line = '';
+  while (true) {
+    const n = readSync(0, buf, 0, 1);
+    if (n === 0) break;
+    const ch = buf.toString('utf8');
+    if (ch === '\n') break;
+    line += ch;
+  }
+  process.stderr.write('\n');
+  return ['y', 'yes', 'д', 'да'].includes(line.trim().toLowerCase());
 }

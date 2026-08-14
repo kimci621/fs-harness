@@ -53,11 +53,16 @@ test/*.test.js          node --test, мокнутый exec — без сети
    - `args` — позиционные аргументы после команды; `opts` — флаги (словарь из `parseArgs` в main.js).
    - Для «найти MR по номеру/ветке» — `resolveMR(g, repo, query)`.
    - Для запуска джоб всегда используй `startJob(g, repo, job, {force})` из `pipeline.js`: manual → play, failed/canceled → retry, force — retry даже success. Возвращает актуальный `{id, status}` — retry меняет id, ждать нужно по нему.
+   - `commit` — исключение: работает без `g` (только git + агент), сигнатура `cmdX(args, opts)`.
 2. `src/main.js`: добавь `case` в `switch`, строку в `USAGE`. Новый флаг — в `parseArgs` и в описание флагов.
 3. Тест в `test/`: мокай `g` объектом с `async`-методами (см. `resolve.test.js`) или проверяй чистые функции (`pipeline-format.test.js`).
 4. Обнови таблицу команд в README.md.
 
 Команда считается готовой, если: работает `--json` (для read-команд), ошибки — CliError с подсказкой, `npm test` зелёный, поведение описано в README и help.
+
+## Промпты для агентов
+
+Промпты лежат отдельно от кода в `src/prompts/` (`.md`-файлы) — их можно править без правки логики. Для `commit` действует оверрайд проектом: если в корне git-репозитория есть файл `.llm-commit-pattern`, его содержимое заменяет встроенный промпт (см. `src/prompts.js`).
 
 ## Контракт --json
 
