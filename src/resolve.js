@@ -15,7 +15,10 @@ export async function resolveMR(g, repo, query) {
   const needle = q.toLowerCase();
   const hits = mrs.filter((m) => String(m.source_branch || '').toLowerCase().includes(needle));
 
-  if (hits.length === 1) return hits[0];
+  if (hits.length === 1) {
+    // Полный объект MR: list-ответ не содержит head_pipeline.
+    return (await g.getMR(repo, hits[0].iid)) || hits[0];
+  }
   if (hits.length === 0) {
     const best = mrs
       .map((m) => ({ m, score: similarity(m.source_branch || '', q) }))
