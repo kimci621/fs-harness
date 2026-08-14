@@ -1,5 +1,5 @@
 import { resolveMR } from '../resolve.js';
-import { ensureMRPipeline, findJob, deployJobName } from '../pipeline.js';
+import { ensureMRPipeline, findJob, deployJobName, startJob } from '../pipeline.js';
 import { CliError } from '../errors.js';
 import { waitJob } from '../ui.js';
 
@@ -24,12 +24,10 @@ export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs } = 
     throw new CliError(`Build-джоба "${jobName}" не найдена в пайплайне #${pipeline.id}.\nДоступные: ${jobs.map((j) => j.name).join(', ')}`);
   }
   console.log(`▶ Сборка: ${build.name} (#${build.id})`);
-  if (build.status === 'manual') {
-    await g.playJob(repo, build.id);
-  } else if (['success', 'failed', 'canceled', 'skipped'].includes(build.status)) {
-    console.log(`ℹ ${build.name} уже в терминальном статусе: ${build.status}`);
-  }
-  const buildFinal = await waitJob({ ...waitOpts, jobId: build.id, label: build.name });
+  const started = await startJob(g, repo, build);
+  const buildRun = started ?? { id: build.id };
+  if (started) console.log(`   ${build.status} → ${started.status} (#${started.id})`);
+  const buildFinal = await waitJob({ ...waitOpts, jobId: buildRun.id, label: build.name });
   if (buildFinal.status !== 'success') {
     throw new CliError(`Build ${buildFinal.status} — деплой не запускаю.\nДетали: ${buildFinal.web_url}`);
   }
@@ -45,10 +43,10 @@ export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs } = 
     );
   }
   console.log(`▶ Деплой: ${deploy.name} (#${deploy.id})`);
-  if (deploy.status === 'manual') {
-    await g.playJob(repo, deploy.id);
-  }
-  const deployFinal = await waitJob({ ...waitOpts, jobId: deploy.id, label: deploy.name });
+  const deployStarted = await startJob(g, repo, deploy);
+  const deployRun = deployStarted ?? { id: deploy.id };
+  if (deployStarted) console.log(`   ${deploy.status} → ${deployStarted.status} (#${deployStarted.id})`);
+  const deployFinal = await waitJob({ ...waitOpts, jobId: deployRun.id, label: deploy.name });
   if (deployFinal.status !== 'success') {
     throw new CliError(`Деплой завершился: ${deployFinal.status}.\nДетали: ${deployFinal.web_url}`);
   }

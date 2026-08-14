@@ -25,6 +25,20 @@ export function findJob(jobs, name) {
   return null;
 }
 
+// Запускает джобу: manual → play (тот же id), failed/canceled → retry (новый id).
+// Возвращает {id, status} актуальной джобы или null, если запуск не требовался.
+export async function startJob(g, repo, job) {
+  if (job.status === 'manual') {
+    const played = await g.playJob(repo, job.id);
+    return { id: job.id, status: played?.status ?? 'pending' };
+  }
+  if (job.status === 'failed' || job.status === 'canceled') {
+    const retried = await g.retryJob(repo, job.id);
+    return { id: retried?.id ?? job.id, status: retried?.status ?? 'pending' };
+  }
+  return null;
+}
+
 // Имя deploy-джобы: deploy (N пусто или 1) → deploy_dev, N=2..10 → deploy_devN.
 export function deployJobName(n) {
   const num = Number(n);
