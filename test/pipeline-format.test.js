@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findJob, deployJobName, mapLimit } from '../src/pipeline.js';
+import { findJob, deployJobName, mapLimit, startJob } from '../src/pipeline.js';
 import { cmdDeploy } from '../src/commands/deploy.js';
 import { commentStats, fmtComments, fmtMRRow, humanize } from '../src/format.js';
 import { CliError } from '../src/errors.js';
@@ -77,6 +77,18 @@ test('mapLimit: конкурентность и порядок', async () => {
   });
   assert.deepEqual(out, [2, 4, 6, 8, 10]);
   assert.ok(maxActive <= 2);
+});
+
+test('startJob: manual → play (тот же id), failed → retry (новый id), success → null', async () => {
+  const calls = [];
+  const g = {
+    playJob: async (_r, jid) => { calls.push(['play', jid]); return { id: jid, status: 'pending' }; },
+    retryJob: async (_r, jid) => { calls.push(['retry', jid]); return { id: jid + 100, status: 'pending' }; },
+  };
+  assert.deepEqual(await startJob(g, 'r', { id: 1, status: 'manual' }), { id: 1, status: 'pending' });
+  assert.deepEqual(await startJob(g, 'r', { id: 2, status: 'failed' }), { id: 102, status: 'pending' });
+  assert.equal(await startJob(g, 'r', { id: 3, status: 'success' }), null);
+  assert.deepEqual(calls, [['play', 1], ['retry', 2]]);
 });
 
 test('cmdDeploy: buildJob null → дефолт build_image', async () => {

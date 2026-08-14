@@ -4,7 +4,7 @@ import path from 'node:path';
 import { resolveMR } from '../resolve.js';
 import { CliError } from '../errors.js';
 import { expandHome } from '../config.js';
-import { ensureMRPipeline, findJob } from '../pipeline.js';
+import { ensureMRPipeline, findJob, startJob } from '../pipeline.js';
 import { waitJob } from '../ui.js';
 
 // gl-helper conflict <mr|ветка> [--agent claude|pi]
@@ -94,8 +94,10 @@ export async function cmdConflict(g, repo, args, opts = {}) {
       throw new CliError(`Build-джоба "${opts.buildJob ?? 'build_image'}" не найдена в пайплайне #${pipeline.id}.\nДоступные: ${jobs.map((j) => j.name).join(', ')}`);
     }
     console.log(`▶ Запускаю build: ${build.name} (#${build.id}) в пайплайне #${pipeline.id}`);
-    if (build.status === 'manual') await g.playJob(repo, build.id);
-    const final = await waitJob({ g, repo, pipelineId: pipeline.id, jobId: build.id, label: build.name });
+    const started = await startJob(g, repo, build);
+    const buildRun = started ?? { id: build.id };
+    if (started) console.log(`   ${build.status} → ${started.status} (#${started.id})`);
+    const final = await waitJob({ g, repo, pipelineId: pipeline.id, jobId: buildRun.id, label: build.name });
     if (final.status !== 'success') {
       throw new CliError(`Build завершился: ${final.status}.\nДетали: ${final.web_url}`);
     }

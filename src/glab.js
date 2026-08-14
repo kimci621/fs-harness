@@ -56,6 +56,8 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
 
     playJob: (repo, jid) => api(repo, `/jobs/${jid}/play`, { method: 'POST' }),
 
+    retryJob: (repo, jid) => api(repo, `/jobs/${jid}/retry`, { method: 'POST' }),
+
     createMRPipeline: (repo, iid) => api(repo, `/merge_requests/${iid}/pipelines`, { method: 'POST' }),
   };
 }
