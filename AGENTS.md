@@ -1,0 +1,85 @@
+# AGENTS.md — gl-helper для AI-агентов
+
+Единственный входной файл репозитория. Ты поддерживаешь или расширяешь `gl-helper` — читай этот файл целиком перед правками.
+
+## Что это
+
+CLI-обёртка над `glab api` для работы с MR и пайплайнами GitLab. Стек: Node.js ESM, **ноль npm-зависимостей**, только системные `node`, `glab`, `git`. Весь вывод данных — JSON через `glab api`, никакого парсинга человекочитаемого вывода glab. Дизайн-решение зафиксировано в `docs/SPEC.md`.
+
+## Карта файлов
+
+```
+bin/gl-helper.js        точка входа: import + main()
+src/main.js             разбор argv, dispatch, help, обработка ошибок
+src/glab.js             ВСЕ вызовы glab api. exec инжектируется (тесты)
+src/resolve.js          поиск MR: по номеру или части имени ветки (неточный)
+src/pipeline.js         ensureMRPipeline, findJob, deployJobName, mapLimit
+src/config.js           ~/.config/gl-helper/config.json
+src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
+src/format.js           иконки статусов, humanize, таблицы, строки MR
+src/errors.js           CliError (сообщение без stack trace)
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, conflict
+test/*.test.js          node --test, мокнутый exec — без сети
+```
+
+## Принципы
+
+1. **Любая команда = чистые функции над объектом `g`** (экземпляр createGlab). Команды не обращаются к glab напрямую — только через `g.<метод>`. Так их можно тестировать моком.
+2. **Люди и агенты — равные потребители**: читаемый вывод в stdout, анимации — в stderr, `--json` — стабильные поля для скриптов.
+3. **Ошибки — через `CliError`** (из `src/errors.js`): печатается только сообщение, понятный совет «что делать», exit code 1 (или заданный). Никаких сырых stack trace.
+4. **Ожидание — только через `waitJob`** из `ui.js`: опрос каждые 5с, живая таблица джоб пайплайна, таймаут 1ч. Терминальные статусы: success, failed, canceled, skipped.
+5. **Комментарии в коде — на русском**, короткие, только «что делает».
+
+## Карта «команда → вызовы glab» (glab.js)
+
+| Метод `g` | glab api |
+|---|---|
+| `listOpenMRs(repo)` | `GET /merge_requests?state=opened&per_page=100&order_by=updated_at&sort=desc` |
+| `getMR(repo, iid)` | `GET /merge_requests/{iid}` |
+| `getDiscussions(repo, iid)` | `GET /merge_requests/{iid}/discussions?per_page=100` |
+| `listMRPipelines(repo)` | `GET /pipelines?source=merge_request_event&per_page=100` |
+| `getPipeline(repo, pid)` | `GET /pipelines/{pid}` |
+| `getJobs(repo, pid)` | `GET /pipelines/{pid}/jobs?per_page=100` |
+| `getJob(repo, jid)` | `GET /jobs/{jid}` |
+| `playJob(repo, jid)` | `POST /jobs/{jid}/play` |
+| `createMRPipeline(repo, iid)` | `POST /merge_requests/{iid}/pipelines` |
+
+Каждый вызов идёт с `--hostname <host из конфига>` (иначе glab выберет хост по git remote cwd — источник загадочных 404) и ретраями GET до 5 раз (флапающий GitLab).
+
+## Как добавить команду
+
+1. `src/commands/<имя>.js`: `export async function cmdX(g, repo, args, opts)`.
+   - `args` — позиционные аргументы после команды; `opts` — флаги (словарь из `parseArgs` в main.js).
+   - Для «найти MR по номеру/ветке» — `resolveMR(g, repo, query)`.
+   - Для работы с джобами — `ensureMRPipeline` (head-пайплайн или новый) и `findJob`.
+2. `src/main.js`: добавь `case` в `switch`, строку в `USAGE`. Новый флаг — в `parseArgs` и в описание флагов.
+3. Тест в `test/`: мокай `g` объектом с `async`-методами (см. `resolve.test.js`) или проверяй чистые функции (`pipeline-format.test.js`).
+4. Обнови таблицу команд в README.md.
+
+Команда считается готовой, если: работает `--json` (для read-команд), ошибки — CliError с подсказкой, `npm test` зелёный, поведение описано в README и help.
+
+## Контракт --json
+
+`mrs`/`mr`: `{iid, title, draft, source_branch, target_branch, has_conflicts, pipeline: {id, status}|null, pipeline_stale, comments: {total, open, resolved}, updated_at, web_url}`.
+
+`jobs`: `{pipeline: {id, status, web_url}, jobs: [{id, name, stage, status, web_url}]}`.
+
+`run`/`deploy`: `{pipeline, job|build_job|deploy_job}` — параметры перед запуском.
+
+## Чеклист перед коммитом
+
+```bash
+npm test                          # все тесты
+node bin/gl-helper.js help        # справка актуальна
+node bin/gl-helper.js mrs         # smoke на реальном API (read-only)
+node bin/gl-helper.js mr <ветка> --json
+```
+
+Деплой и play-джоб реальным API тестируй только по явной просьбе человека — они меняют состояние GitLab.
+
+## Правила правки кода
+
+- Минимальный диф: сначала тест/воспроизведение, потом фикс.
+- Спиннеры/таблицы — только в `ui.js`, иконки/строки — только в `format.js`. Не дублируй.
+- `waitJob` принимает `intervalMs` опционально — в тестах можно ускорить.
+- Не добавляй npm-зависимости без острой нужды — это осознанное требование (работает где угодно без install).
