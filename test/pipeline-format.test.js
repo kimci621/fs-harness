@@ -79,7 +79,7 @@ test('mapLimit: конкурентность и порядок', async () => {
   assert.ok(maxActive <= 2);
 });
 
-test('startJob: manual → play (тот же id), failed → retry (новый id), success → null', async () => {
+test('startJob: manual → play (тот же id), failed → retry (новый id), success → null, force → retry', async () => {
   const calls = [];
   const g = {
     playJob: async (_r, jid) => { calls.push(['play', jid]); return { id: jid, status: 'pending' }; },
@@ -88,7 +88,8 @@ test('startJob: manual → play (тот же id), failed → retry (новый i
   assert.deepEqual(await startJob(g, 'r', { id: 1, status: 'manual' }), { id: 1, status: 'pending' });
   assert.deepEqual(await startJob(g, 'r', { id: 2, status: 'failed' }), { id: 102, status: 'pending' });
   assert.equal(await startJob(g, 'r', { id: 3, status: 'success' }), null);
-  assert.deepEqual(calls, [['play', 1], ['retry', 2]]);
+  assert.deepEqual(await startJob(g, 'r', { id: 4, status: 'success' }, { force: true }), { id: 104, status: 'pending' });
+  assert.deepEqual(calls, [['play', 1], ['retry', 2], ['retry', 4]]);
 });
 
 test('cmdDeploy: buildJob null → дефолт build_image', async () => {

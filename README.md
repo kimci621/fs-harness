@@ -50,11 +50,11 @@ gl-helper config show
 | `conflict <mr\|ветка>` | Решает конфликт силами AI-агента в отдельном worktree, пушит в ветку MR и сам запускает build (подробнее ниже) |
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id |
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
-| `deploy <ветка\|mr> [N]` | build → ждать ✅ → запустить `deploy_dev` (или `deploy_dev2`…`deploy_dev10`) → ждать итог |
+| `deploy <ветка\|mr> [N]` | build → ждать ✅ → запустить `deploy_dev` (или `deploy_dev2`…`deploy_dev10`) → ждать итог. С `--rebuild` — перезапускает build и deploy даже при success (когда кто-то перезаписал слот своим MR) |
 | `config init\|show` | Конфиг |
 | `help` | Справка |
 
-Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`.
+Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy).
 
 Примеры:
 
@@ -64,6 +64,7 @@ gl-helper mr special-offer
 gl-helper jobs fix/main-banner
 gl-helper run build_image fix/main-banner -w
 gl-helper deploy feat/premium-banner 3      # deploy_dev3
+gl-helper deploy feat/premium-banner 2 --rebuild  # перезаписать слот dev2 своим кодом
 gl-helper conflict !2547 --agent pi
 gl-helper -R other/repo mrs --json          # JSON для агентов/скриптов
 ```

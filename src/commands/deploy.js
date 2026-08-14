@@ -5,7 +5,7 @@ import { waitJob } from '../ui.js';
 
 // gl-helper deploy <mr|ветка> [N]
 // build → ждём success → deploy_dev[ N] → ждём итог.
-export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs } = {}) {
+export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, rebuild = false } = {}) {
   const [mrQuery, n] = args;
   if (!mrQuery) throw new CliError('Использование: gl-helper deploy <mr|ветка> [N]');
 
@@ -24,7 +24,7 @@ export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs } = 
     throw new CliError(`Build-джоба "${jobName}" не найдена в пайплайне #${pipeline.id}.\nДоступные: ${jobs.map((j) => j.name).join(', ')}`);
   }
   console.log(`▶ Сборка: ${build.name} (#${build.id})`);
-  const started = await startJob(g, repo, build);
+  const started = await startJob(g, repo, build, { force: rebuild });
   const buildRun = started ?? { id: build.id };
   if (started) console.log(`   ${build.status} → ${started.status} (#${started.id})`);
   const buildFinal = await waitJob({ ...waitOpts, jobId: buildRun.id, label: build.name });
@@ -43,7 +43,7 @@ export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs } = 
     );
   }
   console.log(`▶ Деплой: ${deploy.name} (#${deploy.id})`);
-  const deployStarted = await startJob(g, repo, deploy);
+  const deployStarted = await startJob(g, repo, deploy, { force: rebuild });
   const deployRun = deployStarted ?? { id: deploy.id };
   if (deployStarted) console.log(`   ${deploy.status} → ${deployStarted.status} (#${deployStarted.id})`);
   const deployFinal = await waitJob({ ...waitOpts, jobId: deployRun.id, label: deploy.name });
