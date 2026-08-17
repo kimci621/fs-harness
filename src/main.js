@@ -11,6 +11,7 @@ import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdMRComments } from './commands/mr-comments.js';
+import { runMCPServer } from './mcp.js';
 import { formatErrorJSON } from './output.js';
 
 const USAGE = `gl-helper — обёртка над glab для работы с MR и пайплайнами.
@@ -28,6 +29,7 @@ const USAGE = `gl-helper — обёртка над glab для работы с M
   commit [--agent]        Сформировать и сделать коммит по паттерну (агент, без push)
   doctor                  Самодиагностика: glab, конфиг, API, git, агенты
   agent-guide             Полная инструкция для AI-агентов (что читать первой)
+  mcp                     MCP-сервер (stdio): инструменты для AI-клиентов
   config init|show        Настроить/показать ~/.config/gl-helper/config.json
   help                    Эта справка
 
@@ -134,6 +136,9 @@ export async function main(argv) {
         return await cmdDoctor({ repo: opts.repo || cfg.repo, host: opts.host || cfg.host, projectDir: opts.projectDir || cfg.projectDir, json: opts.json });
       case 'agent-guide':
         return cmdAgentGuide();
+      case 'mcp':
+        await runMCPServer();
+        return 0;
       default:
         console.error(`Неизвестная команда "${cmd}".\n`);
         console.error(USAGE);

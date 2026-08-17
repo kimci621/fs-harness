@@ -55,6 +55,7 @@ gl-helper config show
 | `commit` | Агент формирует сообщение коммита по паттерну и коммитит все изменения (без push). Паттерн — встроенный или из `.llm-commit-pattern` проекта |
 | `doctor` | Самодиагностика: glab, конфиг, доступ к API, git-репозиторий, агенты |
 | `agent-guide` | Полная инструкция для AI-агента: команды, флаги, env, JSON-схемы, коды ошибок |
+| `mcp` | MCP-сервер (stdio): те же команды как типизированные инструменты для AI-клиентов |
 | `config init\|show` | Конфиг |
 | `help` | Справка |
 
@@ -117,6 +118,26 @@ export GL_HELPER_YES=1    # не спрашивать подтверждение
 - Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `config_invalid`, `canceled`.
 - Полная инструкция для агента встроена в CLI: `gl-helper agent-guide`.
 - Перед side-effect командами можно смотреть план: `--dry-run`.
+- Для нативного вызова инструментов из AI-клиентов: `gl-helper mcp` (см. раздел MCP-режим).
+
+## MCP-режим
+
+`gl-helper mcp` — stdio MCP-сервер: те же команды как типизированные инструменты. Агент вызывает их нативно, без shell и парсинга: аргументы валидируются JSON-Schema, результат — структурированный JSON, ожидание джоб — внутри сервера.
+
+**Инструменты:** `mrs`, `mr`, `mr_comments`, `jobs` (только чтение) и `run`, `deploy`, `conflict`, `commit` (меняют состояние; клиент спрашивает разрешение), плюс `doctor`, `agent_guide`.
+
+**Подключение:**
+
+```bash
+# Claude Code (проект или user scope)
+claude mcp add gl-helper -- gl-helper mcp
+# .mcp.json в проекте:
+# { "mcpServers": { "gl-helper": { "command": "gl-helper", "args": ["mcp"] } } }
+```
+
+pi не имеет встроенного MCP (осознанный дизайн) — там gl-helper используется через CLI/`--json` или MCP-адаптеры-расширения (pi-mcp-adapter).
+
+CLI при этом никуда не девается: человеку — таблицы и спиннеры, агентам — MCP или `--json`.
 
 ## Вывод
 

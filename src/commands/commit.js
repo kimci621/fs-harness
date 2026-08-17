@@ -11,7 +11,7 @@ import { makeLogger, finish } from '../output.js';
 // Агент формирует сообщение коммита по паттерну (.llm-commit-pattern или встроенный)
 // и коммитит все изменения. Push НЕ делает.
 export async function cmdCommit(args, opts = {}) {
-  const log = makeLogger(opts.json);
+  const log = opts.asObject ? () => {} : makeLogger(opts.json);
   const agent = opts.agent;
   if (!['claude', 'pi'].includes(agent)) {
     throw new CliError(`Неизвестный агент "${agent}". Допустимо: claude, pi.`, 1, 'usage');
@@ -43,6 +43,7 @@ export async function cmdCommit(args, opts = {}) {
       prompt_source: source,
       action: 'агент изучит изменения и выполнит: git add -A && git commit -m "<сообщение по паттерну>" (без push)',
     };
+    if (opts.asObject) return plan;
     if (opts.json) {
       finish(true, plan);
     } else {
@@ -59,7 +60,7 @@ export async function cmdCommit(args, opts = {}) {
   log(`📝 Коммит: ${dir}`);
   log(`   Ветка: ${branch} · агент: ${agent} · промпт: ${source}`);
 
-  if (!opts.yes && !confirm(`Запускаю агента ${agent}. Продолжить? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Запускаю агента ${agent}. Продолжить? [y/N] `)) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
 
@@ -80,5 +81,7 @@ export async function cmdCommit(args, opts = {}) {
   const hash = after.slice(0, 12);
   const message = git(['log', '-1', '--pretty=%s']);
   log(`✅ Коммит создан: ${hash} ${message}`);
-  finish(opts.json, { ok: true, dir, branch, commit: { hash, message } });
+  const result = { ok: true, dir, branch, commit: { hash, message } };
+  if (!opts.asObject) finish(opts.json, result);
+  return result;
 }

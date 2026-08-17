@@ -18,7 +18,8 @@ src/config.js           ~/.config/gl-helper/config.json
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, conflict, commit, doctor, agent-guide
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, conflict, commit, doctor, agent-guide, mr-comments
+src/mcp.js              MCP-сервер (stdio): реестр инструментов + обработка JSON-RPC
 test/*.test.js          node --test, мокнутый exec — без сети
 ```
 
@@ -71,6 +72,16 @@ test/*.test.js          node --test, мокнутый exec — без сети
 - `--dry-run` — план без side-effect'ов для run/deploy/conflict/commit.
 - `gl-helper agent-guide` — самодостаточная инструкция, которую агент запускает первой.
 - В командах весь прогресс печатай через `makeLogger(json)` из `output.js`, итог — через `finish(json, obj)`. Ошибки — `CliError(msg, exitCode, code)` с машинным кодом.
+- `asObject: true` в опциях команды — вернуть результат объектом без печати (так команды вызывает MCP-сервер). Никогда не печатай в stdout из MCP-режима: stdout занят протоколом.
+- `quiet: true` и `onTick(text)` в `waitJob` — тихий режим ожидания с прогресс-нотификациями для MCP.
+
+## MCP-сервер (src/mcp.js)
+
+- Протокол: JSON-RPC 2.0 поверх stdio, **одно сообщение = одна строка JSON**. stdout — только протокол.
+- Методы: `initialize`, `ping`, `tools/list`, `tools/call`. Нотификации игнорируются, при закрытии stdin сервер выходит.
+- Инструменты описаны в `createMCPContext({cfg, g, notify})`: name, description (по нему модель маршрутизирует), inputSchema (JSON Schema), handler(args). Хендлеры вызывают команды с `asObject: true`.
+- Ошибки инструмента: `{content:[{type:'text',...}], isError: true}` с `{ok:false,error:{code,message}}` в тексте.
+- Добавить инструмент: строка в `tools` массива + тест в `test/mcp.test.js`.
 
 ## Контракт --json
 
