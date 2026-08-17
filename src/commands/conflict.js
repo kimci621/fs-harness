@@ -67,6 +67,9 @@ export async function cmdConflict(g, repo, args, opts = {}) {
   }
 
   const projectDir = expandHome(opts.projectDir);
+  if (!projectDir) {
+    throw new CliError('Каталог проекта не настроен (projectDir пуст). Выполни gl-helper config init или передай --project-dir <путь к локальному репо>.', 1, 'config_invalid');
+  }
   if (!existsSync(path.join(projectDir, '.git'))) {
     throw new CliError(`Каталог проекта ${projectDir} не является git-репозиторием. Укажи --project-dir.`, 1, 'config_invalid');
   }
