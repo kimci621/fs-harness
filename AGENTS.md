@@ -19,7 +19,8 @@ src/ui.js               спиннер, live-таблица, waitJob (опрос
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
 src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, conflict, commit, doctor, agent-guide, mr-comments
-src/mcp.js              MCP-сервер (stdio): реестр инструментов + обработка JSON-RPC
+src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
+src/mcp.js              MCP-сервер (stdio): обработка JSON-RPC, инструменты берёт из registry
 test/*.test.js          node --test, мокнутый exec — без сети
 ```
 
@@ -50,16 +51,19 @@ test/*.test.js          node --test, мокнутый exec — без сети
 
 ## Как добавить команду
 
+**Единственное место регистрации — `src/registry.js`.** Добавил запись в `COMMANDS` → команда появилась в dispatch, help, agent-guide и MCP tools/list одновременно.
+
 1. `src/commands/<имя>.js`: `export async function cmdX(g, repo, args, opts)`.
    - `args` — позиционные аргументы после команды; `opts` — флаги (словарь из `parseArgs` в main.js).
    - Для «найти MR по номеру/ветке» — `resolveMR(g, repo, query)`.
    - Для запуска джоб всегда используй `startJob(g, repo, job, {force})` из `pipeline.js`: manual → play, failed/canceled → retry, force — retry даже success. Возвращает актуальный `{id, status}` — retry меняет id, ждать нужно по нему.
    - `commit` — исключение: работает без `g` (только git + агент), сигнатура `cmdX(args, opts)`.
-2. `src/main.js`: добавь `case` в `switch`, строку в `USAGE`. Новый флаг — в `parseArgs` и в описание флагов.
-3. Тест в `test/`: мокай `g` объектом с `async`-методами (см. `resolve.test.js`) или проверяй чистые функции (`pipeline-format.test.js`).
-4. Обнови таблицу команд в README.md.
+   - Поддержи `asObject: true` — вернуть результат объектом без печати (нужно MCP).
+2. `src/registry.js`: запись в `COMMANDS` — name, usage, description, example, run(ctx, args, opts) и (для экспорта в MCP) `mcp: {description, inputSchema, call(ctx, args)}`.
+3. Тесты: `test/<имя>.test.js` на чистую логику команды + `test/registry.test.js` проверит целостность записи автоматически.
+4. Новый флаг — в `parseArgs` (main.js) и в `FLAGS_USAGE` там же.
 
-Команда считается готовой, если: работает `--json` (для read-команд), ошибки — CliError с подсказкой, `npm test` зелёный, поведение описано в README и help.
+Команда считается готовой, если: работает `--json` (для read-команд), ошибки — CliError с подсказкой, `npm test` зелёный, запись есть в registry (README-таблица — по желанию).
 
 ## Промпты для агентов
 

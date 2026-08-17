@@ -1,23 +1,17 @@
 // gl-helper agent-guide — самодостаточная инструкция для AI-агента.
+// Список команд генерируется из реестра (src/registry.js), чтобы не рассинхронизироваться.
 // Агент запускает эту команду первой и получает всё, что нужно для работы.
-export const AGENT_GUIDE = `gl-helper — CLI для работы с GitLab (MR, пайплайны, деплой, конфликты, коммиты).
+
+const GUIDE_TEMPLATE = `gl-helper — CLI для работы с GitLab (MR, пайплайны, деплой, конфликты, коммиты).
 Обёртка над glab; все данные — JSON через API.
 
 ## Команды
 
-  gl-helper mrs                     все открытые MR: ветки, пайплайн, комменты, конфликты
-  gl-helper mr <ветка|номер>        один MR (ветку можно частично, неточный поиск)
-  gl-helper jobs <mr|ветка>         джобы последнего MR-пайплайна
-  gl-helper mr-comments <mr|ветка>  комментарии MR по тредам; --resolved / --open
-  gl-helper run <джоба> <mr|ветка>  запустить manual-джобу; -w — ждать завершения
-  gl-helper deploy <ветка> [N]      build → ждать → deploy_dev[ N] → ждать; --rebuild — перезапустить даже success
-  gl-helper conflict <mr|ветка>     агент решает конфликт MR в worktree, gl-helper пушит build
-  gl-helper commit                  агент формирует коммит по паттерну (.llm-commit-pattern) и коммитит
-  gl-helper doctor                  самодиагностика (glab, конфиг, API, git, агенты)
-  gl-helper help                    справка
+{{COMMANDS}}
 
 Флаги: -R/--repo <repo>, --host <host>, --json, --agent claude|pi, --project-dir <dir>,
--B/--build-job <имя> (дефолт build_image), -w/--watch, -y/--yes, --keep-worktree, --rebuild, --dry-run.
+-B/--build-job <имя> (дефолт build_image), -w/--watch, -y/--yes, --keep-worktree, --rebuild, --dry-run,
+--resolved/--open (mr-comments).
 
 ## Режим агента (env)
 
@@ -28,7 +22,7 @@ export const AGENT_GUIDE = `gl-helper — CLI для работы с GitLab (MR,
 ## Рекомендуемый порядок работы
 
 1. gl-helper doctor — убедиться, что окружение готово (иначе чинить по выводу).
-2. read-команды (mrs, mr, jobs) — узнать состояние.
+2. read-команды (mrs, mr, mr-comments, jobs) — узнать состояние.
 3. side-effect команды сначала с --dry-run, показать план человеку, затем выполнить.
 
 ## --json: схемы результатов
@@ -62,7 +56,16 @@ config_invalid, canceled.
 - git-операции конфликта делаются только в ветке MR (source), target не трогается, force-push запрещён.
 - Side-effect команды без -y/GL_HELPER_YES спрашивают подтверждение и при неинтерактивном stdin откажутся.`;
 
-export function cmdAgentGuide() {
-  console.log(AGENT_GUIDE);
+// Генерирует гайд со списком команд из реестра.
+export function buildAgentGuide(commands) {
+  const lines = commands
+    .filter((c) => c.name !== 'mcp')
+    .map((c) => `  gl-helper ${c.usage.padEnd(24)} ${c.description}`)
+    .join('\n');
+  return GUIDE_TEMPLATE.replace('{{COMMANDS}}', lines);
+}
+
+export function cmdAgentGuide(commands) {
+  console.log(buildAgentGuide(commands));
   return 0;
 }
