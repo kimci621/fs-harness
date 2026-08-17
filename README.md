@@ -52,10 +52,12 @@ gl-helper config show
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
 | `deploy <ветка\|mr> [N]` | build → ждать ✅ → запустить `deploy_dev` (или `deploy_dev2`…`deploy_dev10`) → ждать итог. С `--rebuild` — перезапускает build и deploy даже при success (когда кто-то перезаписал слот своим MR) |
 | `commit` | Агент формирует сообщение коммита по паттерну и коммитит все изменения (без push). Паттерн — встроенный или из `.llm-commit-pattern` проекта |
+| `doctor` | Самодиагностика: glab, конфиг, доступ к API, git-репозиторий, агенты |
+| `agent-guide` | Полная инструкция для AI-агента: команды, флаги, env, JSON-схемы, коды ошибок |
 | `config init\|show` | Конфиг |
 | `help` | Справка |
 
-Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy).
+Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/conflict/commit — план без запусков).
 
 Примеры:
 
@@ -101,6 +103,18 @@ feature/FD-5466 refactor(components): убрал дублирование лог
 gl-helper commit --agent pi      # в текущей директории
 gh commit -y                     # без подтверждения
 ```
+
+## Режим агента
+
+```bash
+export GL_HELPER_JSON=1   # JSON-вывод и структурированные ошибки
+export GL_HELPER_YES=1    # не спрашивать подтверждение (как -y)
+```
+
+- `--json` на read-командах — данные; на side-effect (`run`, `deploy`, `conflict`, `commit`) — **финальный результат** в stdout, прогресс в stderr.
+- Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `config_invalid`, `canceled`.
+- Полная инструкция для агента встроена в CLI: `gl-helper agent-guide`.
+- Перед side-effect командами можно смотреть план: `--dry-run`.
 
 ## Вывод
 

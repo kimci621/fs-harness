@@ -25,15 +25,24 @@ export function findJob(jobs, name) {
   return null;
 }
 
+// Что нужно сделать с джобой, чтобы запустить её: play / retry / skip (с причиной).
+export function jobAction(status, { force = false } = {}) {
+  if (status === 'manual') return { action: 'play' };
+  if (status === 'failed' || status === 'canceled') return { action: 'retry', reason: status };
+  if (force && (status === 'success' || status === 'skipped')) return { action: 'retry', reason: 'force' };
+  return { action: 'skip', reason: status || 'unknown' };
+}
+
 // Запускает джобу: manual → play (тот же id), failed/canceled → retry (новый id),
 // force=true — перезапустить даже success/skipped (retry, новый id).
 // Возвращает {id, status} актуальной джобы или null, если запуск не требовался.
 export async function startJob(g, repo, job, { force = false } = {}) {
-  if (job.status === 'manual') {
+  const plan = jobAction(job.status, { force });
+  if (plan.action === 'play') {
     const played = await g.playJob(repo, job.id);
     return { id: job.id, status: played?.status ?? 'pending' };
   }
-  if (job.status === 'failed' || job.status === 'canceled' || (force && (job.status === 'success' || job.status === 'skipped'))) {
+  if (plan.action === 'retry') {
     const retried = await g.retryJob(repo, job.id);
     return { id: retried?.id ?? job.id, status: retried?.status ?? 'pending' };
   }

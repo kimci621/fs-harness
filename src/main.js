@@ -8,6 +8,9 @@ import { cmdRun } from './commands/run.js';
 import { cmdDeploy } from './commands/deploy.js';
 import { cmdConflict } from './commands/conflict.js';
 import { cmdCommit } from './commands/commit.js';
+import { cmdDoctor } from './commands/doctor.js';
+import { cmdAgentGuide } from './commands/agent-guide.js';
+import { formatErrorJSON } from './output.js';
 
 const USAGE = `gl-helper — обёртка над glab для работы с MR и пайплайнами.
 
@@ -21,6 +24,8 @@ const USAGE = `gl-helper — обёртка над glab для работы с M
   run <джоба> <mr|ветка>  Запустить manual-джобу (по имени или id)
   deploy <mr|ветка> [N]   build → ждать → deploy_dev (или deploy_dev2…10) → ждать
   commit [--agent]        Сформировать и сделать коммит по паттерну (агент, без push)
+  doctor                  Самодиагностика: glab, конфиг, API, git, агенты
+  agent-guide             Полная инструкция для AI-агентов (что читать первой)
   config init|show        Настроить/показать ~/.config/gl-helper/config.json
   help                    Эта справка
 
@@ -35,6 +40,11 @@ const USAGE = `gl-helper — обёртка над glab для работы с M
   -y, --yes               В conflict: не спрашивать подтверждение
   --keep-worktree         В conflict: не удалять временный worktree
   --rebuild               В deploy: перезапустить build и deploy, даже если они уже success
+  --dry-run               План без запусков (run, deploy, conflict, commit)
+
+Режим агента (env):
+  GL_HELPER_JSON=1        JSON-вывод и структурированные ошибки для агентов
+  GL_HELPER_YES=1         Не спрашивать подтверждение (как -y)
 
 Примеры:
   gl-helper mrs
@@ -52,6 +62,9 @@ export async function main(argv) {
   let rest;
   try {
     ({ opts, rest } = parseArgs(argv));
+    // Режим агента через env: JSON-вывод и авто-подтверждение без флагов.
+    if (process.env.GL_HELPER_JSON === '1') opts.json = true;
+    if (process.env.GL_HELPER_YES === '1') opts.yes = true;
   } catch (err) {
     const cliErr = err instanceof CliError ? err : new CliError(String(err?.message || err));
     console.error(`\n❌ ${cliErr.message}`);
@@ -84,18 +97,20 @@ export async function main(argv) {
         await cmdJobs(g, repo, args[0], { json: opts.json });
         return 0;
       case 'run':
-        await cmdRun(g, repo, args, { json: opts.json, watch: opts.watch });
+        await cmdRun(g, repo, args, { json: opts.json, watch: opts.watch, dryRun: opts.dryRun });
         return 0;
       case 'deploy':
-        await cmdDeploy(g, repo, args, { json: opts.json, buildJob: opts.buildJob, rebuild: opts.rebuild });
+        await cmdDeploy(g, repo, args, { json: opts.json, buildJob: opts.buildJob, rebuild: opts.rebuild, dryRun: opts.dryRun });
         return 0;
       case 'conflict':
         await cmdConflict(g, repo, args, {
           agent: opts.agent || cfg.agent,
           projectDir: opts.projectDir || cfg.projectDir,
           buildJob: opts.buildJob,
+          json: opts.json,
           yes: opts.yes,
           keepWorktree: opts.keepWorktree,
+          dryRun: opts.dryRun,
           agentArgs: (cfg.agentArgs || {})[opts.agent || cfg.agent] || [],
         });
         return 0;
@@ -103,10 +118,16 @@ export async function main(argv) {
         await cmdCommit(args, {
           agent: opts.agent || cfg.agent,
           projectDir: opts.projectDir,
+          json: opts.json,
           yes: opts.yes,
+          dryRun: opts.dryRun,
           agentArgs: (cfg.agentArgs || {})[opts.agent || cfg.agent] || [],
         });
         return 0;
+      case 'doctor':
+        return await cmdDoctor({ repo: opts.repo || cfg.repo, host: opts.host || cfg.host, projectDir: opts.projectDir || cfg.projectDir, json: opts.json });
+      case 'agent-guide':
+        return cmdAgentGuide();
       default:
         console.error(`Неизвестная команда "${cmd}".\n`);
         console.error(USAGE);
@@ -114,7 +135,11 @@ export async function main(argv) {
     }
   } catch (err) {
     const cliErr = err instanceof CliError ? err : new CliError(String(err?.message || err));
-    console.error(`\n❌ ${cliErr.message}`);
+    if (opts.json) {
+      console.log(formatErrorJSON(cliErr));
+    } else {
+      console.error(`\n❌ ${cliErr.message}`);
+    }
     return cliErr.exitCode ?? 1;
   }
 }
@@ -149,7 +174,7 @@ function requireConfig() {
 function parseArgs(argv) {
   const opts = {
     json: false, repo: null, host: null, agent: null, projectDir: null, buildJob: null,
-    watch: false, yes: false, keepWorktree: false, rebuild: false, help: false,
+    watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false, help: false,
   };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -164,6 +189,7 @@ function parseArgs(argv) {
     else if (a === '-y' || a === '--yes') opts.yes = true;
     else if (a === '--keep-worktree') opts.keepWorktree = true;
     else if (a === '--rebuild') opts.rebuild = true;
+    else if (a === '--dry-run') opts.dryRun = true;
     else if (a === '-h' || a === '--help') opts.help = true;
     else if (a.startsWith('-')) throw new CliError(`Неизвестный флаг "${a}". См. gl-helper help.`);
     else rest.push(a);

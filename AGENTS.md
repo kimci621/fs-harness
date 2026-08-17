@@ -18,7 +18,7 @@ src/config.js           ~/.config/gl-helper/config.json
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, conflict
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, conflict, commit, doctor, agent-guide
 test/*.test.js          node --test, мокнутый exec — без сети
 ```
 
@@ -64,13 +64,23 @@ test/*.test.js          node --test, мокнутый exec — без сети
 
 Промпты лежат отдельно от кода в `src/prompts/` (`.md`-файлы) — их можно править без правки логики. Для `commit` действует оверрайд проектом: если в корне git-репозитория есть файл `.llm-commit-pattern`, его содержимое заменяет встроенный промпт (см. `src/prompts.js`).
 
+## Режим агента (важно)
+
+- `GL_HELPER_JSON=1` — все команды отдают JSON; side-effect команды — финальный результат `{ok:true, ...}` в stdout, прогресс в stderr. Ошибки: `{ok:false,error:{code,message}}` в stdout, exit ≠ 0.
+- `GL_HELPER_YES=1` — авто-подтверждение (аналог -y).
+- `--dry-run` — план без side-effect'ов для run/deploy/conflict/commit.
+- `gl-helper agent-guide` — самодостаточная инструкция, которую агент запускает первой.
+- В командах весь прогресс печатай через `makeLogger(json)` из `output.js`, итог — через `finish(json, obj)`. Ошибки — `CliError(msg, exitCode, code)` с машинным кодом.
+
 ## Контракт --json
 
 `mrs`/`mr`: `{iid, title, draft, source_branch, target_branch, has_conflicts, pipeline: {id, status}|null, pipeline_stale, comments: {total, open, resolved}, updated_at, web_url}`.
 
 `jobs`: `{pipeline: {id, status, web_url}, jobs: [{id, name, stage, status, web_url}]}`.
 
-`run`/`deploy`: `{pipeline, job|build_job|deploy_job}` — параметры перед запуском.
+`run`/`deploy`/`conflict`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков.
+
+Ошибки: `{ok:false, error:{code, message}}`; коды перечислены в `agent-guide`.
 
 ## Чеклист перед коммитом
 

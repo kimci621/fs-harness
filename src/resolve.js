@@ -3,11 +3,11 @@ import { CliError } from './errors.js';
 // Находит MR по номеру (!2547, 2547) или по части имени source-ветки (неточное, case-insensitive).
 export async function resolveMR(g, repo, query) {
   const q = String(query ?? '').trim();
-  if (!q) throw new CliError('Укажи MR: номер (!2547) или имя ветки (можно частично).');
+  if (!q) throw new CliError('Укажи MR: номер (!2547) или имя ветки (можно частично).', 1, 'usage');
 
   if (/^!?\d+$/.test(q)) {
     const mr = await g.getMR(repo, q.replace(/^!/, ''));
-    if (!mr) throw new CliError(`MR !${q.replace(/^!/, '')} не найден в ${repo}.`);
+    if (!mr) throw new CliError(`MR !${q.replace(/^!/, '')} не найден в ${repo}.`, 1, 'mr_not_found');
     return mr;
   }
 
@@ -26,10 +26,10 @@ export async function resolveMR(g, repo, query) {
       .slice(0, 3)
       .map((x) => x.m.source_branch);
     const hint = best.length ? `\nБлижайшие ветки: ${best.join(', ')}` : '';
-    throw new CliError(`Ветка "${q}" не найдена среди открытых MR в ${repo}.${hint}`);
+    throw new CliError(`Ветка "${q}" не найдена среди открытых MR в ${repo}.${hint}`, 1, 'mr_not_found');
   }
   const list = hits.map((h) => `${h.source_branch} (!${h.iid})`).join(', ');
-  throw new CliError(`"${q}" подходит нескольким MR: ${list}. Уточни запрос.`);
+  throw new CliError(`"${q}" подходит нескольким MR: ${list}. Уточни запрос.`, 1, 'mr_ambiguous');
 }
 
 // Простая оценка близости строки к запросу: префикс > подстрока > Левенштейн.
