@@ -6,9 +6,11 @@ import { CliError } from './errors.js';
 export const CONFIG_PATH = path.join(homedir(), '.config', 'gl-helper', 'config.json');
 
 export const DEFAULTS = {
-  repo: process.env.GL_HELPER_REPO || 'fitstars/fitstars-nuxt',
-  host: 'fitstars.gitlab.yandexcloud.net',
-  projectDir: '~/Projects/fitstars-frontend',
+  // Пустые значения — намеренно: инструмент не привязан к конкретному GitLab.
+  // Заполняются через gl-helper config init, конфиг или env (GL_HELPER_REPO / GL_HELPER_HOST).
+  repo: process.env.GL_HELPER_REPO || '',
+  host: process.env.GL_HELPER_HOST || '',
+  projectDir: '',
   agent: 'claude',
   agentArgs: {
     claude: ['--dangerously-skip-permissions'],
@@ -31,6 +33,7 @@ export function loadConfig(env = process.env) {
     }
   }
   if (env.GL_HELPER_REPO) cfg.repo = env.GL_HELPER_REPO;
+  if (env.GL_HELPER_HOST) cfg.host = env.GL_HELPER_HOST;
   return cfg;
 }
 

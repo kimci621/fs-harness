@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COMMANDS, findCommand, mcpTools, createCtx } from '../src/registry.js';
+import { COMMANDS, findCommand, mcpTools, createCtx, withRepoHost } from '../src/registry.js';
 import { buildAgentGuide } from '../src/commands/agent-guide.js';
+import { CliError } from '../src/errors.js';
 
 test('registry: у каждой команды есть имя, usage, описание и run', () => {
   for (const c of COMMANDS) {
@@ -43,4 +44,13 @@ test('registry: agent-guide содержит все команды', () => {
 test('registry: findCommand находит и отдаёт null для неизвестной', () => {
   assert.equal(findCommand('deploy').name, 'deploy');
   assert.equal(findCommand('nope'), null);
+});
+
+test('registry: withRepoHost — без repo/host понятная ошибка', () => {
+  const ctx = createCtx({ cfg: { repo: '', host: '' }, g: {}, notify: () => {} });
+  assert.throws(
+    () => withRepoHost(ctx, () => 'не дойдёт'),
+    (e) => e instanceof CliError && e.code === 'config_invalid' && /config init/.test(e.message),
+  );
+  assert.equal(withRepoHost(createCtx({ cfg: { repo: 'r/r', host: 'h' }, g: {}, notify: () => {} }), () => 'ok'), 'ok');
 });

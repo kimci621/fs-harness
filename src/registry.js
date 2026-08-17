@@ -9,6 +9,7 @@ import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdConfig } from './config-cmd.js';
+import { CliError } from './errors.js';
 
 // Единый реестр команд — single source of truth для CLI и MCP.
 // Добавил запись сюда → команда появляется в dispatch, help, agent-guide и MCP tools/list.
@@ -38,11 +39,11 @@ export const COMMANDS = [
     usage: 'mrs',
     description: 'Все открытые MR: название, ветки, пайплайн, комменты, конфликты',
     example: 'gl-helper mrs',
-    run: (ctx, args, opts) => cmdMRS(ctx.g, ctx.repo, { json: opts.json }),
+    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMRS(ctx.g, ctx.repo, { json: opts.json })),
     mcp: {
       description: 'Список всех открытых MR: название, ветки, статус пайплайна, комментарии, конфликты. Только чтение.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      call: (ctx) => cmdMRS(ctx.g, ctx.repo, { json: true, asObject: true }),
+      call: (ctx) => withRepoHost(ctx, () => cmdMRS(ctx.g, ctx.repo, { json: true, asObject: true })),
     },
   },
   {
@@ -50,7 +51,7 @@ export const COMMANDS = [
     usage: 'mr <ветка|номер>',
     description: 'Один MR в том же формате (часть имени ветки, неточный поиск)',
     example: 'gl-helper mr special-offer',
-    run: (ctx, args, opts) => cmdMR(ctx.g, ctx.repo, args[0], { json: opts.json }),
+    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMR(ctx.g, ctx.repo, args[0], { json: opts.json })),
     mcp: {
       description: 'Один MR по номеру (!2547, 2547) или части имени ветки (неточный поиск). Только чтение.',
       inputSchema: {
@@ -58,7 +59,7 @@ export const COMMANDS = [
         properties: { query: { type: 'string', description: 'номер MR (!2547) или часть имени source-ветки' } },
         required: ['query'],
       },
-      call: (ctx, a) => cmdMR(ctx.g, ctx.repo, a.query, { json: true, asObject: true }),
+      call: (ctx, a) => withRepoHost(ctx, () => cmdMR(ctx.g, ctx.repo, a.query, { json: true, asObject: true })),
     },
   },
   {
@@ -66,7 +67,7 @@ export const COMMANDS = [
     usage: 'mr-comments <mr|ветка>',
     description: 'Комментарии MR (--resolved / --open)',
     example: 'gl-helper mr-comments fix/main-banner -open',
-    run: (ctx, args, opts) => cmdMRComments(ctx.g, ctx.repo, args, { json: opts.json, resolved: opts.resolved, open: opts.open }),
+    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMRComments(ctx.g, ctx.repo, args, { json: opts.json, resolved: opts.resolved, open: opts.open })),
     mcp: {
       description: 'Комментарии MR, сгруппированные по тредам. filter: all — все, resolved — только решённые, open — нерешённые. Только чтение.',
       inputSchema: {
@@ -77,10 +78,10 @@ export const COMMANDS = [
         },
         required: ['query'],
       },
-      call: (ctx, a) => cmdMRComments(ctx.g, ctx.repo, [a.query], {
+      call: (ctx, a) => withRepoHost(ctx, () => cmdMRComments(ctx.g, ctx.repo, [a.query], {
         json: true, asObject: true,
         resolved: a.filter === 'resolved', open: a.filter === 'open',
-      }),
+      })),
     },
   },
   {
@@ -88,7 +89,7 @@ export const COMMANDS = [
     usage: 'jobs <mr|ветка>',
     description: 'Джобы последнего MR-пайплайна',
     example: 'gl-helper jobs fix/main-banner',
-    run: (ctx, args, opts) => cmdJobs(ctx.g, ctx.repo, args[0], { json: opts.json }),
+    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdJobs(ctx.g, ctx.repo, args[0], { json: opts.json })),
     mcp: {
       description: 'Джобы последнего MR-пайплайна: stage, имя, статус, id. Только чтение.',
       inputSchema: {
@@ -96,7 +97,7 @@ export const COMMANDS = [
         properties: { query: { type: 'string', description: 'номер MR или часть имени ветки' } },
         required: ['query'],
       },
-      call: (ctx, a) => cmdJobs(ctx.g, ctx.repo, a.query, { json: true, asObject: true }),
+      call: (ctx, a) => withRepoHost(ctx, () => cmdJobs(ctx.g, ctx.repo, a.query, { json: true, asObject: true })),
     },
   },
   {
@@ -104,7 +105,7 @@ export const COMMANDS = [
     usage: 'run <джоба> <mr|ветка>',
     description: 'Запустить manual-джобу (по имени или id)',
     example: 'gl-helper run build_image fix/main-banner -w',
-    run: (ctx, args, opts) => cmdRun(ctx.g, ctx.repo, args, { json: opts.json, watch: opts.watch, dryRun: opts.dryRun }),
+    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdRun(ctx.g, ctx.repo, args, { json: opts.json, watch: opts.watch, dryRun: opts.dryRun })),
     mcp: {
       description: 'Запустить джобу (по имени или id) в последнем MR-пайплайне: manual → play, failed/canceled → retry. watch=true — дождаться завершения. Меняет состояние GitLab.',
       inputSchema: {
@@ -116,9 +117,9 @@ export const COMMANDS = [
         },
         required: ['job', 'query'],
       },
-      call: (ctx, a) => cmdRun(ctx.g, ctx.repo, [a.job, a.query], {
+      call: (ctx, a) => withRepoHost(ctx, () => cmdRun(ctx.g, ctx.repo, [a.job, a.query], {
         json: true, asObject: true, quiet: true, yes: true, watch: Boolean(a.watch), onTick: ctx.notify,
-      }),
+      })),
     },
   },
   {
@@ -126,9 +127,9 @@ export const COMMANDS = [
     usage: 'deploy <mr|ветка> [N]',
     description: 'build → ждать → deploy_dev (или deploy_dev2…10) → ждать',
     example: 'gl-helper deploy feat/premium-banner 3',
-    run: (ctx, args, opts) => cmdDeploy(ctx.g, ctx.repo, args, {
+    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdDeploy(ctx.g, ctx.repo, args, {
       json: opts.json, buildJob: opts.buildJob, rebuild: opts.rebuild, dryRun: opts.dryRun,
-    }),
+    })),
     mcp: {
       description: 'Деплой ветки MR: запустить build, дождаться success, затем deploy_dev (slot=1) или deploy_dev2..deploy_dev10 (slot=N) и дождаться. rebuild=true — перезапустить даже успешные джобы (перезаписать слот). Ждёт завершения. Меняет состояние GitLab.',
       inputSchema: {
@@ -141,10 +142,10 @@ export const COMMANDS = [
         },
         required: ['query'],
       },
-      call: (ctx, a) => cmdDeploy(ctx.g, ctx.repo, [a.query, a.slot], {
+      call: (ctx, a) => withRepoHost(ctx, () => cmdDeploy(ctx.g, ctx.repo, [a.query, a.slot], {
         json: true, asObject: true, quiet: true, yes: true,
         rebuild: Boolean(a.rebuild), buildJob: a.build_job, onTick: ctx.notify,
-      }),
+      })),
     },
   },
   {
@@ -152,7 +153,7 @@ export const COMMANDS = [
     usage: 'conflict <mr|ветка>',
     description: 'Решить конфликт силами AI-агента и запустить build',
     example: 'gl-helper conflict !2547 --agent pi',
-    run: (ctx, args, opts) => {
+    run: (ctx, args, opts) => withRepoHost(ctx, () => {
       const agent = opts.agent || ctx.cfg.agent;
       return cmdConflict(ctx.g, ctx.repo, args, {
         agent,
@@ -164,7 +165,7 @@ export const COMMANDS = [
         dryRun: opts.dryRun,
         agentArgs: ctx.agentArgs(agent),
       });
-    },
+    }),
     mcp: {
       description: 'Решить конфликт MR силами AI-агента (claude или pi, headless) во временном git worktree проекта, запушить в ветку MR и запустить build. Ждёт завершения. Меняет код и GitLab; ветка target не трогается, force-push запрещён.',
       inputSchema: {
@@ -175,13 +176,13 @@ export const COMMANDS = [
         },
         required: ['query'],
       },
-      call: (ctx, a) => {
+      call: (ctx, a) => withRepoHost(ctx, () => {
         const agent = a.agent || ctx.cfg.agent;
         return cmdConflict(ctx.g, ctx.repo, [a.query], {
           json: true, asObject: true, quiet: true, yes: true,
           agent, projectDir: ctx.cfg.projectDir, agentArgs: ctx.agentArgs(agent), onTick: ctx.notify,
         });
-      },
+      }),
     },
   },
   {
@@ -265,6 +266,19 @@ export const COMMANDS = [
 
 export function findCommand(name) {
   return COMMANDS.find((c) => c.name === name) || null;
+}
+
+// Команды, которым нужны repo и host из конфига, оборачиваются этим гардом:
+// без настроенного repo/host — понятная ошибка вместо «projects//merge_requests».
+export function withRepoHost(ctx, fn) {
+  if (!ctx.repo || !ctx.cfg.host) {
+    throw new CliError(
+      'Репозиторий или хост GitLab не настроены. Выполни gl-helper config init и заполни конфиг, или передай -R <repo> --host <host>.',
+      1,
+      'config_invalid',
+    );
+  }
+  return fn();
 }
 
 // Инструменты для MCP tools/list.

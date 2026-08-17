@@ -16,7 +16,7 @@ npm test          # 18 тестов, сеть не нужна
 `glab` должен быть залогинен на нужный GitLab-хост:
 
 ```bash
-glab auth login --hostname fitstars.gitlab.yandexcloud.net
+glab auth login --hostname ваш.gitlab.example.com
 ```
 
 ## Настройка
@@ -28,16 +28,16 @@ gl-helper config show
 
 ```json
 {
-  "repo": "fitstars/fitstars-nuxt",
-  "host": "fitstars.gitlab.yandexcloud.net",
-  "projectDir": "~/Projects/fitstars-frontend",
+  "repo": "ваш-неймспейс/ваш-проект",
+  "host": "ваш.gitlab.example.com",
+  "projectDir": "~/Projects/ваш-проект",
   "agent": "claude",
   "agentArgs": { "claude": ["--dangerously-skip-permissions"], "pi": [] }
 }
 ```
 
 - `repo` — дефолтный репозиторий (можно перебить флагом `-R` или env `GL_HELPER_REPO`).
-- `host` — **важно**: glab сам выбирает хост по git remote текущей директории. `gl-helper` всегда передаёт `--hostname` из конфига, чтобы команда работала из любой директории.
+- `host` — **важно**: glab сам выбирает хост по git remote текущей директории. `gl-helper` всегда передаёт `--hostname` из конфига, чтобы команда работала из любой директории. Перебивается флагом `--host` или env `GL_HELPER_HOST`.
 - `projectDir` — проект, в котором `conflict` создаёт временный worktree.
 - `agent` / `agentArgs` — какой агент решает конфликты и с какими флагами (`claude` или `pi`, headless `-p`).
 
