@@ -10,6 +10,7 @@ import { cmdConflict } from './commands/conflict.js';
 import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { cmdAgentGuide } from './commands/agent-guide.js';
+import { cmdMRComments } from './commands/mr-comments.js';
 import { formatErrorJSON } from './output.js';
 
 const USAGE = `gl-helper — обёртка над glab для работы с MR и пайплайнами.
@@ -21,6 +22,7 @@ const USAGE = `gl-helper — обёртка над glab для работы с M
   mr <ветка|номер>        Один MR в том же формате (часть имени ветки, неточный поиск)
   conflict <mr|ветка>     Решить конфликт силами AI-агента и запустить build
   jobs <mr|ветка>         Джобы последнего MR-пайплайна
+  mr-comments <mr|ветка>  Комментарии MR (--resolved / --open)
   run <джоба> <mr|ветка>  Запустить manual-джобу (по имени или id)
   deploy <mr|ветка> [N]   build → ждать → deploy_dev (или deploy_dev2…10) → ждать
   commit [--agent]        Сформировать и сделать коммит по паттерну (агент, без push)
@@ -41,6 +43,7 @@ const USAGE = `gl-helper — обёртка над glab для работы с M
   --keep-worktree         В conflict: не удалять временный worktree
   --rebuild               В deploy: перезапустить build и deploy, даже если они уже success
   --dry-run               План без запусков (run, deploy, conflict, commit)
+  --resolved / --open     В mr-comments: только решённые / нерешённые треды
 
 Режим агента (env):
   GL_HELPER_JSON=1        JSON-вывод и структурированные ошибки для агентов
@@ -95,6 +98,9 @@ export async function main(argv) {
         return 0;
       case 'jobs':
         await cmdJobs(g, repo, args[0], { json: opts.json });
+        return 0;
+      case 'mr-comments':
+        await cmdMRComments(g, repo, args, { json: opts.json, resolved: opts.resolved, open: opts.open });
         return 0;
       case 'run':
         await cmdRun(g, repo, args, { json: opts.json, watch: opts.watch, dryRun: opts.dryRun });
@@ -174,7 +180,8 @@ function requireConfig() {
 function parseArgs(argv) {
   const opts = {
     json: false, repo: null, host: null, agent: null, projectDir: null, buildJob: null,
-    watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false, help: false,
+    watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
+    resolved: false, open: false, help: false,
   };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -190,6 +197,8 @@ function parseArgs(argv) {
     else if (a === '--keep-worktree') opts.keepWorktree = true;
     else if (a === '--rebuild') opts.rebuild = true;
     else if (a === '--dry-run') opts.dryRun = true;
+    else if (a === '--resolved' || a === '-resolved') opts.resolved = true;
+    else if (a === '--open' || a === '-open') opts.open = true;
     else if (a === '-h' || a === '--help') opts.help = true;
     else if (a.startsWith('-')) throw new CliError(`Неизвестный флаг "${a}". См. gl-helper help.`);
     else rest.push(a);

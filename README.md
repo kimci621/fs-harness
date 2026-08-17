@@ -49,6 +49,7 @@ gl-helper config show
 | `mr <ветка\|номер>` | Один MR в том же формате. Ветку можно вводить частично и с ошибками — `mr banner-fl` найдёт `fix/main-banner-flicker`. Принимает `!2547` и `2547` |
 | `conflict <mr\|ветка>` | Решает конфликт силами AI-агента в отдельном worktree, пушит в ветку MR и сам запускает build (подробнее ниже) |
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id |
+| `mr-comments <mr\|ветка>` | Комментарии MR по тредам: `--resolved` — только решённые, `-open` — только нерешённые |
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
 | `deploy <ветка\|mr> [N]` | build → ждать ✅ → запустить `deploy_dev` (или `deploy_dev2`…`deploy_dev10`) → ждать итог. С `--rebuild` — перезапускает build и deploy даже при success (когда кто-то перезаписал слот своим MR) |
 | `commit` | Агент формирует сообщение коммита по паттерну и коммитит все изменения (без push). Паттерн — встроенный или из `.llm-commit-pattern` проекта |
@@ -65,6 +66,7 @@ gl-helper config show
 gl-helper mrs
 gl-helper mr special-offer
 gl-helper jobs fix/main-banner
+gl-helper mr-comments fix/main-banner -open
 gl-helper run build_image fix/main-banner -w
 gl-helper deploy feat/premium-banner 3      # deploy_dev3
 gl-helper deploy feat/premium-banner 2 --rebuild  # перезаписать слот dev2 своим кодом
