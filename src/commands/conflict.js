@@ -16,7 +16,7 @@ export async function cmdConflict(g, repo, args, opts = {}) {
   const [mrQuery] = args;
   if (!mrQuery) throw new CliError('Использование: gl-helper conflict <mr|ветка> [--agent claude|pi] [-y]', 1, 'usage');
 
-  const log = makeLogger(opts.json);
+  const log = opts.asObject ? () => {} : makeLogger(opts.json);
   const agent = opts.agent;
   if (!['claude', 'pi'].includes(agent)) {
     throw new CliError(`Неизвестный агент "${agent}". Допустимо: claude, pi.`, 1, 'usage');
@@ -45,6 +45,7 @@ export async function cmdConflict(g, repo, args, opts = {}) {
         'удаление временного worktree',
       ],
     };
+    if (opts.asObject) return plan;
     if (opts.json) {
       finish(true, plan);
     } else {
@@ -58,9 +59,11 @@ export async function cmdConflict(g, repo, args, opts = {}) {
   }
 
   if (!mr.has_conflicts) {
+    const result = { ok: true, mr: mr.iid, has_conflicts: false, skipped: true };
+    if (opts.asObject) return result;
     log(`✅ В MR !${mr.iid} конфликтов нет (${mr.source_branch} → ${mr.target_branch}).`);
-    finish(opts.json, { ok: true, mr: mr.iid, has_conflicts: false, skipped: true });
-    return;
+    finish(opts.json, result);
+    return result;
   }
 
   const projectDir = expandHome(opts.projectDir);
@@ -93,7 +96,7 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     wtCreated = true;
     git(['checkout', '-b', branch], wt);
 
-    if (!opts.yes && !confirm(`Запускаю агента ${agent}. Продолжить? [y/N] `)) {
+    if (!opts.yes && !opts.asObject && !confirm(`Запускаю агента ${agent}. Продолжить? [y/N] `)) {
       throw new CliError('Отменено.', 0, 'canceled');
     }
 
@@ -137,19 +140,21 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     const started = await startJob(g, repo, build);
     const buildRun = started ?? { id: build.id };
     if (started) log(`   ${build.status} → ${started.status} (#${started.id})`);
-    const final = await waitJob({ g, repo, pipelineId: pipeline.id, jobId: buildRun.id, label: build.name });
+    const final = await waitJob({ g, repo, pipelineId: pipeline.id, jobId: buildRun.id, label: build.name, quiet: opts.quiet, onTick: opts.onTick });
     if (final.status !== 'success') {
       throw new CliError(`Build завершился: ${final.status}.\nДетали: ${final.web_url}`, 1, 'build_failed');
     }
     log(`✅ Конфликт решён, MR !${mr.iid} обновлён, build успешен.`);
-    finish(opts.json, {
+    const result = {
       ok: true,
       mr: mr.iid,
       head_sha: headSha,
       commits_ahead: ahead,
       pipeline: { id: pipeline.id, status: pipeline.status, web_url: pipeline.web_url },
       build: jobJSON(final, 'success'),
-    });
+    };
+    if (!opts.asObject) finish(opts.json, result);
+    return result;
   } finally {
     if (!wtCreated) return;
     if (keep) {

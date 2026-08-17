@@ -5,11 +5,11 @@ import { waitJob } from '../ui.js';
 import { makeLogger, finish, jobJSON } from '../output.js';
 
 // gl-helper run <джоба> <mr|ветка> [--watch] [--dry-run]
-export async function cmdRun(g, repo, args, { json, watch, dryRun = false } = {}) {
+export async function cmdRun(g, repo, args, { json, watch, dryRun = false, asObject, quiet = false, onTick } = {}) {
   const [jobQuery, mrQuery] = args;
   if (!jobQuery || !mrQuery) throw new CliError('Использование: gl-helper run <джоба|id> <mr|ветка> [--watch]', 1, 'usage');
 
-  const log = makeLogger(json);
+  const log = asObject ? () => {} : makeLogger(json);
   const mr = await resolveMR(g, repo, mrQuery);
   const jobName = jobQuery;
 
@@ -28,6 +28,7 @@ export async function cmdRun(g, repo, args, { json, watch, dryRun = false } = {}
       pipeline_will_be_created: !pipeline,
       job: job ? { ...jobJSON(job), plan } : { not_found: jobName },
     };
+    if (asObject) return result;
     if (json) {
       finish(true, result);
     } else {
@@ -39,7 +40,7 @@ export async function cmdRun(g, repo, args, { json, watch, dryRun = false } = {}
         log(`   джоба: ${job.name} (#${job.id}, ${job.status}) → ${describePlan(plan)}`);
       }
     }
-    return;
+    return result;
   }
 
   const pipeline = await ensureMRPipeline(g, repo, mr);
@@ -53,19 +54,24 @@ export async function cmdRun(g, repo, args, { json, watch, dryRun = false } = {}
     const started = await startJob(g, repo, job);
     log(`▶ ${job.name}: ${job.status} → ${started.status} (#${started.id})`);
     if (watch) {
-      const final = await waitJob({ g, repo, pipelineId: pipeline.id, jobId: started.id, label: job.name });
-      finish(json, { ok: true, pipeline: { id: pipeline.id }, job: jobJSON(final) });
+      const final = await waitJob({ g, repo, pipelineId: pipeline.id, jobId: started.id, label: job.name, quiet, onTick });
+      const result = { ok: true, pipeline: { id: pipeline.id }, job: jobJSON(final) };
       if (final.status !== 'success') {
         throw new CliError(`Джоба ${final.name} завершилась: ${final.status}`, 1, 'job_failed');
       }
       log(`✅ ${final.name} успешно завершена (${final.web_url})`);
-      return;
+      if (!asObject) finish(json, result);
+      return result;
     }
-    finish(json, { ok: true, pipeline: { id: pipeline.id }, job: jobJSON({ ...job, id: started.id, status: started.status }) });
-  } else {
-    log(`ℹ ${job.name} (#${job.id}): ${job.status} — запуск не требуется.`);
-    finish(json, { ok: true, pipeline: { id: pipeline.id }, job: jobJSON(job), skipped: true });
+    const result = { ok: true, pipeline: { id: pipeline.id }, job: jobJSON({ ...job, id: started.id, status: started.status }) };
+    if (!asObject) finish(json, result);
+    return result;
   }
+
+  const result = { ok: true, pipeline: { id: pipeline.id }, job: jobJSON(job), skipped: true };
+  log(`ℹ ${job.name} (#${job.id}): ${job.status} — запуск не требуется.`);
+  if (!asObject) finish(json, result);
+  return result;
 }
 
 function describePlan(plan) {

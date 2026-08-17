@@ -101,24 +101,37 @@ export const isTerminal = (status) => JOB_TERMINAL.has(status);
 
 // Опрос джобы каждые intervalMs с живой таблицей всех джоб пайплайна.
 // Возвращает финальный объект джобы.
-export async function waitJob({ g, repo, pipelineId, jobId, intervalMs = 5000, timeoutMs = 60 * 60 * 1000, label }) {
-  const table = createLiveTable(['stage', 'job', 'status', 'id'], []);
-  const spinner = createSpinner('');
+// quiet — без анимаций (MCP-режим); onTick(text) — вызывается при каждом опросе.
+export async function waitJob({ g, repo, pipelineId, jobId, intervalMs = 5000, timeoutMs = 60 * 60 * 1000, label, quiet = false, onTick }) {
   const started = Date.now();
+  let table = null;
+  let spinner = null;
+  if (!quiet) {
+    table = createLiveTable(['stage', 'job', 'status', 'id'], []);
+    spinner = createSpinner('');
+  }
 
   while (true) {
     const jobs = await g.getJobs(repo, pipelineId);
     const job = jobs.find((j) => j.id === jobId) || (await g.getJob(repo, jobId));
-    table.update(jobs.map(jobRow));
-    spinner.start(`${label}: ${job.status}`);
+    if (quiet) {
+      onTick?.(`${label}: ${job.status}`);
+    } else {
+      table.update(jobs.map(jobRow));
+      spinner.start(`${label}: ${job.status}`);
+    }
     if (isTerminal(job.status)) {
-      table.stop();
-      spinner.stop(`${label}: ${coloredStatus(job.status)}`);
+      if (!quiet) {
+        table.stop();
+        spinner.stop(`${label}: ${coloredStatus(job.status)}`);
+      }
       return job;
     }
     if (Date.now() - started > timeoutMs) {
-      table.stop();
-      spinner.stop(`${label}: превышен таймаут ожидания`);
+      if (!quiet) {
+        table.stop();
+        spinner.stop(`${label}: превышен таймаут ожидания`);
+      }
       throw new Error(`Джоба ${job.name} не завершилась за ${fmtDuration(timeoutMs)}.`);
     }
     await sleep(intervalMs);

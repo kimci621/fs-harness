@@ -12,11 +12,14 @@ export function mrPipelineMap(pipelines) {
   return map;
 }
 
-export async function cmdMRS(g, repo, { json } = {}) {
+// asObject — вернуть данные без печати (MCP-режим).
+export async function cmdMRS(g, repo, { json, asObject } = {}) {
   const mrs = await g.listOpenMRs(repo);
   if (!mrs.length) {
+    const result = { ok: true, mrs: [] };
+    if (asObject) return result;
     console.log(`В ${repo} нет открытых MR.`);
-    return;
+    return result;
   }
 
   const pipes = mrPipelineMap(await g.listMRPipelines(repo));
@@ -32,13 +35,17 @@ export async function cmdMRS(g, repo, { json } = {}) {
     return { mr, stats: commentStats(discussions, mr.user_notes_count) };
   });
 
+  const result = { ok: true, mrs: rows.map(toJSON) };
+  if (asObject) return result;
+
   if (json) {
-    console.log(JSON.stringify(rows.map(toJSON), null, 2));
-    return;
+    console.log(JSON.stringify(result.mrs, null, 2));
+    return result;
   }
 
   const width = Math.min(process.stdout.columns || 160, 200);
   for (const { mr, stats } of rows) console.log(fmtMRRow(mr, stats, width));
+  return result;
 }
 
 export function toJSON({ mr, stats }) {

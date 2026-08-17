@@ -45,7 +45,8 @@ export function classifyDiscussions(discussions, { resolved = false, open = fals
   };
 }
 
-export async function cmdMRComments(g, repo, args, { json, resolved = false, open = false } = {}) {
+// asObject — вернуть данные без печати (MCP-режим).
+export async function cmdMRComments(g, repo, args, { json, resolved = false, open = false, asObject } = {}) {
   const [query] = args;
   if (!query) throw new CliError('Использование: gl-helper mr-comments <mr|ветка> [--resolved|--open]', 1, 'usage');
   if (resolved && open) {
@@ -56,26 +57,29 @@ export async function cmdMRComments(g, repo, args, { json, resolved = false, ope
   const discussions = (await g.getDiscussions(repo, mr.iid)) || [];
   const { items, total, openCount, resolvedCount } = classifyDiscussions(discussions, { resolved, open });
 
+  const result = {
+    ok: true,
+    mr: mr.iid,
+    filter: resolved ? 'resolved' : open ? 'open' : 'all',
+    summary: { threads_total: items.length, comments_total: total, threads_open: openCount, threads_resolved: resolvedCount },
+    discussions: items.map((d) => ({
+      id: d.id,
+      state: d.resolvable ? (d.resolved ? 'resolved' : 'open') : 'open',
+      notes: d.notes,
+    })),
+  };
+  if (asObject) return result;
+
   if (json) {
-    finish(true, {
-      ok: true,
-      mr: mr.iid,
-      filter: resolved ? 'resolved' : open ? 'open' : 'all',
-      summary: { threads_total: items.length, comments_total: total, threads_open: openCount, threads_resolved: resolvedCount },
-      discussions: items.map((d) => ({
-        id: d.id,
-        state: d.resolvable ? (d.resolved ? 'resolved' : 'open') : 'open',
-        notes: d.notes,
-      })),
-    });
-    return;
+    finish(true, result);
+    return result;
   }
 
   const label = resolved ? 'решённые' : open ? 'открытые' : 'все';
   console.log(`MR !${mr.iid} — ${label} комментарии (тредов: ${items.length}; всего комментов: ${total}, открытых тредов: ${openCount}, решённых: ${resolvedCount})`);
   if (!items.length) {
     console.log('Комментариев нет.');
-    return;
+    return result;
   }
   for (const [i, d] of items.entries()) {
     const state = d.resolvable ? (d.resolved ? '✅ resolved' : '🔓 open') : '💬';
@@ -86,4 +90,5 @@ export async function cmdMRComments(g, repo, args, { json, resolved = false, ope
       for (const line of n.body.split('\n')) console.log(`  > ${line}`);
     }
   }
+  return result;
 }

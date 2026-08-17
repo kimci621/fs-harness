@@ -6,7 +6,8 @@ import { loadConfig, CONFIG_PATH, expandHome } from '../config.js';
 
 // gl-helper doctor — самодиагностика окружения: glab, конфиг, API, git, агенты.
 // Критично: glab, api. Остальное — предупреждения.
-export async function cmdDoctor({ repo, host, projectDir, json } = {}) {
+// asObject — вернуть {ok, checks} без печати (MCP-режим).
+export async function cmdDoctor({ repo, host, projectDir, json, asObject } = {}) {
   const checks = [];
   const add = (name, ok, detail, critical = false) => checks.push({ name, ok: Boolean(ok), critical, detail: detail ?? (ok ? 'ok' : '') });
 
@@ -53,8 +54,10 @@ export async function cmdDoctor({ repo, host, projectDir, json } = {}) {
     }
   }
 
+  const ok = checks.every((c) => !c.critical || c.ok);
+  if (asObject) return { ok, checks };
+
   if (json) {
-    const ok = checks.every((c) => !c.critical || c.ok);
     console.log(JSON.stringify({ ok, checks }, null, 2));
     return ok ? 0 : 1;
   }

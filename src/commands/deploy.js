@@ -7,15 +7,15 @@ import { makeLogger, finish, jobJSON } from '../output.js';
 // gl-helper deploy <mr|ветка> [N]
 // build → ждём success → deploy_dev[ N] → ждём итог. --rebuild: перезапустить даже success.
 // --dry-run: показать план без запусков.
-export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, rebuild = false, dryRun = false } = {}) {
+export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, rebuild = false, dryRun = false, asObject, quiet = false, onTick } = {}) {
   const [mrQuery, n] = args;
   if (!mrQuery) throw new CliError('Использование: gl-helper deploy <mr|ветка> [N]', 1, 'usage');
 
-  const log = makeLogger(json);
+  const log = asObject ? () => {} : makeLogger(json);
   const jobName = buildJob || 'build_image';
   const mr = await resolveMR(g, repo, mrQuery);
   const deployName = deployJobName(n);
-  const waitOpts = { g, repo, ...(intervalMs ? { intervalMs } : {}) };
+  const waitOpts = { g, repo, quiet, onTick, ...(intervalMs ? { intervalMs } : {}) };
 
   if (dryRun) {
     const pipeline = mr.head_pipeline && (!mr.head_pipeline.sha || mr.head_pipeline.sha === mr.sha)
@@ -26,7 +26,7 @@ export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, reb
     const deploy = findJob(jobs, deployName);
     const buildPlan = build ? jobAction(build.status, { force: rebuild }) : null;
     const deployPlan = deploy ? jobAction(deploy.status, { force: rebuild }) : null;
-    const plan = {
+    const result = {
       ok: true,
       dry_run: true,
       mr: mr.iid,
@@ -35,15 +35,16 @@ export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, reb
       build: build ? { ...jobJSON(build), plan: buildPlan } : { not_found: jobName },
       deploy: deploy ? { ...jobJSON(deploy), plan: deployPlan } : { not_found: deployName },
     };
+    if (asObject) return result;
     if (json) {
-      finish(true, plan);
+      finish(true, result);
     } else {
       log(`🔍 План деплоя (dry-run), MR !${mr.iid} ${mr.source_branch} → ${mr.target_branch}`);
       log(`   пайплайн: ${pipeline ? `#${pipeline.id} (${pipeline.status})` : 'будет создан новый MR-пайплайн'}`);
       log(`   build: ${build ? `${build.name} (#${build.id}, ${build.status}) → ${describePlan(buildPlan)}` : `"${jobName}" не найдена`}`);
       log(`   deploy: ${deploy ? `${deploy.name} (#${deploy.id}, ${deploy.status}) → ${describePlan(deployPlan)}` : `"${deployName}" не найдена`}`);
     }
-    return;
+    return result;
   }
 
   const pipeline = await ensureMRPipeline(g, repo, mr);
@@ -85,13 +86,15 @@ export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, reb
     throw new CliError(`Деплой завершился: ${deployFinal.status}.\nДетали: ${deployFinal.web_url}`, 1, 'deploy_failed');
   }
   log(`✅ Деплой ${deploy.name} успешен (${deployFinal.web_url})`);
-  finish(json, {
+  const result = {
     ok: true,
     mr: mr.iid,
     pipeline: { id: pipeline.id, status: pipeline.status, web_url: pipeline.web_url },
     build: jobJSON(buildFinal, 'success'),
     deploy: jobJSON(deployFinal, 'success'),
-  });
+  };
+  if (!asObject) finish(json, result);
+  return result;
 }
 
 function describePlan(plan) {
