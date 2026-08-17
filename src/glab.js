@@ -23,7 +23,7 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
           continue;
         }
         const hint = stderr ? `\n  glab: ${stderr.split('\n').slice(-3).join('\n  ')}` : '';
-        throw new CliError(`glab api ${method} ${path.replace(/\?.*$/, '')} не удался${hint}`);
+        throw new CliError(`glab api ${method} ${path.replace(/\?.*$/, '')} не удался${hint}`, 1, 'api_failed');
       }
       try {
         return JSON.parse(out);

@@ -1,8 +1,10 @@
 // Ошибка для пользователя: сообщение печатается как есть, без stack trace.
+// code — машинный код для агентов (--json): mr_not_found, api_failed, job_failed, …
 export class CliError extends Error {
-  constructor(message, exitCode = 1) {
+  constructor(message, exitCode = 1, code = 'error') {
     super(message);
     this.exitCode = exitCode;
+    this.code = code;
   }
 }
 

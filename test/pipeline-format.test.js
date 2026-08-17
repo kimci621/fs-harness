@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findJob, deployJobName, mapLimit, startJob } from '../src/pipeline.js';
+import { findJob, deployJobName, mapLimit, startJob, jobAction } from '../src/pipeline.js';
 import { cmdDeploy } from '../src/commands/deploy.js';
 import { commentStats, fmtComments, fmtMRRow, humanize } from '../src/format.js';
 import { CliError } from '../src/errors.js';
+import { formatErrorJSON, makeLogger } from '../src/output.js';
 
 const JOBS = [
   { id: 1, name: 'build_image', stage: 'build', status: 'manual' },
@@ -90,6 +91,39 @@ test('startJob: manual → play (тот же id), failed → retry (новый i
   assert.equal(await startJob(g, 'r', { id: 3, status: 'success' }), null);
   assert.deepEqual(await startJob(g, 'r', { id: 4, status: 'success' }, { force: true }), { id: 104, status: 'pending' });
   assert.deepEqual(calls, [['play', 1], ['retry', 2], ['retry', 4]]);
+});
+
+test('jobAction: play/retry/skip и force', () => {
+  assert.equal(jobAction('manual').action, 'play');
+  assert.equal(jobAction('failed').action, 'retry');
+  assert.equal(jobAction('canceled').action, 'retry');
+  assert.equal(jobAction('success').action, 'skip');
+  assert.equal(jobAction('success', { force: true }).action, 'retry');
+  assert.equal(jobAction('success', { force: true }).reason, 'force');
+});
+
+test('formatErrorJSON: {ok:false, error:{code,message}}', () => {
+  const out = JSON.parse(formatErrorJSON(new CliError('плохо', 1, 'job_failed')));
+  assert.equal(out.ok, false);
+  assert.deepEqual(out.error, { code: 'job_failed', message: 'плохо' });
+});
+
+test('makeLogger: json-режим пишет в stderr', () => {
+  let out = '';
+  let err = '';
+  const origOut = process.stdout.write;
+  const origErr = process.stderr.write;
+  process.stdout.write = (s) => { out += s; return true; };
+  process.stderr.write = (s) => { err += s; return true; };
+  try {
+    makeLogger(true)('привет');
+    makeLogger(false)('пока');
+  } finally {
+    process.stdout.write = origOut;
+    process.stderr.write = origErr;
+  }
+  assert.equal(out, 'пока\n');
+  assert.equal(err, 'привет\n');
 });
 
 test('cmdDeploy: buildJob null → дефолт build_image', async () => {
