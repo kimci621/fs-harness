@@ -8,6 +8,7 @@ export const AGENT_GUIDE = `gl-helper — CLI для работы с GitLab (MR,
   gl-helper mrs                     все открытые MR: ветки, пайплайн, комменты, конфликты
   gl-helper mr <ветка|номер>        один MR (ветку можно частично, неточный поиск)
   gl-helper jobs <mr|ветка>         джобы последнего MR-пайплайна
+  gl-helper mr-comments <mr|ветка>  комментарии MR по тредам; --resolved / --open
   gl-helper run <джоба> <mr|ветка>  запустить manual-джобу; -w — ждать завершения
   gl-helper deploy <ветка> [N]      build → ждать → deploy_dev[ N] → ждать; --rebuild — перезапустить даже success
   gl-helper conflict <mr|ветка>     агент решает конфликт MR в worktree, gl-helper пушит build
@@ -36,6 +37,8 @@ mrs/mr:  [{iid, title, draft, source_branch, target_branch, has_conflicts,
           pipeline:{id,status}|null, pipeline_stale, comments:{total,open,resolved},
           updated_at, web_url}]
 jobs:    {pipeline:{id,status,web_url}, jobs:[{id,name,stage,status,web_url}]}
+mr-comments: {ok, mr, filter, summary:{threads_total,comments_total,threads_open,threads_resolved},
+             discussions:[{id,state,notes:[{id,author,created_at,body,system}]}]}
 run:     {ok, pipeline:{id}, job:{id,name,status,web_url}}        (dry_run: +dry_run, plan)
 deploy:  {ok, mr, pipeline:{id,status,web_url}, build:{...}, deploy:{...}}
 conflict:{ok, mr, head_sha, commits_ahead, pipeline:{...}, build:{...}}
