@@ -82,7 +82,7 @@ export const reviewAction = {
         agent: opts.agent,
         project_dir: pre.projectDir,
         steps: [
-          `агент ${opts.agent} читает дифф (${pre.files.length} файлов) и код в ${pre.projectDir}`,
+          `агент ${opts.agent} читает дифф (файлов: ${pre.files.length}) и код в ${pre.projectDir}`,
           'чекаут только на чтение: изменил — dirty_checkout',
           opts.noJudge ? 'судья отключён (--no-judge)' : 'судья (роль mr-review): второе мнение, ничего не гейтит',
         ],
