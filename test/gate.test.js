@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runAction } from '../src/engine.js';
@@ -106,4 +106,58 @@ test('гейт: падение бэкенда судьи тоже закрыва
   await assert.rejects(() => run.result, (e) => e.code === 'judge_failed');
   assert.deepEqual(published, []);
   assert.ok(existsSync(dir), 'worktree снесён при сбое судьи');
+});
+
+// Судья по очереди: сначала revise, потом что скажут. Заодно считает свои заходы.
+const judgeQueue = (decisions) => {
+  const left = [...decisions];
+  return async () => ({ name: 'fake', complete: async () => ({ text: JSON.stringify(verdict(left.shift() ?? 'approve')), cost: 0 }) });
+};
+
+// Поддельный агент с именем claude: пишет свои аргументы в файл и что-то отвечает.
+function fakeClaude(dir) {
+  const bin = path.join(dir, 'bin');
+  const calls = path.join(dir, 'calls.txt');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${calls}\necho готово\n`, { mode: 0o755 });
+  process.env.PATH = `${bin}:${process.env.PATH}`;
+  return () => readFileSync(calls, 'utf8').trim().split('\n');
+}
+
+test('revise: агент доделывает в той же сессии, второй вердикт пускает push', async () => {
+  const dir = mkdtempSync(path.join(root, 'revise-'));
+  const calls = fakeClaude(dir);
+  const published = [];
+  const res = await runAction(spec(published), {}, {}, opts({
+    agent: 'claude',
+    makeProvider: judgeQueue(['revise', 'approve']),
+  })).result;
+
+  const [first, second] = calls();
+  const id = first.match(/--session-id (\S+)/)?.[1];
+  assert.ok(id, `сессия не задана: ${first}`);
+  assert.match(second, new RegExp(`--resume ${id}`));
+  assert.match(second, /вернула работу на доделку/);
+  assert.deepEqual(published, ['push']);
+  assert.equal(res.decision, 'approve');
+});
+
+test('revise: лимит 0 — доделки нет, гейт закрыт', async () => {
+  const dir = mkdtempSync(path.join(root, 'revise0-'));
+  const calls = fakeClaude(dir);
+  const published = [];
+  const o = opts({ agent: 'claude', makeProvider: judgeQueue(['revise', 'approve']) });
+  o.cfg.judge.maxRevise = 0;
+  await assert.rejects(() => runAction(spec(published), {}, {}, o).result, (e) => e.code === 'judge_rejected');
+  assert.equal(calls().length, 1);
+  assert.deepEqual(published, []);
+});
+
+test('judge.enabled=false — приёмки нет, как при --no-judge', async () => {
+  const published = [];
+  const o = opts({});
+  o.cfg.judge.enabled = false;
+  const res = await runAction(spec(published), {}, {}, o).result;
+  assert.deepEqual(published, ['push']);
+  assert.equal(res.decision, null);
 });

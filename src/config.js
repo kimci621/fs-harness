@@ -32,6 +32,8 @@ export const DEFAULTS = {
   // Судья сменный, и профиль выбирается на каждую роль отдельно: роли различаются
   // по цене на порядки. Список у роли — фолбэк: первый ответивший выигрывает.
   judge: {
+    enabled: true,
+    maxRevise: 1, // сколько раз судья может вернуть работу агенту на доделку
     profiles: {
       'opus-cli': { provider: 'cli', bin: 'claude', model: 'opus', effort: 'xhigh' },
       'haiku-cli': { provider: 'cli', bin: 'claude', model: 'haiku', effort: 'medium' },
@@ -124,6 +126,8 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
       deps: { ...DEFAULTS.workspace.deps, ...(v2.workspace?.deps || {}), ...(p.deps || {}) },
     },
     judge: {
+      ...DEFAULTS.judge,
+      ...(v2.judge || {}),
       profiles: { ...DEFAULTS.judge.profiles, ...(v2.judge?.profiles || {}) },
       roles: { ...DEFAULTS.judge.roles, ...(v2.judge?.roles || {}) },
     },

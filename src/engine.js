@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createEventStream } from './agent/events.js';
 import { createRun, saveArtifact, readRun, appendEvent } from './agent/journal.js';
@@ -16,6 +17,26 @@ import { CliError } from './errors.js';
 
 export { ISOLATION_MODES };
 export const JUDGE_GATES = ['pre-push', 'advisory', 'none'];
+
+// Как агент продолжает свою же сессию: claude резюмит по --resume, pi — тем же --session-id.
+// Агента вне списка на доделку не зовём: без сессии он начал бы с нуля и затёр бы сделанное.
+export const SESSION_ARGS = {
+  claude: { start: (id) => ['--session-id', id], resume: (id) => ['--resume', id] },
+  pi: { start: (id) => ['--session-id', id], resume: (id) => ['--session-id', id] },
+};
+
+// Что агент получает вместе с просьбой доделать: решение судьи, находки и границы.
+export function reviseMessage(verdict) {
+  const findings = (verdict.findings ?? []).map(
+    (f) => `- [${f.severity}] ${f.file}${f.line ? `:${f.line}` : ''} — ${f.body}`,
+  );
+  return [
+    `Приёмка вернула работу на доделку: ${verdict.summary}`,
+    ...findings,
+    verdict.next?.hint ? `Подсказка: ${verdict.next.hint}` : '',
+    'Доделай в этом же worktree и закоммить. Push и force-push по-прежнему запрещены.',
+  ].filter(Boolean).join('\n');
+}
 
 // Движок действия. Порядок фаз один на все действия, различия живут в хуках декларации:
 //   resolve target → precheck → (skip?) → context → isolate → prompt
@@ -117,22 +138,9 @@ export function runAction(spec, ctx, input, opts = {}) {
 
       x.agentText = await runAgent(x);
       keep = true; // дальше в worktree лежит работа агента: любой провал ниже её не выбрасывает
-      x.facts = await a.verify(x);
-      if (x.before) ws.assertClean(x.before); // читающее действие не имеет права менять чекаут
-      saveArtifact(runDir, 'agent.txt', x.agentText);
-      saveArtifact(runDir, 'diff.patch', x.facts.diff ?? '');
-      x.goal = a.goal(x);
-      x.extra = a.judgeExtra ? a.judgeExtra(x) : '';
-      saveArtifact(runDir, 'meta.json', {
-        ...meta,
-        head_sha: x.facts.head_sha,
-        facts: { ...x.facts, diff: undefined },
-        goal: x.goal,
-        extra: x.extra,
-      });
-      x.phase('verify', 'done');
+      await collect(x);
 
-      x.verdict = await gate(x);
+      x.verdict = await accept(x);
       x.published = (a.publish ? await a.publish(x) : null) ?? {};
       x.phase('publish', 'done');
 
@@ -146,10 +154,49 @@ export function runAction(spec, ctx, input, opts = {}) {
     }
   }
 
-  // Гейт судьи. Любой исход кроме approve — push не происходит: бросаем.
+  // Факты о результате агента: снимаются заново после каждого его захода.
+  async function collect(x) {
+    x.facts = await a.verify(x);
+    if (x.before) ws.assertClean(x.before); // читающее действие не имеет права менять чекаут
+    saveArtifact(runDir, 'agent.txt', x.agentText);
+    saveArtifact(runDir, 'diff.patch', x.facts.diff ?? '');
+    x.goal = a.goal(x);
+    x.extra = a.judgeExtra ? a.judgeExtra(x) : '';
+    saveArtifact(runDir, 'meta.json', {
+      ...meta,
+      head_sha: x.facts.head_sha,
+      facts: { ...x.facts, diff: undefined },
+      goal: x.goal,
+      extra: x.extra,
+    });
+    x.phase('verify', 'done');
+  }
+
+  // Приёмка: вердикт revise возвращает работу агенту в ту же сессию, не дальше maxRevise раз.
+  // Любой другой исход кроме approve на гейте pre-push закрывает push.
+  async function accept(x) {
+    const limit = SESSION_ARGS[opts.agent] ? (opts.cfg?.judge?.maxRevise ?? 1) : 0;
+    let verdict = await gate(x);
+    for (let round = 1; verdict?.decision === 'revise' && round <= limit; round++) {
+      x.say(`↻ Судья просит доделать (${round}/${limit}) — возвращаю задачу агенту.`);
+      x.agentText = await runAgent(x, reviseMessage(verdict));
+      await collect(x);
+      verdict = await gate(x);
+    }
+    if (a.judge.gate === 'pre-push' && verdict && !isApproved(verdict)) {
+      throw new CliError(
+        `${formatVerdict(verdict)}\n\nPush не сделан. Worktree сохранён: ${ws.dir}\nВердикт: ${runDir.dir}/verdict.json`,
+        1,
+        'judge_rejected',
+      );
+    }
+    return verdict;
+  }
+
+  // Один заход судьи. Решение не трактует: это дело accept().
   async function gate(x) {
     const { gate: mode, role } = a.judge;
-    if (mode === 'none' || opts.noJudge) {
+    if (mode === 'none' || opts.noJudge || opts.cfg?.judge?.enabled === false) {
       if (a.writes) x.say('⚠ Судья отключён (--no-judge): push без приёмки.');
       return null;
     }
@@ -176,23 +223,20 @@ export function runAction(spec, ctx, input, opts = {}) {
     emit({ t: 'verdict', verdict });
     x.say(formatVerdict(verdict));
     x.phase('judge', 'done', verdict.decision);
-    if (mode === 'pre-push' && !isApproved(verdict)) {
-      throw new CliError(
-        `${formatVerdict(verdict)}\n\nPush не сделан. Worktree сохранён: ${ws.dir}\nВердикт: ${runDir.dir}/verdict.json`,
-        1,
-        'judge_rejected',
-      );
-    }
     return verdict;
   }
 
-  async function runAgent(x) {
+  // resume — текст доделки: тот же агент продолжает свою сессию, а не начинает заново.
+  async function runAgent(x, resume = null) {
     const agent = opts.agent;
+    const session = SESSION_ARGS[agent];
+    if (session && !x.sessionId) x.sessionId = randomUUID();
+    const sessionArgs = session ? (resume ? session.resume(x.sessionId) : session.start(x.sessionId)) : [];
     x.phase('agent', 'start', agent);
-    x.say(`🤖 Запускаю ${agent}…`);
+    x.say(`🤖 ${resume ? 'Возвращаю задачу' : 'Запускаю'} ${agent}…`);
     const proc = spawnAgent({
       bin: agent,
-      args: [...(opts.agentArgs ?? []), '-p', x.prompt],
+      args: [...(opts.agentArgs ?? []), ...sessionArgs, '-p', resume ?? x.prompt],
       cwd: ws.dir,
       env: { ...process.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo },
       signal: ac.signal,
