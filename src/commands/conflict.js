@@ -1,4 +1,4 @@
-import { spawnSync, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { resolveMR } from '../resolve.js';
@@ -7,6 +7,17 @@ import { expandHome } from '../config.js';
 import { ensureMRPipeline, findJob, startJob } from '../pipeline.js';
 import { waitJob, confirm } from '../ui.js';
 import { makeLogger, finish, jobJSON } from '../output.js';
+import { spawnAgent } from '../agent/spawn.js';
+
+// Первая строка вывода merge-tree — OID результирующего дерева, а не имя файла.
+// Не отбросить её — хэш уедет в промпт и агент пойдёт искать несуществующий файл.
+export function parseMergeTree(stdout) {
+  return String(stdout)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(1);
+}
 
 // fsh conflict <mr|ветка> [--agent claude|pi]
 // Решает конфликт силами headless-агента во временном worktree, пушит в ветку MR,
@@ -24,48 +35,6 @@ export async function cmdConflict(g, repo, args, opts = {}) {
 
   const mr = await resolveMR(g, repo, mrQuery);
 
-  if (opts.dryRun) {
-    const projectDir = expandHome(opts.projectDir);
-    const stamp = Date.now().toString(36);
-    const wt = path.join(projectDir, '.worktrees', `gl-helper-${mr.iid}-${stamp}`);
-    const plan = {
-      ok: true,
-      dry_run: true,
-      mr: mr.iid,
-      has_conflicts: mr.has_conflicts,
-      agent,
-      project_dir: projectDir,
-      worktree: wt,
-      steps: [
-        `git fetch origin ${mr.source_branch} ${mr.target_branch}`,
-        `worktree add --detach ${wt} origin/${mr.source_branch}`,
-        `агент ${agent}: git merge origin/${mr.target_branch}, решить конфликты, линт/тесты, коммит по правилам проекта`,
-        `push origin HEAD:${mr.source_branch}`,
-        'запуск build-джобы в актуальном MR-пайплайне + ожидание',
-        'удаление временного worktree',
-      ],
-    };
-    if (opts.asObject) return plan;
-    if (opts.json) {
-      finish(true, plan);
-    } else {
-      log(`🔍 План конфликта (dry-run), MR !${mr.iid} ${mr.source_branch} → ${mr.target_branch}`);
-      log(`   конфликт: ${mr.has_conflicts ? '⚠ да' : '✅ нет (ничего делать не нужно)'}`);
-      log(`   worktree: ${wt}`);
-      log(`   агент: ${agent} (headless)`);
-      plan.steps.forEach((s, i) => log(`   ${i + 1}. ${s}`));
-    }
-    return;
-  }
-
-  if (!mr.has_conflicts) {
-    const result = { ok: true, mr: mr.iid, has_conflicts: false, skipped: true };
-    if (opts.asObject) return result;
-    log(`✅ В MR !${mr.iid} конфликтов нет (${mr.source_branch} → ${mr.target_branch}).`);
-    finish(opts.json, result);
-    return result;
-  }
-
   const projectDir = expandHome(opts.projectDir);
   if (!projectDir) {
     throw new CliError('Каталог проекта не настроен (projectDir пуст). Выполни fsh config init или передай --project-dir <путь к локальному репо>.', 1, 'config_invalid');
@@ -82,19 +51,79 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     }
   };
 
+  // Конфликт считаем сами, а не по полю GitLab: при has_conflicts: "unchecked" оно врёт
+  // «конфликтов нет». merge-tree отвечает точно и заодно даёт список файлов для промпта.
+  const conflictingFiles = (target, source) => {
+    try {
+      execFileSync('git', ['merge-tree', '--write-tree', '--name-only', '--no-messages', target, source], {
+        cwd: projectDir,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return []; // exit 0 — merge чистый
+    } catch (err) {
+      if (err.status === 1) return parseMergeTree(err.stdout); // exit 1 — конфликт, это ответ, а не ошибка
+      throw new CliError(`git merge-tree не удался: ${String(err.stderr || err.message).trim()}`, 1, 'git_failed');
+    }
+  };
+
+  git(['fetch', 'origin', `${mr.source_branch}:refs/remotes/origin/${mr.source_branch}`, `${mr.target_branch}:refs/remotes/origin/${mr.target_branch}`]);
+  const conflictFiles = conflictingFiles(`origin/${mr.target_branch}`, `origin/${mr.source_branch}`);
+
   const stamp = Date.now().toString(36);
   const branch = `gl-helper/${mr.iid}-${stamp}`;
   const wt = path.join(projectDir, '.worktrees', `gl-helper-${mr.iid}-${stamp}`);
   const base = `origin/${mr.source_branch}`;
+
+  if (opts.dryRun) {
+    const plan = {
+      ok: true,
+      dry_run: true,
+      mr: mr.iid,
+      has_conflicts: conflictFiles.length > 0,
+      conflict_files: conflictFiles,
+      agent,
+      project_dir: projectDir,
+      worktree: wt,
+      steps: [
+        `worktree add --detach ${wt} ${base}`,
+        `агент ${agent}: git merge origin/${mr.target_branch}, решить конфликты, линт/тесты, коммит по правилам проекта`,
+        `push origin HEAD:${mr.source_branch}`,
+        'запуск build-джобы в актуальном MR-пайплайне + ожидание',
+        'удаление временного worktree',
+      ],
+    };
+    if (opts.asObject) return plan;
+    if (opts.json) {
+      finish(true, plan);
+    } else {
+      log(`🔍 План конфликта (dry-run), MR !${mr.iid} ${mr.source_branch} → ${mr.target_branch}`);
+      log(`   конфликт: ${conflictFiles.length ? `⚠ да, файлов ${conflictFiles.length}` : '✅ нет (ничего делать не нужно)'}`);
+      conflictFiles.forEach((f) => log(`     ${f}`));
+      log(`   worktree: ${wt}`);
+      log(`   агент: ${agent} (headless)`);
+      plan.steps.forEach((s, i) => log(`   ${i + 1}. ${s}`));
+    }
+    return;
+  }
+
+  if (!conflictFiles.length) {
+    const result = { ok: true, mr: mr.iid, has_conflicts: false, conflict_files: [], skipped: true };
+    if (opts.asObject) return result;
+    log(`✅ В MR !${mr.iid} конфликтов нет (${mr.source_branch} → ${mr.target_branch}).`);
+    finish(opts.json, result);
+    return result;
+  }
+
   let wtCreated = false;
   let keep = Boolean(opts.keepWorktree);
 
   log(`🌿 MR !${mr.iid}: ${mr.source_branch} → ${mr.target_branch}`);
+  log(`   Конфликт в ${conflictFiles.length} файлах: ${conflictFiles.join(', ')}`);
   log(`   Агент: ${agent} · worktree: ${wt}`);
 
   try {
-    // Свежие ветки и detached-worktree от origin/<source>, чтобы не трогать рабочую копию.
-    git(['fetch', 'origin', `${mr.source_branch}:refs/remotes/origin/${mr.source_branch}`, `${mr.target_branch}:refs/remotes/origin/${mr.target_branch}`]);
+    // Detached-worktree от origin/<source>, чтобы не трогать рабочую копию.
     git(['worktree', 'add', '--detach', wt, base]);
     wtCreated = true;
     git(['checkout', '-b', branch], wt);
@@ -104,14 +133,24 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     }
 
     log(`🤖 Запускаю ${agent}…`);
-    const extra = opts.agentArgs ?? [];
-    const res = spawnSync(agent, [...extra, '-p', buildPrompt({ repo, mr })], {
+    const run = spawnAgent({
+      bin: agent,
+      args: [...(opts.agentArgs ?? []), '-p', buildPrompt({ repo, mr, conflictFiles })],
       cwd: wt,
-      stdio: 'inherit',
       env: { ...process.env, GL_HELPER_MR: String(mr.iid), GL_HELPER_REPO: repo },
     });
-    if (res.error) throw new CliError(`Не удалось запустить ${agent}: ${res.error.message}`, 1, 'agent_failed');
-    if (res.status !== 0) throw new CliError(`Агент ${agent} завершился с кодом ${res.status}.`, 1, 'agent_failed');
+    run.events.on((ev) => {
+      if (ev.t !== 'log') return;
+      if (ev.stream === 'stderr') process.stderr.write(`${ev.text}\n`);
+      else log(ev.text);
+    });
+    let done;
+    try {
+      done = await run.result;
+    } catch (err) {
+      throw new CliError(`Не удалось запустить ${agent}: ${err.message}`, 1, 'agent_failed');
+    }
+    if (!done.ok) throw new CliError(`Агент ${agent} завершился с кодом ${done.code}.`, 1, 'agent_failed');
 
     // Проверяем результат: коммиты есть? запушено?
     const ahead = Number(git(['rev-list', '--count', `${base}..HEAD`], wt));
@@ -153,31 +192,37 @@ export async function cmdConflict(g, repo, args, opts = {}) {
       mr: mr.iid,
       head_sha: headSha,
       commits_ahead: ahead,
+      conflict_files: conflictFiles,
       pipeline: { id: pipeline.id, status: pipeline.status, web_url: pipeline.web_url },
       build: jobJSON(final, 'success'),
     };
     if (!opts.asObject) finish(opts.json, result);
     return result;
   } finally {
-    if (!wtCreated) return;
-    if (keep) {
-      log(`📁 Worktree сохранён: ${wt}`);
-    } else {
-      try { git(['worktree', 'remove', '--force', wt]); } catch { /* уже удалён */ }
-      try { git(['worktree', 'prune']); } catch { /* не критично */ }
-      try { git(['branch', '-D', branch]); } catch { /* не критично */ }
-      log('🧹 Временный worktree и ветка удалены.');
+    // Без return: он проглатывал летящее исключение и команда возвращала undefined.
+    if (wtCreated) {
+      if (keep) {
+        log(`📁 Worktree сохранён: ${wt}`);
+      } else {
+        try { git(['worktree', 'remove', '--force', wt]); } catch { /* уже удалён */ }
+        try { git(['worktree', 'prune']); } catch { /* не критично */ }
+        try { git(['branch', '-D', branch]); } catch { /* не критично */ }
+        log('🧹 Временный worktree и ветка удалены.');
+      }
     }
   }
 }
 
-function buildPrompt({ repo, mr }) {
+function buildPrompt({ repo, mr, conflictFiles }) {
   const source = mr.source_branch;
   const target = mr.target_branch;
   return [
     `Ты работаешь в GitLab-проекте ${repo}. Репозиторий уже склонирован в текущей директории — это временный git worktree с веткой на базе origin/${source}.`,
     '',
     `Задача: решить конфликт в MR !${mr.iid} «${mr.title}» (${mr.web_url}), ветка ${source} → ${target}.`,
+    '',
+    `Конфликтующие файлы (посчитано локально через git merge-tree, ${conflictFiles.length} шт.):`,
+    ...conflictFiles.map((f) => `  ${f}`),
     '',
     'Данные о MR получай через glab, например:',
     `  glab mr view ${mr.iid} -R ${repo}`,
