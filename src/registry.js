@@ -8,6 +8,7 @@ import { conflictAction } from './actions/conflict.js';
 import { runActionCLI } from './engine.js';
 import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
+import { cmdPrompts } from './commands/prompts.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdConfig } from './config-cmd.js';
 import { CliError } from './errors.js';
@@ -214,6 +215,13 @@ export const COMMANDS = [
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       call: () => ({ ok: true, guide: buildAgentGuide(COMMANDS) }),
     },
+  },
+  {
+    name: 'prompts',
+    usage: 'prompts list|show <имя>|check|edit <имя>',
+    description: 'Промпты действий: где лежат, что внутри, всё ли цело',
+    example: 'fsh prompts show actions/conflict --for !2547',
+    run: (ctx, args, opts) => cmdPrompts(ACTIONS, args, opts, ctx),
   },
   {
     name: 'config',
