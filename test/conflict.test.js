@@ -4,7 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { cmdConflict, parseMergeTree } from '../src/commands/conflict.js';
+import { conflictAction, parseMergeTree } from '../src/actions/conflict.js';
+import { runActionCLI } from '../src/engine.js';
 import { hasMergeTree } from '../src/commands/doctor.js';
 import { CliError } from '../src/errors.js';
 
@@ -71,7 +72,7 @@ test('parseMergeTree: первая строка — OID дерева, а не ф
 });
 
 test('conflict --dry-run: конфликт найден локально, файлы в плане', async () => {
-  const plan = await cmdConflict(fakeGitlab('source'), 'r/repo', ['7'], {
+  const plan = await runActionCLI(conflictAction, { g: fakeGitlab('source'), repo: 'r/repo' }, ['7'], {
     agent: 'claude',
     projectDir: project,
     dryRun: true,
@@ -82,7 +83,7 @@ test('conflict --dry-run: конфликт найден локально, фай
 });
 
 test('conflict: чистый merge — skipped, несмотря на has_conflicts из GitLab', async () => {
-  const res = await cmdConflict(fakeGitlab('clean'), 'r/repo', ['7'], {
+  const res = await runActionCLI(conflictAction, { g: fakeGitlab('clean'), repo: 'r/repo' }, ['7'], {
     agent: 'claude',
     projectDir: project,
     yes: true,
@@ -96,7 +97,7 @@ test('conflict: падение до создания worktree долетает �
   writeFileSync(path.join(project, '.worktrees'), 'не каталог\n');
   await assert.rejects(
     () =>
-      cmdConflict(fakeGitlab('source'), 'r/repo', ['7'], {
+      runActionCLI(conflictAction, { g: fakeGitlab('source'), repo: 'r/repo' }, ['7'], {
         agent: 'claude',
         projectDir: project,
         yes: true,

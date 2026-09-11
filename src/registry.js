@@ -4,7 +4,8 @@ import { cmdMRComments } from './commands/mr-comments.js';
 import { cmdJobs } from './commands/jobs.js';
 import { cmdRun } from './commands/run.js';
 import { cmdDeploy } from './commands/deploy.js';
-import { cmdConflict } from './commands/conflict.js';
+import { conflictAction } from './actions/conflict.js';
+import { runActionCLI } from './engine.js';
 import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
@@ -22,6 +23,8 @@ import { CliError } from './errors.js';
 //   run(ctx, args, opts)  CLI-вызов (ctx: {g, repo, cfg, notify, agentArgs})
 //   mcp         описание инструмента для MCP: {description, inputSchema, call(ctx, args)}
 //               если mcp нет — инструмент не экспортируется
+//   kind        'data' — обычная команда (по умолчанию); 'action' — agent-действие,
+//               у него обязателен блок action, а run и mcp синтезирует fromAction()
 
 export function createCtx({ g, cfg, notify }) {
   return {
@@ -148,48 +151,7 @@ export const COMMANDS = [
       })),
     },
   },
-  {
-    name: 'conflict',
-    usage: 'conflict <mr|ветка>',
-    description: 'Решить конфликт силами AI-агента и запустить build',
-    example: 'fsh conflict !2547 --agent pi',
-    run: (ctx, args, opts) => withRepoHost(ctx, () => {
-      const agent = opts.agent || ctx.cfg.agent;
-      return cmdConflict(ctx.g, ctx.repo, args, {
-        agent,
-        projectDir: opts.projectDir || ctx.cfg.projectDir,
-        buildJob: opts.buildJob,
-        json: opts.json,
-        yes: opts.yes,
-        keepWorktree: opts.keepWorktree,
-        dryRun: opts.dryRun,
-        agentArgs: ctx.agentArgs(agent),
-        cfg: ctx.cfg,
-        noJudge: opts.noJudge,
-        judgeProfile: opts.judgeProfile,
-        judgeOnly: opts.judgeOnly,
-      });
-    }),
-    mcp: {
-      description: 'Решить конфликт MR силами AI-агента (claude или pi, headless) во временном git worktree проекта, запушить в ветку MR и запустить build. Ждёт завершения. Меняет код и GitLab; ветка target не трогается, force-push запрещён.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'номер MR или часть имени ветки' },
-          agent: { type: 'string', enum: ['claude', 'pi'], description: 'какой агент решает конфликт' },
-        },
-        required: ['query'],
-      },
-      call: (ctx, a) => withRepoHost(ctx, () => {
-        const agent = a.agent || ctx.cfg.agent;
-        return cmdConflict(ctx.g, ctx.repo, [a.query], {
-          json: true, asObject: true, quiet: true, yes: true,
-          agent, projectDir: ctx.cfg.projectDir, agentArgs: ctx.agentArgs(agent), onTick: ctx.notify,
-          cfg: ctx.cfg,
-        });
-      }),
-    },
-  },
+  fromAction(conflictAction),
   {
     name: 'commit',
     usage: 'commit [--agent]',
@@ -268,6 +230,40 @@ export const COMMANDS = [
     run: async () => (await import('./mcp.js')).runMCPServer(),
   },
 ];
+
+// Одна декларация действия → CLI-команда и MCP-инструмент. Руками их не пишут:
+// два ручных вызова расходятся, а движок у них один.
+export function fromAction(spec) {
+  const a = spec.action;
+  const optsFor = (ctx, opts, agent) => ({
+    ...opts,
+    agent,
+    projectDir: opts.projectDir || ctx.cfg.projectDir,
+    agentArgs: ctx.agentArgs(agent),
+    cfg: ctx.cfg,
+  });
+  return {
+    ...spec,
+    run: (ctx, args, opts) => withRepoHost(ctx, () => {
+      const agent = opts.agent || ctx.cfg.agent || a.agent.default;
+      return runActionCLI(spec, ctx, args, optsFor(ctx, opts, agent));
+    }),
+    mcp: {
+      description: a.mcpDescription,
+      inputSchema: a.inputSchema,
+      call: (ctx, args) => withRepoHost(ctx, () => {
+        const agent = args.agent || ctx.cfg.agent || a.agent.default;
+        return runActionCLI(spec, ctx, [args.query], {
+          ...optsFor(ctx, { json: true, asObject: true, quiet: true, yes: true }, agent),
+          onTick: ctx.notify,
+        });
+      }),
+    },
+  };
+}
+
+// Из ACTIONS TUI строит кнопки, а будущий HTTP — роуты.
+export const ACTIONS = COMMANDS.filter((c) => c.kind === 'action');
 
 export function findCommand(name) {
   return COMMANDS.find((c) => c.name === name) || null;
