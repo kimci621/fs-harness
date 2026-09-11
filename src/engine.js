@@ -114,11 +114,13 @@ export function runAction(spec, ctx, input, opts = {}) {
       saveArtifact(runDir, 'agent.txt', x.agentText);
       saveArtifact(runDir, 'diff.patch', x.facts.diff ?? '');
       x.goal = a.goal(x);
+      x.extra = a.judgeExtra ? a.judgeExtra(x) : '';
       saveArtifact(runDir, 'meta.json', {
         ...JSON.parse(readRun(runDir.id).read('meta.json')),
         head_sha: x.facts.head_sha,
         facts: { ...x.facts, diff: undefined },
         goal: x.goal,
+        extra: x.extra,
       });
       x.phase('verify', 'done');
 
@@ -152,6 +154,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       payload: buildAcceptancePayload({
         goal: x.goal,
         facts: { ...x.facts, diff: undefined },
+        extra: x.extra,
         diff: x.facts.diff,
         agentText: x.agentText,
       }),
@@ -253,7 +256,7 @@ export async function judgeRun(runId, opts = {}) {
     throw new CliError(`У рана ${runId} нет diff.patch — судить нечего (ран не дошёл до verify).`, 1, 'run_incomplete');
   }
 
-  log(`⚖ Судья по рану ${runId} (MR !${meta.mr}, ${meta.conflict_files?.length ?? 0} конфликтующих файлов)`);
+  log(`⚖ Судья по рану ${runId} (действие ${meta.action}, MR !${meta.mr})`);
   const verdict = await judge({
     role: meta.judge?.role ?? 'acceptance',
     cfg: opts.cfg,
@@ -261,6 +264,7 @@ export async function judgeRun(runId, opts = {}) {
     payload: buildAcceptancePayload({
       goal: meta.goal,
       facts: meta.facts ?? {},
+      extra: meta.extra ?? '',
       diff,
       agentText: saved.read('agent.txt') ?? '',
     }),

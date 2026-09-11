@@ -18,7 +18,7 @@ src/config.js           ~/.config/gl-helper/config.json
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, conflict, commit, doctor, agent-guide, mr-comments
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, agent-guide, mr-comments, prompts
 src/secrets.js          ключи: env → keychain (security) → ошибка с командой заведения
 src/agent/spawn.js      запуск агента процессом: стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
@@ -29,7 +29,7 @@ src/judge/payload.js    что показывать судье в роли accep
 src/judge/providers/    cli (процесс claude) и openai (всё OpenAI-совместимое)
 src/prompts/judge/*.md  рубрики по ролям — файл на роль
 src/engine.js           runAction: фазы действия, события, изоляция, гейт судьи; runActionCLI, judgeRun
-src/actions/*.js        декларации действий: precheck/context/verify/publish и блок action
+src/actions/*.js        декларации действий (conflict, threads): precheck/context/verify/publish и блок action
 src/prompts.js          шаблоны: loadTemplate/renderTemplate/listTemplates/checkTemplates
 src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
 src/mcp.js              MCP-сервер (stdio): обработка JSON-RPC, инструменты берёт из registry
@@ -142,7 +142,7 @@ resolve target → precheck → (skip?) → context → isolate → prompt
 
 - `GL_HELPER_JSON=1` — все команды отдают JSON; side-effect команды — финальный результат `{ok:true, ...}` в stdout, прогресс в stderr. Ошибки: `{ok:false,error:{code,message}}` в stdout, exit ≠ 0.
 - `GL_HELPER_YES=1` — авто-подтверждение (аналог -y).
-- `--dry-run` — план без side-effect'ов для run/deploy/conflict/commit.
+- `--dry-run` — план без side-effect'ов для run/deploy/действий/commit.
 - `fsh agent-guide` — самодостаточная инструкция, которую агент запускает первой.
 - В командах весь прогресс печатай через `makeLogger(json)` из `output.js`, итог — через `finish(json, obj)`. Ошибки — `CliError(msg, exitCode, code)` с машинным кодом.
 - `asObject: true` в опциях команды — вернуть результат объектом без печати (так команды вызывает MCP-сервер). Никогда не печатай в stdout из MCP-режима: stdout занят протоколом.
@@ -162,7 +162,7 @@ resolve target → precheck → (skip?) → context → isolate → prompt
 
 `jobs`: `{pipeline: {id, status, web_url}, jobs: [{id, name, stage, status, web_url}]}`.
 
-`run`/`deploy`/`conflict`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков. У `conflict` дополнительно `conflict_files: string[]` и `has_conflicts` — посчитанные `git merge-tree`, а не взятые из GitLab, `run` (id рана) и `judge: {decision, confidence, summary, profile, cost}` либо `{skipped: true}` при `--no-judge`.
+`run`/`deploy`/`conflict`/`threads`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков. У `conflict` дополнительно `conflict_files: string[]` и `has_conflicts` — посчитанные `git merge-tree`, а не взятые из GitLab, `run` (id рана) и `judge: {decision, confidence, summary, profile, cost}` либо `{skipped: true}` при `--no-judge`. У `threads` — `threads_open`, `replied: string[]`, `resolved: string[]`, `commits_ahead` (ноль — норма: тред мог требовать только ответа).
 
 Ошибки: `{ok:false, error:{code, message}}`; коды перечислены в `agent-guide`.
 
