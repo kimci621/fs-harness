@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createGlab } from '../glab.js';
 import { loadConfig, CONFIG_PATH, expandHome } from '../config.js';
 
-// gl-helper doctor — самодиагностика окружения: glab, конфиг, API, git, агенты.
+// fsh doctor — самодиагностика окружения: glab, конфиг, API, git, агенты.
 // Критично: glab, api. Остальное — предупреждения.
 // asObject — вернуть {ok, checks} без печати (MCP-режим).
 export async function cmdDoctor({ repo, host, projectDir, json, asObject } = {}) {
@@ -39,7 +39,7 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject } = {})
       add('api', false, `${targetHost} · "${targetRepo}": ${err.message}`, true);
     }
   } else {
-    add('api', false, 'нет repo/host в конфиге — запусти gl-helper config init', true);
+    add('api', false, 'нет repo/host в конфиге — запусти fsh config init', true);
   }
 
   const dir = expandHome(projectDir || cfg?.projectDir || '~');
@@ -69,7 +69,7 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject } = {})
   if (failed.length) {
     console.log(`\n${failed.filter((c) => c.critical).length} критических, ${failed.filter((c) => !c.critical).length} предупреждений.`);
   } else {
-    console.log('\nВсё в порядке, gl-helper готов к работе.');
+    console.log('\nВсё в порядке, fsh готов к работе.');
   }
   return checks.some((c) => c.critical && !c.ok) ? 1 : 0;
 }

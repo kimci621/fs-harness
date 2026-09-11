@@ -30,7 +30,7 @@ test('mcp: initialize — протокол, capabilities, serverInfo', async () 
   const r = await handleMessage('initialize', { protocolVersion: '2025-06-18' }, ctx);
   assert.equal(r.protocolVersion, '2025-06-18');
   assert.ok(r.capabilities.tools);
-  assert.equal(r.serverInfo.name, 'gl-helper');
+  assert.equal(r.serverInfo.name, 'fs-harness');
 });
 
 test('mcp: initialize с неизвестной версией → 2024-11-05', async () => {

@@ -1,6 +1,6 @@
 import { loadConfig, configInit, CONFIG_PATH, expandHome } from './config.js';
 
-// gl-helper config init|show
+// fsh config init|show
 export function cmdConfig(args) {
   const [sub] = args;
   if (sub === 'init') {
@@ -12,7 +12,7 @@ export function cmdConfig(args) {
     console.log(requireConfig());
     return 0;
   }
-  console.log(`Использование: gl-helper config init|show\nКонфиг: ${CONFIG_PATH}`);
+  console.log(`Использование: fsh config init|show\nКонфиг: ${CONFIG_PATH}`);
   return 0;
 }
 

@@ -8,13 +8,13 @@ import { ensureMRPipeline, findJob, startJob } from '../pipeline.js';
 import { waitJob, confirm } from '../ui.js';
 import { makeLogger, finish, jobJSON } from '../output.js';
 
-// gl-helper conflict <mr|ветка> [--agent claude|pi]
+// fsh conflict <mr|ветка> [--agent claude|pi]
 // Решает конфликт силами headless-агента во временном worktree, пушит в ветку MR,
 // затем сам запускает build-джобу и ждёт её. Worktree всегда убирается (кроме аварийных случаев).
 // --dry-run: показать план без каких-либо действий.
 export async function cmdConflict(g, repo, args, opts = {}) {
   const [mrQuery] = args;
-  if (!mrQuery) throw new CliError('Использование: gl-helper conflict <mr|ветка> [--agent claude|pi] [-y]', 1, 'usage');
+  if (!mrQuery) throw new CliError('Использование: fsh conflict <mr|ветка> [--agent claude|pi] [-y]', 1, 'usage');
 
   const log = opts.asObject ? () => {} : makeLogger(opts.json);
   const agent = opts.agent;
@@ -68,7 +68,7 @@ export async function cmdConflict(g, repo, args, opts = {}) {
 
   const projectDir = expandHome(opts.projectDir);
   if (!projectDir) {
-    throw new CliError('Каталог проекта не настроен (projectDir пуст). Выполни gl-helper config init или передай --project-dir <путь к локальному репо>.', 1, 'config_invalid');
+    throw new CliError('Каталог проекта не настроен (projectDir пуст). Выполни fsh config init или передай --project-dir <путь к локальному репо>.', 1, 'config_invalid');
   }
   if (!existsSync(path.join(projectDir, '.git'))) {
     throw new CliError(`Каталог проекта ${projectDir} не является git-репозиторием. Укажи --project-dir.`, 1, 'config_invalid');
@@ -131,7 +131,7 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     }
     log(`✅ Изменения запушены в ${mr.source_branch} (${headSha.slice(0, 8)}).`);
 
-    // Пайплайн build жмёт gl-helper, не агент.
+    // Пайплайн build жмёт fsh, не агент.
     const freshMR = await g.getMR(repo, mr.iid);
     const pipeline = await ensureMRPipeline(g, repo, freshMR);
     const jobs = await g.getJobs(repo, pipeline.id);

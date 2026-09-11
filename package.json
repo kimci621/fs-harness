@@ -1,16 +1,17 @@
 {
-  "name": "gl-helper",
+  "name": "fs-harness",
   "version": "0.1.0",
-  "description": "CLI-обёртка над glab: MR, конфликты, пайплайны, деплой. Для людей и AI-агентов.",
+  "description": "Персональный харнесс разработчика: MR, задачи и запуск агентов с проверкой результата судьёй.",
   "type": "module",
   "bin": {
-    "gl-helper": "bin/gl-helper.js"
+    "fsh": "bin/fsh.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "test": "node --test \"test/*.test.js\""
   },
+  "dependencies": {},
   "license": "MIT"
 }

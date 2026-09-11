@@ -4,12 +4,12 @@ import { CliError } from '../errors.js';
 import { waitJob } from '../ui.js';
 import { makeLogger, finish, jobJSON } from '../output.js';
 
-// gl-helper deploy <mr|ветка> [N]
+// fsh deploy <mr|ветка> [N]
 // build → ждём success → deploy_dev[ N] → ждём итог. --rebuild: перезапустить даже success.
 // --dry-run: показать план без запусков.
 export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, rebuild = false, dryRun = false, asObject, quiet = false, onTick } = {}) {
   const [mrQuery, n] = args;
-  if (!mrQuery) throw new CliError('Использование: gl-helper deploy <mr|ветка> [N]', 1, 'usage');
+  if (!mrQuery) throw new CliError('Использование: fsh deploy <mr|ветка> [N]', 1, 'usage');
 
   const log = asObject ? () => {} : makeLogger(json);
   const jobName = buildJob || 'build_image';

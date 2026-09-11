@@ -3,7 +3,7 @@ import { CliError } from '../errors.js';
 import { humanize } from '../format.js';
 import { finish } from '../output.js';
 
-// gl-helper mr-comments <mr|ветка> [--resolved|--open]
+// fsh mr-comments <mr|ветка> [--resolved|--open]
 // Все комментарии MR, сгруппированные по тредам. GitLab решает треды целиком:
 // resolved — только решённые треды; open — нерешённые треды и отдельные комментарии.
 
@@ -48,7 +48,7 @@ export function classifyDiscussions(discussions, { resolved = false, open = fals
 // asObject — вернуть данные без печати (MCP-режим).
 export async function cmdMRComments(g, repo, args, { json, resolved = false, open = false, asObject } = {}) {
   const [query] = args;
-  if (!query) throw new CliError('Использование: gl-helper mr-comments <mr|ветка> [--resolved|--open]', 1, 'usage');
+  if (!query) throw new CliError('Использование: fsh mr-comments <mr|ветка> [--resolved|--open]', 1, 'usage');
   if (resolved && open) {
     throw new CliError('--resolved и --open вместе не нужны: resolved — только решённые, open — всё нерешённое.', 1, 'usage');
   }

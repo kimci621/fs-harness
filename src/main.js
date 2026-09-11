@@ -27,9 +27,9 @@ function buildUsage() {
   const width = Math.max(...COMMANDS.map((c) => c.usage.length)) + 2;
   const commands = COMMANDS.map((c) => `  ${c.usage.padEnd(width)} ${c.description}`).join('\n');
   const examples = COMMANDS.map((c) => `  ${c.example}`).join('\n');
-  return `gl-helper — обёртка над glab для работы с MR и пайплайнами.
+  return `fsh — обёртка над glab для работы с MR и пайплайнами.
 
-Использование: gl-helper <команда> [аргументы] [флаги]
+Использование: fsh <команда> [аргументы] [флаги]
 
 Команды:
 ${commands}
@@ -39,7 +39,7 @@ ${FLAGS_USAGE}
 
 Примеры:
 ${examples}
-  gl-helper -R other/repo mrs --json
+  fsh -R other/repo mrs --json
 `;
 }
 
@@ -113,7 +113,7 @@ function parseArgs(argv) {
     else if (a === '--resolved' || a === '-resolved') opts.resolved = true;
     else if (a === '--open' || a === '-open') opts.open = true;
     else if (a === '-h' || a === '--help') opts.help = true;
-    else if (a.startsWith('-')) throw new CliError(`Неизвестный флаг "${a}". См. gl-helper help.`);
+    else if (a.startsWith('-')) throw new CliError(`Неизвестный флаг "${a}". См. fsh help.`);
     else rest.push(a);
   }
   return { opts, rest };
