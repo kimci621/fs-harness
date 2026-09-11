@@ -14,9 +14,16 @@
   },
   "dependencies": {
     "gray-matter": "^4.0.3",
+    "htm": "^3.1.1",
+    "ink": "^7.1.1",
+    "ink-spinner": "^5.0.0",
     "mustache": "^4.2.0",
     "openai": "^7.15.0",
+    "react": "^19.3.0",
     "zod": "^4.6.2"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "ink-testing-library": "^4.0.0"
+  }
 }

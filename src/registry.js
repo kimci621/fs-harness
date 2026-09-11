@@ -13,6 +13,7 @@ import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { cmdPrompts } from './commands/prompts.js';
 import { cmdJira } from './commands/jira.js';
+import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
 import { readSecret } from './secrets.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
@@ -255,6 +256,13 @@ export const COMMANDS = [
     description: 'Настроить/показать конфиг, перевести его на v2 (проекты)',
     example: 'fsh config show',
     run: (ctx, args, opts) => cmdConfig(args, opts),
+  },
+  {
+    name: 'tui',
+    usage: 'tui',
+    description: 'Полноэкранный режим: MR, задачи, раны и запуск действий с клавиши',
+    example: 'fsh tui',
+    run: (ctx, args, opts) => withProject(ctx, () => startTUI(ctx, opts)),
   },
   {
     name: 'mcp',
