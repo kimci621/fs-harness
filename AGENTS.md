@@ -4,7 +4,7 @@
 
 ## Что это
 
-CLI-обёртка над `glab api` для работы с MR и пайплайнами GitLab. Стек: Node.js ESM, зависимости ставятся через `npm ci`, из внешних программ нужны только `node`, `glab`, `git`. Весь вывод данных — JSON через `glab api`, никакого парсинга человекочитаемого вывода glab. Дизайн-решение зафиксировано в `docs/SPEC.md`.
+CLI над `glab api` для работы с MR и пайплайнами GitLab плюс запуск AI-агента на конфликтах с приёмкой результата судьёй. Стек: Node.js ESM, зависимости ставятся через `npm ci`, из внешних программ нужны только `node`, `git` (≥2.38, ради `merge-tree --write-tree`), `glab` и `claude`. Весь вывод данных — JSON через `glab api`, никакого парсинга человекочитаемого вывода glab. Дизайн-решение зафиксировано в `docs/SPEC.md`.
 
 ## Карта файлов
 
@@ -19,6 +19,15 @@ src/ui.js               спиннер, live-таблица, waitJob (опрос
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
 src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, conflict, commit, doctor, agent-guide, mr-comments
+src/secrets.js          ключи: env → keychain (security) → ошибка с командой заведения
+src/agent/spawn.js      запуск агента процессом: стрим строк, abort, SIGTERM→SIGKILL
+src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
+src/agent/journal.js    раны в ~/.local/state/fs-harness/runs/<id>/
+src/judge/index.js      judge(): рубрика + профиль → вердикт, фолбэк, ремонтный round-trip
+src/judge/schema.js     zod-схема вердикта, VERDICT_SHAPE, extractJson
+src/judge/payload.js    что показывать судье в роли acceptance
+src/judge/providers/    cli (процесс claude) и openai (всё OpenAI-совместимое)
+src/prompts/judge/*.md  рубрики по ролям — файл на роль
 src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
 src/mcp.js              MCP-сервер (stdio): обработка JSON-RPC, инструменты берёт из registry
 test/*.test.js          node --test, мокнутый exec — без сети
@@ -69,6 +78,21 @@ test/*.test.js          node --test, мокнутый exec — без сети
 
 Промпты лежат отдельно от кода в `src/prompts/` (`.md`-файлы) — их можно править без правки логики. Для `commit` действует оверрайд проектом: если в корне git-репозитория есть файл `.llm-commit-pattern`, его содержимое заменяет встроенный промпт (см. `src/prompts.js`).
 
+## Судья
+
+Приёмщик работы агента. Вызывается из пишущих действий **до** push и решает, пускать результат наружу или нет.
+
+- `judge({role, payload, cfg, profile, signal, onDelta})` → вердикт с `meta` (профиль, модель, токены, цена). Бросает на любом провале.
+- **Вызывающий обязан трактовать любой провал как «не approve»**: `isApproved(v)` и только потом push. Тихо пропускать нельзя — в этом весь смысл гейта.
+- Роль → рубрика `src/prompts/judge/<role>.md` + список профилей из `cfg.judge.roles`. Список означает фолбэк по порядку: не ответил бэкенд — идём к следующему. Исключение — `judge_schema`: невалидная схема это беда модели, а не бэкенда, и сменой профиля не лечится.
+- Схема проверяется всегда, что бы ни обещал провайдер. Провал → один ремонтный запрос с `error.issues` → второй провал → `CliError(..., 'judge_schema')`.
+
+**Новая роль:** файл рубрики в `src/prompts/judge/`, запись в `judge.roles` в `DEFAULTS` (`config.js`), сборщик payload рядом с `buildAcceptancePayload`. Схема вердикта общая на все роли — не плоди вторую.
+
+**Новый провайдер:** файл в `src/judge/providers/`, ветка в `createProvider`. Контракт один: `{name, schemaStrength, model, complete({system, user, effort, signal, onDelta}) → {text, model, usage, cost, sessionId}}`. Ошибки — `CliError(..., 'judge_failed')`, чтобы сработал фолбэк.
+
+**Тесты судьи не ходят в сеть**: `judge()` принимает `makeProvider`, `createOpenAIProvider` — `makeClient`. Живая модель дёргается только руками.
+
 ## Режим агента (важно)
 
 - `GL_HELPER_JSON=1` — все команды отдают JSON; side-effect команды — финальный результат `{ok:true, ...}` в stdout, прогресс в stderr. Ошибки: `{ok:false,error:{code,message}}` в stdout, exit ≠ 0.
@@ -93,7 +117,7 @@ test/*.test.js          node --test, мокнутый exec — без сети
 
 `jobs`: `{pipeline: {id, status, web_url}, jobs: [{id, name, stage, status, web_url}]}`.
 
-`run`/`deploy`/`conflict`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков. У `conflict` дополнительно `conflict_files: string[]` и `has_conflicts` — посчитанные `git merge-tree`, а не взятые из GitLab.
+`run`/`deploy`/`conflict`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков. У `conflict` дополнительно `conflict_files: string[]` и `has_conflicts` — посчитанные `git merge-tree`, а не взятые из GitLab, `run` (id рана) и `judge: {decision, confidence, summary, profile, cost}` либо `{skipped: true}` при `--no-judge`.
 
 Ошибки: `{ok:false, error:{code, message}}`; коды перечислены в `agent-guide`.
 
@@ -113,4 +137,4 @@ node bin/fsh.js mr <ветка> --json
 - Минимальный диф: сначала тест/воспроизведение, потом фикс.
 - Спиннеры/таблицы — только в `ui.js`, иконки/строки — только в `format.js`. Не дублируй.
 - `waitJob` принимает `intervalMs` опционально — в тестах можно ускорить.
-- Не добавляй npm-зависимости без острой нужды — это осознанное требование (работает где угодно без install).
+- Ноль новых внешних программ — это жёсткое ограничение. npm-библиотеки при этом можно: `npm ci` ставит всё, что нужно.
