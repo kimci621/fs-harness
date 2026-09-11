@@ -77,10 +77,16 @@ test('registry: декларации действий валидны и синт
   }
 });
 
-// Заглушка pre под каждое действие: нового действия без неё тест не пропустит.
-const STUB_PRE = {
-  conflict: { conflictFiles: ['src/a.ts'] },
-  threads: { threads: [{ id: 'aaa1', file: 'src/a.ts', line: 3, notes: [{ author: 'rev', body: 'тут утечка' }] }] },
+// Заглушки под каждое действие: нового действия без них тест не пропустит.
+const MR = { iid: 7, title: 'MR', web_url: 'https://example.invalid/7', source_branch: 's', target_branch: 't' };
+const STUBS = {
+  conflict: { pre: { conflictFiles: ['src/a.ts'] } },
+  threads: { pre: { threads: [{ id: 'aaa1', file: 'src/a.ts', line: 3, notes: [{ author: 'rev', body: 'тут утечка' }] }] } },
+  review: { pre: { projectDir: '/tmp/p', files: [{ path: 'src/a.ts', kind: 'изменён' }], diff: 'diff', rules: { source: 'встроенные', text: 'правила' } } },
+  analyze: {
+    target: { key: 'FD-1', fields: { summary: 'Починить', status: { name: 'Open' }, description: 'текст' } },
+    pre: { projectDir: '/tmp/p', comments: [], url: 'https://j.invalid/browse/FD-1' },
+  },
 };
 
 test('registry: у промпта действия есть шаблон, и он объявляет ровно те переменные, что даёт context', () => {
@@ -89,13 +95,13 @@ test('registry: у промпта действия есть шаблон, и о�
     assert.ok(Array.isArray(tpl.meta.vars), `vars во front-matter у ${c.action.prompt}`);
     assert.deepEqual(checkTemplates().filter((p) => p.name === c.action.prompt && p.level === 'error'), []);
 
-    const pre = STUB_PRE[c.name];
-    assert.ok(pre, `нет заглушки pre для действия ${c.name} — добавь её в STUB_PRE`);
+    const stub = STUBS[c.name];
+    assert.ok(stub, `нет заглушки для действия ${c.name} — добавь её в STUBS`);
     const vars = c.action.context({
       ctx: { repo: 'r/repo' },
       opts: { agent: 'claude' },
-      target: { iid: 7, title: 'MR', web_url: 'https://example.invalid/7', source_branch: 's', target_branch: 't' },
-      pre,
+      target: stub.target ?? MR,
+      pre: stub.pre,
       ws: { dir: '/tmp/wt', deps: { available: true } },
       run: { id: 'run-1', dir: '/tmp/run-1' },
       say: () => {},
