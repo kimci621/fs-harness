@@ -22,6 +22,8 @@ export const DEFAULTS = {
     root: '~/.local/state/fs-harness/worktrees',
     deps: { strategy: 'clone' },
   },
+  // Jira только на чтение. Токен не здесь, а в keychain (fs-harness/jira).
+  jira: { baseUrl: '', email: '', projectKey: '' },
   judge: {
     profiles: {
       'opus-cli': { provider: 'cli', bin: 'claude', model: 'opus', effort: 'xhigh' },
@@ -43,6 +45,7 @@ export function loadConfig(env = process.env) {
     agentArgs: { ...DEFAULTS.agentArgs },
     workspace: { ...DEFAULTS.workspace, deps: { ...DEFAULTS.workspace.deps } },
     judge: { profiles: { ...DEFAULTS.judge.profiles }, roles: { ...DEFAULTS.judge.roles } },
+    jira: { ...DEFAULTS.jira },
   };
   if (existsSync(CONFIG_PATH)) {
     try {
@@ -61,6 +64,7 @@ export function loadConfig(env = process.env) {
         profiles: { ...cfg.judge.profiles, ...(user.judge?.profiles || {}) },
         roles: { ...cfg.judge.roles, ...(user.judge?.roles || {}) },
       };
+      cfg.jira = { ...cfg.jira, ...(user.jira || {}) };
     } catch (err) {
       throw new CliError(`Конфиг ${CONFIG_PATH} повреждён (${err.message}). Поправь или удали файл.`);
     }
