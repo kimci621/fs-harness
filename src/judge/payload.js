@@ -17,14 +17,20 @@ export function truncate(text, maxLines) {
 
 const block = (title, body) => (body ? `## ${title}\n\n${body}\n` : '');
 
-export function buildAcceptancePayload({ goal, facts = {}, diff = '', agentText = '', maxDiffLines = 4000, maxAgentLines = 200 }) {
+// Факт может быть и структурой (список ответов агента по тредам) — тогда JSON,
+// иначе судья увидит [object Object].
+const fact = (v) =>
+  Array.isArray(v) ? v.map(fact).join(', ') || '—' : v && typeof v === 'object' ? JSON.stringify(v) : v;
+
+export function buildAcceptancePayload({ goal, facts = {}, extra = '', diff = '', agentText = '', maxDiffLines = 4000, maxAgentLines = 200 }) {
   const factLines = Object.entries(facts)
-    .map(([k, v]) => `- ${k}: ${Array.isArray(v) ? v.join(', ') || '—' : v}`)
+    .map(([k, v]) => `- ${k}: ${fact(v)}`)
     .join('\n');
 
   return [
     block('Задача, которую решал агент', goal),
     block('Факты, снятые механически (не словами агента)', factLines),
+    block('Материал действия', extra),
     block('Дифф base..HEAD', diff ? '```diff\n' + truncate(diff, maxDiffLines) + '\n```' : '_пусто_'),
     block('Финальный отчёт агента (его слова, проверять по диффу)', truncate(agentText, maxAgentLines)),
   ]

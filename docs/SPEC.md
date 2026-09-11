@@ -23,19 +23,20 @@ CLI-обёртка над `glab` для повседневной работы с
 | `mrs` | Все открытые MR: iid, title (+Draft), `source→target`, статус head-пайплайна, комментарии (всего / открытых тредов / решённых), конфликт есть/нет |
 | `mr <ветка\|номер>` | Один MR в том же формате. Поиск по части имени ветки (неточное, case-insensitive) среди открытых MR; также принимает `!2547` и `2547` |
 | `conflict <mr\|ветка> [--agent claude\|pi]` | Решить конфликт силами агента (см. ниже) |
+| `threads <mr\|ветка> [--agent claude\|pi]` | Разобрать нерешённые треды ревью силами агента (см. ниже) |
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id |
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени (или id) в последнем MR-пайплайне |
 | `deploy <ветка\|mr> [N]` | build → ждать успеха → запустить `deploy_dev` (или `deploy_dev2…10`) → ждать итога |
 | `config init` / `config show` | Создать/показать `~/.config/gl-helper/config.json` |
 | `help` | Список команд с примерами |
 
-Флаги: `-R/--repo`, `--json` (read-команды), `--agent` (conflict), `-B/--build-job` (deploy, дефолт `build_image`).
+Флаги: `-R/--repo`, `--json` (read-команды), `--agent` (действия), `-B/--build-job` (deploy, дефолт `build_image`).
 
 ## Конфликт: цепочка
 
 1. Резолв MR, `git fetch origin <source> <target>` в `projectDir` из конфига.
 2. `git merge-tree --write-tree --name-only --no-messages origin/<target> origin/<source>`: exit 1 → конфликт, exit 0 → чисто. Первая строка stdout — OID дерева, отбрасывается; остальные строки — конфликтующие файлы. Нет конфликта → сообщить и выйти. Поле `has_conflicts` из GitLab не используется: при `unchecked` оно врёт.
-3. Временный worktree: `$projectDir/.worktrees/gl-helper-<iid>-<ts>` (detached от `origin/<source>`), внутри — ветка `gl-helper/<iid>-<ts>`.
+3. Временный worktree: `~/.local/state/fs-harness/worktrees/<проект>/conflict-<iid>-<ts>` (рут вне репозитория проекта), внутри — ветка `fs-harness/conflict-<iid>-<ts>`. `node_modules` переносятся клоном (`cp -Rc`); если lock-файл ветки разошёлся с чекаутом, `deps_available: false` и промпт честно говорит агенту, что линта и тестов у него нет.
 4. Агент (claude или pi, headless `-p`) работает **только внутри worktree**, cwd = worktree. Промпт (утверждён):
    - данные MR: номер, URL, ветки `source→target`, worktree уже готов, список конфликтующих файлов;
    - шаги: `git merge origin/<target>`, решить конфликты вручную, сохраняя функциональность обеих веток (приоритет равный), запрещены «взять всё ours/theirs» и force-push;
@@ -48,6 +49,17 @@ CLI-обёртка над `glab` для повседневной работы с
 7. `publish`: `git push origin HEAD:<source>` с read-back проверкой, что origin встал на `head_sha`.
 8. Пайплайн build жмёт **fsh**, не агент: если head-пайплайн MR устарел (sha ≠ нового HEAD) — создать новый MR-пайплайн, найти build-джобу, запустить, дождаться, показать статус.
 9. **Гарантированная очистка** (finally): `git worktree remove --force` + `git worktree prune` + удаление временной ветки.
+
+## Треды: цепочка
+
+1. Резолв MR, `git fetch origin <source>`, `GET /merge_requests/<iid>/discussions`.
+2. Открытым считается тред, где есть хоть одна заметка `resolvable && !resolved && !system`. Открытых нет → `skipped`, агент не запускается.
+3. Временный worktree, как у `conflict` (`threads-<iid>-<ts>`).
+4. Агент получает тексты тредов с файлом и строкой, правит код там, где ревьюер прав, и пишет тексты ответов в `replies.json` рана: массив `{id, reply, resolve}`. Push, `glab` и отправка ответов агенту запрещены.
+5. `verify`: коммиты впереди `origin/<source>` (ноль — норма, тред мог требовать только ответа), `head_sha`, дифф, разбор `replies.json`. Файла нет или он не по формату → `agent_failed`. Треды без ответа и ответы на неизвестные id идут в факты судье.
+6. Судья (роль `acceptance`) видит цель, факты, тексты тредов и подготовленные ответы. **Ответы уходят только при `approve`.**
+7. `publish`: если были коммиты — `push` с read-back; затем по каждому треду `POST .../discussions/<id>/notes` и, если агент пометил `resolve`, `PUT .../discussions/<id>?resolved=true`. Обе операции с read-back проверкой. Ответы на неизвестные треды пропускаются.
+8. Build-пайплайн `threads` не жмёт: это дело `conflict` и `deploy`.
 
 ## Архитектура
 

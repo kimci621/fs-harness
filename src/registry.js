@@ -5,6 +5,7 @@ import { cmdJobs } from './commands/jobs.js';
 import { cmdRun } from './commands/run.js';
 import { cmdDeploy } from './commands/deploy.js';
 import { conflictAction } from './actions/conflict.js';
+import { threadsAction } from './actions/threads.js';
 import { runActionCLI } from './engine.js';
 import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
@@ -153,6 +154,7 @@ export const COMMANDS = [
     },
   },
   fromAction(conflictAction),
+  fromAction(threadsAction),
   {
     name: 'commit',
     usage: 'commit [--agent]',

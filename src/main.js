@@ -8,17 +8,17 @@ const FLAGS_USAGE = `Флаги:
   -R, --repo <repo>       Репозиторий (дефолт из конфига / GL_HELPER_REPO)
   --host <hostname>       GitLab-хост (дефолт из конфига)
   --json                  Вывод в JSON (mrs, mr, jobs, run, deploy) — удобно агентам
-  --agent claude|pi       Агент для conflict/commit (дефолт из конфига)
-  --project-dir <dir>     Каталог проекта для worktree (conflict) / коммита (commit)
+  --agent claude|pi       Агент для действий (conflict, threads) и commit
+  --project-dir <dir>     Каталог проекта для действий (worktree) и commit
   -B, --build-job <имя>   Имя build-джобы (deploy, conflict; дефолт build_image)
   -w, --watch             В run: ждать завершения джобы
-  -y, --yes               В conflict/commit: не спрашивать подтверждение
-  --keep-worktree         В conflict: не удалять временный worktree
+  -y, --yes               В действиях и commit: не спрашивать подтверждение
+  --keep-worktree         В действиях: не удалять временный worktree
   --rebuild               В deploy: перезапустить build и deploy, даже если они уже success
-  --dry-run               План без запусков (run, deploy, conflict, commit)
-  --no-judge              В conflict: пушить без приёмки судьёй
-  --judge <профиль>       В conflict: разовая подмена профиля судьи
-  --judge-only <runId>    В conflict: прогнать судью по сохранённому рану
+  --dry-run               План без запусков (run, deploy, действия, commit)
+  --no-judge              В действиях: пушить без приёмки судьёй
+  --judge <профиль>       В действиях: разовая подмена профиля судьи
+  --judge-only <runId>    В действиях: прогнать судью по сохранённому рану
   --for <mr|ветка>        В prompts show: отрендерить промпт на реальных данных MR
   --resolved / --open     В mr-comments: только решённые / нерешённые треды
 
