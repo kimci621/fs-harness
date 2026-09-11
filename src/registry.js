@@ -164,6 +164,10 @@ export const COMMANDS = [
         keepWorktree: opts.keepWorktree,
         dryRun: opts.dryRun,
         agentArgs: ctx.agentArgs(agent),
+        cfg: ctx.cfg,
+        noJudge: opts.noJudge,
+        judgeProfile: opts.judgeProfile,
+        judgeOnly: opts.judgeOnly,
       });
     }),
     mcp: {
@@ -181,6 +185,7 @@ export const COMMANDS = [
         return cmdConflict(ctx.g, ctx.repo, [a.query], {
           json: true, asObject: true, quiet: true, yes: true,
           agent, projectDir: ctx.cfg.projectDir, agentArgs: ctx.agentArgs(agent), onTick: ctx.notify,
+          cfg: ctx.cfg,
         });
       }),
     },

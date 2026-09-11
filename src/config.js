@@ -16,10 +16,29 @@ export const DEFAULTS = {
     claude: ['--dangerously-skip-permissions'],
     pi: [],
   },
+  // Судья сменный, и профиль выбирается на каждую роль отдельно: роли различаются
+  // по цене на порядки. Список у роли — фолбэк: первый ответивший выигрывает.
+  judge: {
+    profiles: {
+      'opus-cli': { provider: 'cli', bin: 'claude', model: 'opus', effort: 'xhigh' },
+      'haiku-cli': { provider: 'cli', bin: 'claude', model: 'haiku', effort: 'medium' },
+      local: { provider: 'openai', baseUrl: 'http://127.0.0.1:1234/v1', model: 'local-model' },
+    },
+    roles: {
+      acceptance: ['opus-cli'],
+      'mr-review': ['opus-cli'],
+      'model-pick': ['local', 'opus-cli'],
+      'event-triage': ['local', 'opus-cli'],
+    },
+  },
 };
 
 export function loadConfig(env = process.env) {
-  const cfg = { ...DEFAULTS, agentArgs: { ...DEFAULTS.agentArgs } };
+  const cfg = {
+    ...DEFAULTS,
+    agentArgs: { ...DEFAULTS.agentArgs },
+    judge: { profiles: { ...DEFAULTS.judge.profiles }, roles: { ...DEFAULTS.judge.roles } },
+  };
   if (existsSync(CONFIG_PATH)) {
     try {
       const user = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
@@ -28,6 +47,10 @@ export function loadConfig(env = process.env) {
       cfg.projectDir = user.projectDir || cfg.projectDir;
       cfg.agent = user.agent || cfg.agent;
       cfg.agentArgs = { ...cfg.agentArgs, ...(user.agentArgs || {}) };
+      cfg.judge = {
+        profiles: { ...cfg.judge.profiles, ...(user.judge?.profiles || {}) },
+        roles: { ...cfg.judge.roles, ...(user.judge?.roles || {}) },
+      };
     } catch (err) {
       throw new CliError(`Конфиг ${CONFIG_PATH} повреждён (${err.message}). Поправь или удали файл.`);
     }

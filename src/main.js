@@ -16,6 +16,9 @@ const FLAGS_USAGE = `Флаги:
   --keep-worktree         В conflict: не удалять временный worktree
   --rebuild               В deploy: перезапустить build и deploy, даже если они уже success
   --dry-run               План без запусков (run, deploy, conflict, commit)
+  --no-judge              В conflict: пушить без приёмки судьёй
+  --judge <профиль>       В conflict: разовая подмена профиля судьи
+  --judge-only <runId>    В conflict: прогнать судью по сохранённому рану
   --resolved / --open     В mr-comments: только решённые / нерешённые треды
 
 Режим агента (env):
@@ -95,6 +98,7 @@ function parseArgs(argv) {
     json: false, repo: null, host: null, agent: null, projectDir: null, buildJob: null,
     watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
+    noJudge: false, judgeProfile: null, judgeOnly: null,
   };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -110,6 +114,9 @@ function parseArgs(argv) {
     else if (a === '--keep-worktree') opts.keepWorktree = true;
     else if (a === '--rebuild') opts.rebuild = true;
     else if (a === '--dry-run') opts.dryRun = true;
+    else if (a === '--no-judge') opts.noJudge = true;
+    else if (a === '--judge') opts.judgeProfile = argv[++i];
+    else if (a === '--judge-only') opts.judgeOnly = argv[++i];
     else if (a === '--resolved' || a === '-resolved') opts.resolved = true;
     else if (a === '--open' || a === '-open') opts.open = true;
     else if (a === '-h' || a === '--help') opts.help = true;
