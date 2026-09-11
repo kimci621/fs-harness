@@ -48,6 +48,32 @@ export function App({ ctx, opts }) {
     }
   }
 
+  // Смена статуса задачи — единственная запись в Jira: сначала список переходов, потом выбор.
+  async function openTransitions() {
+    const item = selected(state);
+    if (!item?.key) return;
+    try {
+      const { transitions = [] } = (await ctx.jira().transitions(item.key)) ?? {};
+      if (!transitions.length) return void bufferRef.current.push(`${item.key} ▸ доступных переходов нет`);
+      dispatch({ type: 'modalOpen', title: `${item.key}: куда переводим?`, issue: item.key, items: transitions.map((t) => ({ id: t.id, name: t.name, to: t.to?.name ?? t.name })) });
+    } catch (err) {
+      dispatch({ type: 'error', tab: 'issues', message: err.message });
+    }
+  }
+
+  async function applyTransition() {
+    const { issue, items, cursor } = state.modal;
+    const t = items[cursor];
+    dispatch({ type: 'modalClose' });
+    try {
+      await ctx.jira().transition(issue, t.id);
+      bufferRef.current.push(`${issue} ▸ статус → ${t.to}`);
+      load('issues');
+    } catch (err) {
+      bufferRef.current.push(`${issue} ▸ ❌ ${err.message}`);
+    }
+  }
+
   function launch(actionName) {
     const item = selected(state);
     if (!item) return;
@@ -83,7 +109,7 @@ export function App({ ctx, opts }) {
       // но человек должен знать, что уходит от работающего агента.
       if (activeRuns(state).length && !quitArmedRef.current) {
         quitArmedRef.current = true;
-        bufferRef.current.push(`⚠ в работе ранов: ${activeRuns(state).length}. x прервёт, q ещё раз — выйти и оставить их`);
+        bufferRef.current.push(`⚠ в работе запусков: ${activeRuns(state).length}. x прервёт, q ещё раз — выйти и оставить их`);
         return;
       }
       return exit();
@@ -93,6 +119,8 @@ export function App({ ctx, opts }) {
       return;
     }
     if (intent.type === 'launch') return launch(intent.action);
+    if (intent.type === 'transition') return void openTransitions();
+    if (intent.type === 'modalApply') return void applyTransition();
     if (intent.type === 'open') {
       const url = selected(state)?.web_url;
       if (url) execFile('open', [url], () => {});
@@ -111,13 +139,13 @@ export function App({ ctx, opts }) {
     <${Box} flexDirection="column" width=${width}>
       <${Box} justifyContent="space-between">
         <${Text} bold color="cyan">fs-harness · ${state.project || ctx.repo}<//>
-        <${Text} dimColor>раны: ${running.length}${running.length ? ' ' : ''}${running.length ? html`<${Spinner} type="dots" />` : ''} · $${totalCost(state).toFixed(2)}<//>
+        <${Text} dimColor>запусков: ${running.length}${running.length ? ' ' : ''}${running.length ? html`<${Spinner} type="dots" />` : ''} · $${totalCost(state).toFixed(2)}<//>
       <//>
       <${Box}>
         ${TABS.map((t, i) => html`<${Text} key=${t.key} color=${state.tab === t.key ? 'cyan' : undefined} inverse=${state.tab === t.key}> [${i + 1}] ${t.title} <//>`)}
         <${Text} dimColor>  ${TABS.find((t) => t.key === state.tab).hint} · ? помощь<//>
       <//>
-      ${state.help ? html`<${Help} />` : html`<${Body} state=${state} item=${item} width=${width} now=${now} />`}
+      ${state.help ? html`<${Help} />` : state.modal ? html`<${Modal} modal=${state.modal} />` : html`<${Body} state=${state} item=${item} width=${width} now=${now} />`}
       <${Log} lines=${state.log} />
       <${Text} dimColor>q выход · x прервать · R обновить · o открыть в браузере${state.error ? ` · ❌ ${state.error}` : ''}<//>
     <//>
@@ -129,8 +157,16 @@ const Help = () =>
     <${Text} bold>Клавиши<//>
     <${Text}>1/2/3, Tab — вкладки · ↑↓ или j/k — курсор · PgUp/PgDn — на 10<//>
     <${Text}>a — конфликт · t — треды · r — ревью (вкладка MR) · n — разбор задачи (вкладка Задачи)<//>
-    <${Text}>x — прервать все раны · R — перечитать список · o — открыть в браузере · q — выход<//>
-    <${Text} dimColor>Раны переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
+    <${Text}>s — сменить статус задачи (вкладка Задачи, единственная запись в Jira)<//>
+    <${Text}>x — прервать все запуски · R — перечитать список · o — открыть в браузере · q — выход<//>
+    <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
+  <//>`;
+
+const Modal = ({ modal }) =>
+  html`<${Box} flexDirection="column" height=${12} borderStyle="round" borderColor="cyan" paddingX=${1}>
+    <${Text} bold>${modal.title}<//>
+    ${modal.items.map((t, i) => html`<${Text} key=${t.id} inverse=${i === modal.cursor}>${t.name}${t.to !== t.name ? ` → ${t.to}` : ''}<//>`)}
+    <${Text} dimColor>Enter — перевести · Esc — отмена<//>
   <//>`;
 
 function Body({ state, item, width, now }) {

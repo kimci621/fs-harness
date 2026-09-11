@@ -13,7 +13,7 @@ export const CONFIG_PATH = CONFIG_PATHS[1];
 
 export const configPath = () => CONFIG_PATHS.find(existsSync) ?? CONFIG_PATH;
 
-const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'claude', buildJob: '', targetBranch: '', jira: { baseUrl: '', email: '', projectKey: '' } };
+const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'claude', buildJob: '', targetBranch: '', jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' } };
 
 export const DEFAULTS = {
   version: 2,

@@ -19,7 +19,7 @@ src/ui.js               спиннер, live-таблица, waitJob (опрос
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
 src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, agent-guide, mr-comments, prompts
-src/jira.js             Jira REST только на чтение, fetch инжектируется (тесты)
+src/jira.js             Jira REST: чтение + единственная запись (переход по статусу), fetch инжектируется (тесты)
 src/config.js           конфиг v1/v2, миграция v1 в памяти, выбор активного проекта
 src/secrets.js          ключи: env → keychain (security) → ошибка с командой заведения
 src/notify.js           уведомления в Mattermost: runMessage + POST в incoming webhook, fetch инжектируется

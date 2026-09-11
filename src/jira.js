@@ -2,7 +2,8 @@ import { CliError } from './errors.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Jira REST, только чтение. fetchImpl инжектируется ради тестов без сети.
+// Jira REST: чтение плюс единственная запись — перевод задачи по статусу (fsh jira move).
+// fetchImpl инжектируется ради тестов без сети.
 // Форма та же, что у glab.js: один низкоуровневый api() с ретраями, поверх — методы.
 export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs = 1000 } = {}) {
   if (!baseUrl || !email) {
@@ -43,7 +44,9 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
         await sleep(delay);
         continue;
       }
-      throw new CliError(`Jira ${method} ${path.replace(/\?.*$/, '')} → ${res.status}.`, 1, 'api_failed');
+      // Тело ошибки Jira несёт список обязательных полей — без него 400 не диагностируется.
+      const detail = await errorText(res);
+      throw new CliError(`Jira ${method} ${path.replace(/\?.*$/, '')} → ${res.status}.${detail ? ` ${detail}` : ''}`, 1, 'api_failed');
     }
     throw new CliError(`Jira ${method} ${path} не удался: ${lastErr?.message ?? 'нет ответа'}`, 1, 'api_failed');
   }
@@ -79,7 +82,22 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     comments: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/comment?maxResults=50`),
 
     transitions: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/transitions`),
+
+    // Единственная запись в Jira. Ответ пустой (204), новый статус проверяем чтением.
+    transition: (key, id) =>
+      api(`/rest/api/2/issue/${encodeURIComponent(key)}/transitions`, { method: 'POST', body: { transition: { id: String(id) } }, retries: 1 }),
   };
+}
+
+// Из ответа Jira достаём errorMessages и errors: по ним видно, какого поля не хватило.
+async function errorText(res) {
+  try {
+    const body = await res.json();
+    const fields = Object.entries(body.errors ?? {}).map(([k, v]) => `${k}: ${v}`);
+    return [...(body.errorMessages ?? []), ...fields].join('; ');
+  } catch {
+    return '';
+  }
 }
 
 const backoff = (attempt, unit) => unit * 2 ** (attempt - 1); // 1с, 2с, 4с

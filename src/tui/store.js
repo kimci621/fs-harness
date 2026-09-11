@@ -3,8 +3,8 @@
 
 export const TABS = [
   { key: 'mr', title: 'MR', hint: 'a конфликт · t треды · r ревью' },
-  { key: 'issues', title: 'Задачи', hint: 'n разбор' },
-  { key: 'runs', title: 'Раны', hint: 'R обновить · путь к журналу справа' },
+  { key: 'issues', title: 'Задачи', hint: 'n разбор · s статус' },
+  { key: 'runs', title: 'Запуски', hint: 'R обновить · путь к журналу справа' },
 ];
 
 // Действия по клавишам: одно действие — одна клавиша, как в плане.
@@ -27,6 +27,7 @@ export const initialState = (project = '') => ({
   runs: {}, // id → {id, action, target, phase, done, ok, cost, decision, error}
   log: [],
   help: false,
+  modal: null, // {title, issue, items:[{id,name,to}], cursor} — выбор перехода задачи
 });
 
 const clamp = (i, len) => (len === 0 ? 0 : Math.max(0, Math.min(i, len - 1)));
@@ -56,6 +57,12 @@ export function reduce(state, ev) {
       return { ...state, error: ev.message, loading: { ...state.loading, [ev.tab]: false } };
     case 'help':
       return { ...state, help: !state.help };
+    case 'modalOpen':
+      return { ...state, modal: { title: ev.title, issue: ev.issue, items: ev.items, cursor: 0 } };
+    case 'modalMove':
+      return state.modal ? { ...state, modal: { ...state.modal, cursor: clamp(state.modal.cursor + ev.by, state.modal.items.length) } } : state;
+    case 'modalClose':
+      return { ...state, modal: null };
     case 'runStarted':
       return { ...state, runs: { ...state.runs, [ev.id]: { id: ev.id, action: ev.action, target: ev.target, phase: 'старт', cost: 0, done: false } } };
     case 'runEvent':
@@ -98,6 +105,14 @@ export const totalCost = (state) => Object.values(state.runs).reduce((s, r) => s
 
 // Клавиша → намерение. Чистая: в тестах не нужен ни ink, ни терминал.
 export function keyIntent(input, key, state) {
+  // Пока открыт выбор перехода, клавиши действий молчат: случайный запуск тут дороже удобства.
+  if (state.modal) {
+    if (key.escape || input === 'q') return { type: 'modalClose' };
+    if (key.upArrow || input === 'k') return { type: 'modalMove', by: -1 };
+    if (key.downArrow || input === 'j') return { type: 'modalMove', by: 1 };
+    if (key.return) return { type: 'modalApply' };
+    return null;
+  }
   if (key.escape && state.help) return { type: 'help' };
   if (input === '?') return { type: 'help' };
   if (input === 'q') return { type: 'quit' };
@@ -110,6 +125,7 @@ export function keyIntent(input, key, state) {
   if (key.pageUp) return { type: 'move', by: -10 };
   if (key.pageDown) return { type: 'move', by: 10 };
   if (input === 'o') return { type: 'open' };
+  if (input === 's' && state.tab === 'issues') return { type: 'transition' };
   if (input === 'R') return { type: 'reload' };
   const launch = LAUNCH[input];
   if (launch && launch.tab === state.tab) return { type: 'launch', action: launch.action };

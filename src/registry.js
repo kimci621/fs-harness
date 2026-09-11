@@ -168,9 +168,9 @@ export const COMMANDS = [
   fromAction(analyzeAction),
   {
     name: 'jira',
-    usage: 'jira [mine|<KEY>]',
-    description: 'Задачи Jira: свои открытые или одна задача с комментариями',
-    example: 'fsh jira FD-7647',
+    usage: 'jira [mine|<KEY>|move <KEY> <статус>]',
+    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса',
+    example: 'fsh jira mine --sprint current --component Frontend',
     run: (ctx, args, opts) => cmdJira(ctx, args, opts),
     mcp: {
       description: 'Прочитать Jira: без аргументов или с mine — открытые задачи на текущем пользователе; с ключом (FD-7647) — задача целиком с описанием и комментариями. Только чтение.',

@@ -79,3 +79,23 @@ test('клавиши: запуск действия только на своей
   assert.deepEqual(keyIntent('j', {}, s), { type: 'move', by: 1 });
   assert.equal(keyIntent('ы', {}, s), null);
 });
+
+test('переходы задачи: s только на вкладке задач, в модалке остальные клавиши молчат', () => {
+  const s = withItems();
+  assert.equal(keyIntent('s', {}, s), null); // на вкладке MR статуса нет
+  const onIssues = reduce(s, { type: 'tab', tab: 'issues' });
+  assert.deepEqual(keyIntent('s', {}, onIssues), { type: 'transition' });
+
+  const items = [{ id: '11', name: 'В тестирование', to: 'Тестирование' }, { id: '21', name: 'В ревью', to: 'Ревью' }];
+  const modal = reduce(onIssues, { type: 'modalOpen', title: 'FD-1', issue: 'FD-1', items });
+  assert.equal(modal.modal.cursor, 0);
+  assert.deepEqual(keyIntent('j', {}, modal), { type: 'modalMove', by: 1 });
+  assert.deepEqual(keyIntent('', { return: true }, modal), { type: 'modalApply' });
+  assert.deepEqual(keyIntent('', { escape: true }, modal), { type: 'modalClose' });
+  assert.equal(keyIntent('a', {}, modal), null); // запуск действия из модалки не срабатывает
+  assert.equal(keyIntent('x', {}, modal), null);
+
+  const moved = reduce(reduce(modal, { type: 'modalMove', by: 1 }), { type: 'modalMove', by: 1 });
+  assert.equal(moved.modal.cursor, 1); // дальше списка курсор не уезжает
+  assert.equal(reduce(moved, { type: 'modalClose' }).modal, null);
+});

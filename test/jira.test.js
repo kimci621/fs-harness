@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createJira, ISSUE_KEY } from '../src/jira.js';
 import { CliError } from '../src/errors.js';
-import { cmdJira, MY_ISSUES_JQL } from '../src/commands/jira.js';
+import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition } from '../src/commands/jira.js';
 
 // Подменённый fetch: отдаёт заготовленные ответы по порядку и пишет, что спрашивали.
 function fakeFetch(responses) {
@@ -109,4 +109,65 @@ test('jira mine: JQL и колонки таблицы, задача — с ко�
   assert.deepEqual(one.comments.map((c) => c.author), ['Ревьюер']);
 
   await assert.rejects(() => cmdJira(ctx, ['не-ключ'], { asObject: true }), (e) => e.code === 'usage');
+});
+
+// --- фильтры и смена статуса -------------------------------------------------
+
+test('buildJql: дефолт, фильтры, чужой JQL', () => {
+  assert.match(buildJql({}), /^assignee = currentUser\(\) AND statusCategory != Done ORDER BY updated DESC$/);
+  assert.equal(buildJql({ assignee: 'any' }), 'statusCategory != Done ORDER BY updated DESC');
+  assert.equal(
+    buildJql({ assignee: 'a@b.c', sprint: 'current', component: 'Frontend', status: 'В работе' }),
+    'assignee = "a@b.c" AND sprint in openSprints() AND "Компонент" = "Frontend" AND status = "В работе" ORDER BY updated DESC',
+  );
+  assert.match(buildJql({ sprint: 'Спринт 7' }), /sprint = "Спринт 7"/);
+  assert.match(buildJql({ component: 'QA', componentField: 'Чек-лист QA' }), /"Чек-лист QA" = "QA"/);
+  assert.equal(buildJql({ jql: 'project = FD' }), 'project = FD');
+  assert.match(buildJql({ assignee: 'кавычка"внутри' }), /assignee = "кавычка\\"внутри"/);
+});
+
+test('pickTransition: точное имя, вхождение, неизвестное — ошибка со списком', () => {
+  const ts = [
+    { id: '11', name: 'В тестирование', to: { name: 'Тестирование' } },
+    { id: '21', name: 'Готово к релизу', to: { name: 'Готово к релизу' } },
+  ];
+  assert.equal(pickTransition(ts, 'в тестирование').id, '11');
+  assert.equal(pickTransition(ts, 'Тестирование').id, '11'); // по целевому статусу
+  assert.equal(pickTransition(ts, 'релиз').id, '21');
+  assert.throws(() => pickTransition(ts, 'в'), (e) => e.code === 'usage' && /подходит нескольким/.test(e.message));
+  assert.throws(() => pickTransition(ts, 'Ревью'), (e) => /Доступны: В тестирование, Готово к релизу/.test(e.message));
+});
+
+// Поддельная Jira: статус живёт в переменной, переход его меняет.
+function fakeJira({ moves = true } = {}) {
+  let status = 'К выполнению';
+  return {
+    transitions: async () => ({ transitions: [{ id: '11', name: 'В тестирование', to: { name: 'Тестирование' } }] }),
+    issue: async () => ({ fields: { status: { name: status } } }),
+    transition: async () => { if (moves) status = 'Тестирование'; return null; },
+  };
+}
+
+const ctxWith = (j) => ({ jira: () => j, cfg: { jira: { baseUrl: 'https://j.example' } } });
+
+test('jira move: перевод по имени, read-back подтверждает новый статус', async () => {
+  const res = await cmdJira(ctxWith(fakeJira()), ['move', 'FD-1', 'в', 'тестирование'], { asObject: true, yes: true });
+  assert.deepEqual([res.from, res.to, res.transition], ['К выполнению', 'Тестирование', 'В тестирование']);
+  assert.equal(res.url, 'https://j.example/browse/FD-1');
+});
+
+test('jira move: --dry-run ничего не меняет, молчаливый отказ Jira — ошибка', async () => {
+  const dry = await cmdJira(ctxWith(fakeJira()), ['move', 'FD-1', 'тестирование'], { asObject: true, dryRun: true });
+  assert.equal(dry.dry_run, true);
+  assert.equal(dry.to, 'Тестирование');
+
+  await assert.rejects(
+    () => cmdJira(ctxWith(fakeJira({ moves: false })), ['move', 'FD-1', 'тестирование'], { asObject: true, yes: true }),
+    (e) => e.code === 'api_failed' && /остался/.test(e.message),
+  );
+});
+
+test('jira move: без ключа или без статуса — подсказка по использованию', async () => {
+  await assert.rejects(() => cmdJira(ctxWith(fakeJira()), ['move', 'FD-1'], { asObject: true, yes: true }), (e) => e.code === 'usage');
+  await assert.rejects(() => cmdJira(ctxWith(fakeJira()), ['move', 'мусор', 'x'], { asObject: true, yes: true }), (e) => e.code === 'usage');
 });
