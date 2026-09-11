@@ -109,12 +109,12 @@ Claude покрыт адаптером `cli`, второй путь к той ж
 роль-промпт вторым блоком), forced tool use как структурированный вывод, `rules_for_diff` (доменные
 правила по путям), обвязка прокси.
 
-**Имя бинаря `gl-helper` сохраняется бессрочно.** `name` пакета в фазе 0 меняется на `fs-harness`,
-но в `bin` остаются **две** записи: новая `fsh` и старая `gl-helper`. На старую завязаны симлинк
-`~/.local/bin/gl-helper`, регистрация MCP в `~/.claude.json` (project-scope fitstars-frontend,
-`command: "gl-helper"`, `args: ["mcp"]` - проверено) и permissions `mcp__gl-helper__*` в
-`settings.local.json` проекта. Плана снимать вторую запись нет: она стоит одну строку, а её удаление
-стоит правки трёх чужих конфигов.
+**Имя бинаря `gl-helper` снято целиком (решение владельца, фаза 0).** Первоначально `bin` должен был
+нести две записи, `fsh` и `gl-helper`, потому что на старое имя были завязаны симлинк
+`~/.local/bin/gl-helper`, регистрация MCP в `~/.claude.json` (project-scope fitstars-frontend) и
+permissions `mcp__gl-helper__*` в `settings.local.json` проекта. Все три удалены в фазе 0, вместе с
+упоминаниями в правилах Claude Code и в памяти агентов fitstars-frontend. Держать вторую запись стало
+не за что: в `bin` одна `fsh`, весь функционал растёт здесь.
 
 ---
 
@@ -749,35 +749,42 @@ mv ~/Projects/gl-helper ~/Projects/FS-Harness        # дерево чистое
 
 Делает это человек, а не агент: перенос каталога, в котором агент стоит, выдёргивает у него cwd.
 
-**Remote.** `git remote rename origin upstream` - чужой `kimci621/gl-helper` остаётся видимым.
-Свой `origin` заводится отдельно и вручную; до этого ветка `main` живёт локально, пушей нет.
+**Remote.** `origin` к началу фазы уже переведён владельцем на свой репозиторий, переименовывать
+нечего и `upstream` не заводится. Ветка `main` создаётся локально, пушей из фазы нет.
 
-**Переименование пакета и симлинк - самый опасный шаг фазы.** Симлинк в PATH идёт **через
-`npm link`**, а не напрямую: `~/.local/bin/gl-helper → ../lib/node_modules/gl-helper/bin/gl-helper.js`.
-Смена `name` на `fs-harness` обрывает цепочку: `~/.local/lib/node_modules/gl-helper` повисает,
-`gl-helper` в PATH умирает, а вместе с ним MCP-сервер проекта fitstars-frontend (`~/.claude.json`,
-project-scope, `command: "gl-helper"`, `args: ["mcp"]`). Поэтому порядок обязателен:
+**Старый `gl-helper` сносится целиком, обратной совместимости нет.** Изначально фаза берегла старое
+имя ради MCP-сервера fitstars-frontend; решением владельца MCP и все следы имени удалены, беречь
+нечего. Порядок:
 
 ```
-npm rm -g gl-helper                  # снять старую регистрацию ДО переименования
+npm_config_prefix="$HOME/.local" npm rm -g gl-helper   # снять старый линк
 # правка package.json
-npm link                             # зарегистрировать заново, уже как fs-harness
-command -v gl-helper && gl-helper doctor && gl-helper mrs --json | head -5
+npm_config_prefix="$HOME/.local" npm link
+command -v fsh && fsh doctor && fsh mrs --json | head -5
 ```
 
 Последняя строка - критерий, а не формальность: не сошлась, фаза не закрыта.
 
-`package.json`: `name` становится `fs-harness`, в `bin` **две записи** - новая `fsh` и старая
-`gl-helper`. Старая нужна не из сентиментальности: на неё завязаны та самая регистрация MCP и
-permissions `mcp__gl-helper__mr` в `settings.local.json` проекта. Пока обе записи живы, миграции
-нет вообще. `engines.node` поднимается с `>=20` до `>=22`: фактически всё гоняется на v26.2.0, а
-`ink` и `openai` собираются под современный рантайм - незачем обещать поддержку, которую никто
-не проверяет.
+**Префикс задаётся через `npm_config_prefix`, а не флагом `--prefix`.** Линк живёт в `~/.local`, а
+`npm config get prefix` показывает nvm'овский `~/.nvm/versions/node/<v>`: в nvm-префиксе бинарь
+привязан к версии ноды и исчезнет при её смене. Флаг `--prefix` в npm 7+ двигает ещё и localPrefix,
+и `npm link` полезет искать пакет не в текущем каталоге; env-переменная двигает только глобальный.
+
+`package.json`: `name` становится `fs-harness`, в `bin` одна запись `fsh`. `engines.node` поднимается
+с `>=20` до `>=22`: фактически всё гоняется на v26.2.0, а `ink` и `openai` собираются под современный
+рантайм - незачем обещать поддержку, которую никто не проверяет.
+
+**Переименование внутри кода - только то, что видит человек** (help, usage, примеры, подсказки в
+ошибках, `serverInfo.name` у MCP). Три вещи с состоянием остаются на старом имени намеренно:
+`~/.config/gl-helper/config.json` до фазы 5, где миграция конфига и так пишется (см. § H), префикс
+worktree `gl-helper/<iid>-<ts>` до фазы 3, где появляется `workspace.js`, и переменные `GL_HELPER_*`
+заодно с конфигом.
 
 **`.gitignore` заводится первым коммитом, до любого `npm i`:** в репозитории его нет вообще, а эта
 же фаза приносит `node_modules` и `package-lock.json`.
 
-**Шапка `README.md` правится здесь же.** Сейчас там «Ноль npm-зависимостей» - с этой фазы неправда.
+**Шапки `README.md` и `AGENTS.md` правятся здесь же.** В обеих «ноль npm-зависимостей» - с этой фазы
+неправда, и `AGENTS.md` читается агентом первым.
 
 **Заводится `CLAUDE.md` репозитория** (сейчас есть только `AGENTS.md` про нынешний gl-helper):
 ссылка на `PLAN.md` как на спецификацию, ограничение «ноль новых внешних программ», правила
@@ -793,9 +800,10 @@ permissions `mcp__gl-helper__mr` в `settings.local.json` проекта. Пок
 `conflict`, заменив `stdio:'inherit'` прокачкой в нынешний логгер. Починить `finally` плюс
 регрессионный тест. Добавить `input` в `defaultRun` в `glab.js`. Заменить чтение `has_conflicts` на
 `git merge-tree`.
-*Готово, когда:* `command -v gl-helper` жив и `gl-helper doctor` проходит (MCP проекта не сломан),
-`npm test` зелёный, `rm -rf node_modules && npm ci && npm test` тоже, `conflict --dry-run` и реальный
-конфликт работают как раньше, в выводе появился список конфликтующих файлов.
+*Готово, когда:* `command -v fsh` жив и `fsh doctor` проходит, `npm test` зелёный,
+`rm -rf node_modules && npm ci && npm test` тоже, `conflict --dry-run` и реальный конфликт работают
+как раньше, в выводе появился список конфликтующих файлов, а имени `gl-helper` не осталось ни в
+PATH, ни в конфигах Claude Code.
 
 **Фаза 1. Судья и гейт на `conflict` (1-2 дня).**
 `src/judge/*` с провайдерами, рубрика `acceptance.md`, `zod`-схема вердикта с ремонтным round-trip,
@@ -878,7 +886,7 @@ permissions `mcp__gl-helper__mr` в `settings.local.json` проекта. Пок
 17. Замену `router-judge.sh` и `answer-judge.py`. `judge/model-pick.md` пишется, но текущие хуки
     живут своей жизнью.
 18. Перенос `mr_review.py` из CI. Локальная кнопка ссылается на ту же рубрику, CI не трогаем.
-19. Синхронизацию с upstream `kimci621/gl-helper`. Форк расходится, обратно не мерджим.
+19. Синхронизацию с апстримом форка. Remote на него не заводится вообще, обратно не мерджим.
 20. Нативный адаптер Anthropic Messages (`@anthropic-ai/sdk`, 7 пакетов, 16 МБ). Единственное, что он
     давал сверх остальных, - forced tool use как жёсткая гарантия схемы, но её же даёт `json_schema`
     со `strict:true` на OpenRouter, а Claude и так доступен через адаптер `cli` по подписке, без
