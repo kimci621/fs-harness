@@ -4,6 +4,7 @@ import { Verdict, extractJson } from '../src/judge/schema.js';
 import { judge, pickProfiles, isApproved, formatVerdict } from '../src/judge/index.js';
 import { readSecret, addCommand } from '../src/secrets.js';
 import { truncate, buildAcceptancePayload } from '../src/judge/payload.js';
+import { buildBody, createOpenAIProvider } from '../src/judge/providers/openai.js';
 import { CliError } from '../src/errors.js';
 
 const GOOD = {
@@ -129,4 +130,37 @@ test('payload: обрезка видна судье, а не тихая', () => 
   assert.match(payload, /- commits_ahead: 1/);
   assert.match(payload, /- leftover_markers: —/);
   assert.match(payload, /```diff/);
+});
+
+test('openai-адаптер: схема по профилю, effort, ответ и цена', async () => {
+  const base = { provider: 'openai', baseUrl: 'http://127.0.0.1:1234/v1', model: 'm1' };
+  const body = buildBody(base, { system: 's', user: 'u', effort: 'high' });
+  assert.equal(body.response_format.type, 'json_schema');
+  assert.equal(body.response_format.json_schema.strict, true);
+  assert.equal(body.reasoning_effort, 'high');
+  assert.deepEqual(body.messages.map((m) => m.role), ['system', 'user']);
+  assert.equal(buildBody({ ...base, schema: 'json_object' }, {}).response_format.type, 'json_object');
+  assert.equal(buildBody({ ...base, schema: 'prompt' }, {}).response_format, undefined);
+
+  // Клиент подменён: проверяем разбор ответа, а не SDK.
+  let seen;
+  const makeClient = () => ({
+    chat: { completions: { stream(b) {
+      seen = b;
+      return { on: (_e, fn) => fn('кусок'), finalChatCompletion: async () => ({
+        id: 'cmpl-1', model: 'm1-real', usage: { cost: 0.03 },
+        choices: [{ message: { content: JSON.stringify(GOOD) } }],
+      }) };
+    } } },
+  });
+  const deltas = [];
+  const p = createOpenAIProvider(base, { makeClient });
+  const res = await p.complete({ system: 's', user: 'u', onDelta: (d) => deltas.push(d) });
+  assert.equal(seen.model, 'm1');
+  assert.deepEqual(deltas, ['кусок']);
+  assert.equal(res.model, 'm1-real');
+  assert.equal(res.cost, 0.03);
+  assert.equal(JSON.parse(res.text).decision, 'approve');
+
+  assert.throws(() => createOpenAIProvider({ provider: 'openai', model: 'm' }), (e) => e.code === 'config_invalid');
 });
