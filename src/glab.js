@@ -6,7 +6,8 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
   const api = async (repo, path, { method = 'GET', retries = method === 'GET' ? 5 : 2, input } = {}) => {
     const args = ['api'];
     if (host) args.push('--hostname', host);
-    args.push(`projects/${encodeURIComponent(repo)}${path}`);
+    // repo=null — путь не проектный (например /user): подставлять projects/ туда нельзя.
+    args.push(repo ? `projects/${encodeURIComponent(repo)}${path}` : path.replace(/^\//, ''));
     if (method !== 'GET') args.push('-X', method);
     // Тело только через stdin: --field ломает многострочный markdown, а на GET
     // уходит в query независимо от --input, что нам как раз не надо.
@@ -41,8 +42,14 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
   return {
     api,
 
-    listOpenMRs: (repo) =>
-      api(repo, '/merge_requests?state=opened&per_page=100&order_by=updated_at&sort=desc') || [],
+    // Фильтры уходят в API как есть: серверная фильтрация дешевле выкачивания сотни MR.
+    listOpenMRs: (repo, params = {}) => {
+      const q = new URLSearchParams({ state: 'opened', per_page: '100', order_by: 'updated_at', sort: 'desc' });
+      for (const [k, v] of Object.entries(params)) if (v !== null && v !== undefined && v !== '') q.set(k, String(v));
+      return api(repo, `/merge_requests?${q}`) || [];
+    },
+
+    me: () => api(null, '/user'),
 
     getMR: (repo, iid) => api(repo, `/merge_requests/${iid}`),
 

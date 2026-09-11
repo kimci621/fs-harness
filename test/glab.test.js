@@ -105,3 +105,19 @@ test('resolveDiscussion: резолв идёт query-параметром, а р
     (e) => e.code === 'api_failed' && /всё ещё открыт/.test(e.message),
   );
 });
+
+test('api: фильтры MR уходят в query, пустые значения не уходят', () => {
+  const { run, calls } = fakeRun([[]]);
+  const g = createGlab(run);
+  g.listOpenMRs('r/repo', { author_username: 'a.latipov', target_branch: 'dev', labels: null, search: '' });
+  const url = calls[0].args[1];
+  assert.match(url, /author_username=a.latipov/);
+  assert.match(url, /target_branch=dev/);
+  assert.doesNotMatch(url, /labels|search/);
+});
+
+test('api: /user идёт мимо projects/', () => {
+  const { run, calls } = fakeRun([{ username: 'a.latipov' }]);
+  createGlab(run).me();
+  assert.equal(calls[0].args[1], 'user');
+});

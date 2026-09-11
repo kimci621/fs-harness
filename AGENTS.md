@@ -55,7 +55,8 @@ test/*.test.js          node --test, мокнутый exec — без сети
 
 | Метод `g` | glab api |
 |---|---|
-| `listOpenMRs(repo)` | `GET /merge_requests?state=opened&per_page=100&order_by=updated_at&sort=desc` |
+| `listOpenMRs(repo, params)` | `GET /merge_requests?state=opened&per_page=100&order_by=updated_at&sort=desc` + фильтры (`author_username`, `reviewer_username`, `target_branch`, `labels`, `search`, `wip`) |
+| `me()` | `GET /user` — единственный непроектный путь, нужен для фильтров со значением `me` |
 | `getMR(repo, iid)` | `GET /merge_requests/{iid}` |
 | `getDiscussions(repo, iid)` | `GET /merge_requests/{iid}/discussions?per_page=100` |
 | `listMRPipelines(repo)` | `GET /pipelines?source=merge_request_event&per_page=100` |
