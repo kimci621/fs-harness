@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { cmdConflict, parseMergeTree } from '../src/commands/conflict.js';
+import { hasMergeTree } from '../src/commands/doctor.js';
 import { CliError } from '../src/errors.js';
 
 let root;
@@ -103,4 +104,12 @@ test('conflict: падение до создания worktree долетает �
       }),
     (err) => err instanceof CliError && err.code === 'git_failed',
   );
+});
+
+test('hasMergeTree: --write-tree есть с 2.38', () => {
+  assert.equal(hasMergeTree('git version 2.50.1 (Apple Git-155)'), true);
+  assert.equal(hasMergeTree('git version 2.38.0'), true);
+  assert.equal(hasMergeTree('git version 2.37.9'), false);
+  assert.equal(hasMergeTree('git version 3.0.0'), true);
+  assert.equal(hasMergeTree(null), false);
 });
