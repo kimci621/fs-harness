@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runAction } from '../src/engine.js';
+import { readEvents } from '../src/agent/journal.js';
 import { CliError } from '../src/errors.js';
 
 let root;
@@ -74,12 +75,19 @@ test('гейт: reject — publish не зовётся, worktree остаётс�
   assert.ok(existsSync(dir), 'worktree снесён вместе с работой агента');
 });
 
-test('гейт: approve — publish зовётся, worktree убран', async () => {
+test('гейт: approve — publish зовётся, worktree убран, события легли в журнал', async () => {
   const published = [];
-  const res = await runAction(spec(published), {}, {}, opts({ makeProvider: fakeJudge('approve') })).result;
+  const run = runAction(spec(published), {}, {}, opts({ makeProvider: fakeJudge('approve') }));
+  const res = await run.result;
   assert.deepEqual(published, ['push']);
   assert.equal(res.decision, 'approve');
   assert.equal(existsSync(res.dir), false);
+
+  // Журнал рана переживает и уборку worktree, и закрытие процесса.
+  const events = readEvents({ dir: path.join(root, 'runs', run.id) });
+  const phases = events.filter((e) => e.t === 'phase' && e.status === 'done').map((e) => e.phase);
+  assert.ok(phases.includes('judge') && phases.includes('publish'), phases.join(', '));
+  assert.equal(events.at(-1).t, 'done');
 });
 
 test('гейт: --no-judge пушит без вердикта', async () => {
