@@ -5,6 +5,7 @@ import { cmdDeploy } from '../src/commands/deploy.js';
 import { commentStats, fmtComments, fmtMRRow, humanize } from '../src/format.js';
 import { CliError } from '../src/errors.js';
 import { formatErrorJSON, makeLogger } from '../src/output.js';
+import { waitJob } from '../src/ui.js';
 
 const JOBS = [
   { id: 1, name: 'build_image', stage: 'build', status: 'manual' },
@@ -149,4 +150,24 @@ test('cmdDeploy: buildJob null → дефолт build_image', async () => {
   // buildJob явно null (так приходит из parseArgs) — должен отработать дефолт.
   await cmdDeploy(g, 'r/repo', ['1', '2'], { buildJob: null, intervalMs: 1 });
   assert.ok(calls.some((c) => c[0] === 'getJobs'));
+});
+
+test('waitJob: терминальный статус возвращает джобу, таймаут — CliError с кодом', async () => {
+  const job = (status) => ({ id: 9, name: 'build_image', stage: 'build', status });
+  const ticks = [];
+  const ok = await waitJob({
+    g: { getJobs: async () => [job('success')], getJob: async () => job('success') },
+    repo: 'r/repo', pipelineId: 1, jobId: 9, intervalMs: 1, quiet: true,
+    label: 'build', onTick: (t) => ticks.push(t),
+  });
+  assert.equal(ok.status, 'success');
+  assert.deepEqual(ticks, ['build: success']);
+
+  await assert.rejects(
+    () => waitJob({
+      g: { getJobs: async () => [job('running')], getJob: async () => job('running') },
+      repo: 'r/repo', pipelineId: 1, jobId: 9, intervalMs: 1, timeoutMs: 0, quiet: true, label: 'build',
+    }),
+    (e) => e instanceof CliError && e.code === 'job_timeout',
+  );
 });

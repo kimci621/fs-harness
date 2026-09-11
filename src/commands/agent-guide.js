@@ -45,9 +45,9 @@ doctor:  {ok, checks:[{name,ok,critical,detail}]}
 
 Ошибки (в stdout при --json, exit code ≠ 0):
   {"ok":false,"error":{"code":"<код>","message":"<текст>"}}
-Коды: usage, api_failed, mr_not_found, mr_ambiguous, job_not_found, job_failed,
+Коды: usage, api_failed, mr_not_found, mr_ambiguous, job_not_found, job_failed, job_timeout,
 build_failed, deploy_failed, agent_failed, not_pushed, no_commit, git_failed,
-config_invalid, canceled, prompt_missing, prompt_var_missing,
+workspace_failed, dirty_checkout, config_invalid, canceled, prompt_missing, prompt_var_missing,
 judge_rejected, judge_schema, judge_failed,
 judge_rubric_missing, secret_missing, run_not_found, run_incomplete.
 

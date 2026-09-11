@@ -175,7 +175,7 @@ export GL_HELPER_YES=1    # не спрашивать подтверждение
 ```
 
 - `--json` на read-командах — данные; на side-effect (`run`, `deploy`, `conflict`, `commit`) — **финальный результат** в stdout, прогресс в stderr.
-- Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `config_invalid`, `canceled`, `prompt_missing`, `prompt_var_missing`, `judge_rejected`, `judge_schema`, `judge_failed`, `judge_rubric_missing`, `secret_missing`, `run_not_found`, `run_incomplete`.
+- Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `job_timeout`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `workspace_failed`, `dirty_checkout`, `config_invalid`, `canceled`, `prompt_missing`, `prompt_var_missing`, `judge_rejected`, `judge_schema`, `judge_failed`, `judge_rubric_missing`, `secret_missing`, `run_not_found`, `run_incomplete`.
 - Полная инструкция для агента встроена в CLI: `fsh agent-guide`.
 - Перед side-effect командами можно смотреть план: `--dry-run`.
 - Для нативного вызова инструментов из AI-клиентов: `fsh mcp` (см. раздел MCP-режим).
