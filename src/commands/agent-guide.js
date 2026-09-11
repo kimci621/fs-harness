@@ -11,7 +11,7 @@ const GUIDE_TEMPLATE = `fsh — CLI для работы с GitLab (MR, пайп�
 
 Флаги: -R/--repo <repo>, --host <host>, --json, --agent claude|pi, --project-dir <dir>,
 -B/--build-job <имя> (дефолт build_image), -w/--watch, -y/--yes, --keep-worktree, --rebuild, --dry-run,
---resolved/--open (mr-comments).
+--resolved/--open (mr-comments), --no-judge / --judge <профиль> / --judge-only <runId> (conflict).
 
 ## Режим агента (env)
 
@@ -35,7 +35,9 @@ mr-comments: {ok, mr, filter, summary:{threads_total,comments_total,threads_open
              discussions:[{id,state,notes:[{id,author,created_at,body,system}]}]}
 run:     {ok, pipeline:{id}, job:{id,name,status,web_url}}        (dry_run: +dry_run, plan)
 deploy:  {ok, mr, pipeline:{id,status,web_url}, build:{...}, deploy:{...}}
-conflict:{ok, mr, head_sha, commits_ahead, pipeline:{...}, build:{...}}
+conflict:{ok, run, mr, head_sha, commits_ahead, conflict_files:[...],
+          judge:{decision,confidence,summary,profile,cost}|{skipped:true},
+          pipeline:{...}, build:{...}}
 commit:  {ok, dir, branch, commit:{hash,message}}
 doctor:  {ok, checks:[{name,ok,critical,detail}]}
 
@@ -43,14 +45,20 @@ doctor:  {ok, checks:[{name,ok,critical,detail}]}
   {"ok":false,"error":{"code":"<код>","message":"<текст>"}}
 Коды: usage, api_failed, mr_not_found, mr_ambiguous, job_not_found, job_failed,
 build_failed, deploy_failed, agent_failed, not_pushed, no_commit, git_failed,
-config_invalid, canceled.
+config_invalid, canceled, judge_rejected, judge_schema, judge_failed,
+judge_rubric_missing, secret_missing, run_not_found, run_incomplete.
 
 ## Важные детали поведения
 
 - deploy сам ждёт build и deploy-джобы (опрос 5с, live-статус в stderr), exit 0 только при success.
 - deploy с --rebuild перезапускает джобы даже при success (retry, новый id) — перезапись слота.
-- conflict: работу с git делает АГЕНТ (claude|pi headless) во временном worktree проекта,
-  fsh проверяет push и сам запускает build. Worktree удаляется автоматически.
+- conflict: работу с git делает АГЕНТ (claude|pi headless) во временном worktree проекта.
+  Пушит не он, а fsh — и только после того, как судья вернул approve. Любой другой вердикт,
+  невалидный ответ судьи или падение его бэкенда = гейт закрыт, код judge_rejected, worktree
+  сохранён, путь к нему в сообщении. Дальше fsh сам запускает build.
+- Каждый прогон conflict пишется в ~/.local/state/fs-harness/runs/<runId>/ (meta.json, prompt.md,
+  agent.txt, diff.patch, verdict.json, result.json). fsh conflict --judge-only <runId> пересудит
+  сохранённый прогон, ничего не запуская заново.
 - commit: агент коммитит по паттерну "<ветка> <тип>(<область>): <описание>"; если в корне
   репозитория есть .llm-commit-pattern — паттерн берётся из него. Push не делается.
 - git-операции конфликта делаются только в ветке MR (source), target не трогается, force-push запрещён.
