@@ -19,6 +19,7 @@ const FLAGS_USAGE = `Флаги:
   --no-judge              В conflict: пушить без приёмки судьёй
   --judge <профиль>       В conflict: разовая подмена профиля судьи
   --judge-only <runId>    В conflict: прогнать судью по сохранённому рану
+  --for <mr|ветка>        В prompts show: отрендерить промпт на реальных данных MR
   --resolved / --open     В mr-comments: только решённые / нерешённые треды
 
 Режим агента (env):
@@ -98,7 +99,7 @@ function parseArgs(argv) {
     json: false, repo: null, host: null, agent: null, projectDir: null, buildJob: null,
     watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
-    noJudge: false, judgeProfile: null, judgeOnly: null,
+    noJudge: false, judgeProfile: null, judgeOnly: null, for: null,
   };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -117,6 +118,7 @@ function parseArgs(argv) {
     else if (a === '--no-judge') opts.noJudge = true;
     else if (a === '--judge') opts.judgeProfile = argv[++i];
     else if (a === '--judge-only') opts.judgeOnly = argv[++i];
+    else if (a === '--for') opts.for = argv[++i];
     else if (a === '--resolved' || a === '-resolved') opts.resolved = true;
     else if (a === '--open' || a === '-open') opts.open = true;
     else if (a === '-h' || a === '--help') opts.help = true;
