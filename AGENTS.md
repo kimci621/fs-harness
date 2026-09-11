@@ -1,15 +1,15 @@
-# AGENTS.md — gl-helper для AI-агентов
+# AGENTS.md — FS-Harness для AI-агентов
 
-Единственный входной файл репозитория. Ты поддерживаешь или расширяешь `gl-helper` — читай этот файл целиком перед правками.
+Устройство того, что в репозитории есть сейчас. Спецификация проекта и план работ — в [PLAN.md](PLAN.md), правила работы — в [CLAUDE.md](CLAUDE.md). Ты поддерживаешь или расширяешь `fsh` — читай этот файл целиком перед правками.
 
 ## Что это
 
-CLI-обёртка над `glab api` для работы с MR и пайплайнами GitLab. Стек: Node.js ESM, **ноль npm-зависимостей**, только системные `node`, `glab`, `git`. Весь вывод данных — JSON через `glab api`, никакого парсинга человекочитаемого вывода glab. Дизайн-решение зафиксировано в `docs/SPEC.md`.
+CLI-обёртка над `glab api` для работы с MR и пайплайнами GitLab. Стек: Node.js ESM, зависимости ставятся через `npm ci`, из внешних программ нужны только `node`, `glab`, `git`. Весь вывод данных — JSON через `glab api`, никакого парсинга человекочитаемого вывода glab. Дизайн-решение зафиксировано в `docs/SPEC.md`.
 
 ## Карта файлов
 
 ```
-bin/gl-helper.js        точка входа: import + main()
+bin/fsh.js        точка входа: import + main()
 src/main.js             разбор argv, dispatch, help, обработка ошибок
 src/glab.js             ВСЕ вызовы glab api. exec инжектируется (тесты)
 src/resolve.js          поиск MR: по номеру или части имени ветки (неточный)
@@ -74,7 +74,7 @@ test/*.test.js          node --test, мокнутый exec — без сети
 - `GL_HELPER_JSON=1` — все команды отдают JSON; side-effect команды — финальный результат `{ok:true, ...}` в stdout, прогресс в stderr. Ошибки: `{ok:false,error:{code,message}}` в stdout, exit ≠ 0.
 - `GL_HELPER_YES=1` — авто-подтверждение (аналог -y).
 - `--dry-run` — план без side-effect'ов для run/deploy/conflict/commit.
-- `gl-helper agent-guide` — самодостаточная инструкция, которую агент запускает первой.
+- `fsh agent-guide` — самодостаточная инструкция, которую агент запускает первой.
 - В командах весь прогресс печатай через `makeLogger(json)` из `output.js`, итог — через `finish(json, obj)`. Ошибки — `CliError(msg, exitCode, code)` с машинным кодом.
 - `asObject: true` в опциях команды — вернуть результат объектом без печати (так команды вызывает MCP-сервер). Никогда не печатай в stdout из MCP-режима: stdout занят протоколом.
 - `quiet: true` и `onTick(text)` в `waitJob` — тихий режим ожидания с прогресс-нотификациями для MCP.
@@ -101,9 +101,9 @@ test/*.test.js          node --test, мокнутый exec — без сети
 
 ```bash
 npm test                          # все тесты
-node bin/gl-helper.js help        # справка актуальна
-node bin/gl-helper.js mrs         # smoke на реальном API (read-only)
-node bin/gl-helper.js mr <ветка> --json
+node bin/fsh.js help        # справка актуальна
+node bin/fsh.js mrs         # smoke на реальном API (read-only)
+node bin/fsh.js mr <ветка> --json
 ```
 
 Деплой и play-джоб реальным API тестируй только по явной просьбе человека — они меняют состояние GitLab.
