@@ -21,6 +21,11 @@ const FLAGS_USAGE = `Флаги:
   --judge <профиль>       В действиях: разовая подмена профиля судьи
   --judge-only <runId>    В действиях: прогнать судью по сохранённому рану
   --for <mr|ветка>        В prompts show: отрендерить промпт на реальных данных MR
+  --assignee me|<email>|any  В jira: чьи задачи (дефолт me)
+  --sprint current|<имя>  В jira: только задачи спринта
+  --component <значение>  В jira: фильтр по checkbox-полю «Компонент»
+  --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые)
+  --jql "<запрос>"        В jira: свой JQL вместо собранного из флагов
   --resolved / --open     В mr-comments: только решённые / нерешённые треды
 
 Режим агента (env):
@@ -110,6 +115,7 @@ function parseArgs(argv) {
     watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
     noJudge: false, judgeProfile: null, judgeOnly: null, for: null,
+    assignee: null, sprint: null, component: null, status: null, jql: null,
   };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -130,6 +136,11 @@ function parseArgs(argv) {
     else if (a === '--judge') opts.judgeProfile = argv[++i];
     else if (a === '--judge-only') opts.judgeOnly = argv[++i];
     else if (a === '--for') opts.for = argv[++i];
+    else if (a === '--assignee') opts.assignee = argv[++i];
+    else if (a === '--sprint') opts.sprint = argv[++i];
+    else if (a === '--component') opts.component = argv[++i];
+    else if (a === '--status') opts.status = argv[++i];
+    else if (a === '--jql') opts.jql = argv[++i];
     else if (a === '--resolved' || a === '-resolved') opts.resolved = true;
     else if (a === '--open' || a === '-open') opts.open = true;
     else if (a === '-h' || a === '--help') opts.help = true;
