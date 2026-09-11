@@ -1,6 +1,7 @@
 import { readSync } from 'node:fs';
 // Анимации и живой вывод. Всё пишется в stderr, чтобы stdout (--json) оставался чистым.
 import { statusIcon, fmtDuration } from './format.js';
+import { CliError } from './errors.js';
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const clearLine = '\r\x1b[K';
@@ -132,7 +133,7 @@ export async function waitJob({ g, repo, pipelineId, jobId, intervalMs = 5000, t
         table.stop();
         spinner.stop(`${label}: превышен таймаут ожидания`);
       }
-      throw new Error(`Джоба ${job.name} не завершилась за ${fmtDuration(timeoutMs)}.`);
+      throw new CliError(`Джоба ${job.name} не завершилась за ${fmtDuration(timeoutMs)}.`, 1, 'job_timeout');
     }
     await sleep(intervalMs);
   }
