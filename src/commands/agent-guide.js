@@ -11,7 +11,8 @@ const GUIDE_TEMPLATE = `fsh — CLI для работы с GitLab (MR, пайп�
 
 Флаги: -R/--repo <repo>, --host <host>, --json, --agent claude|pi, --project-dir <dir>,
 -B/--build-job <имя> (дефолт build_image), -w/--watch, -y/--yes, --keep-worktree, --rebuild, --dry-run,
---resolved/--open (mr-comments), --no-judge / --judge <профиль> / --judge-only <runId> (conflict).
+--resolved/--open (mr-comments), --no-judge / --judge <профиль> / --judge-only <runId> (conflict),
+--for <mr> (prompts show).
 
 ## Режим агента (env)
 
@@ -39,13 +40,15 @@ conflict:{ok, run, mr, head_sha, commits_ahead, conflict_files:[...],
           judge:{decision,confidence,summary,profile,cost}|{skipped:true},
           pipeline:{...}, build:{...}}
 commit:  {ok, dir, branch, commit:{hash,message}}
+prompts: {ok, prompts:[{name,source,overridden,vars}]} | {ok, name, source, body|text}
 doctor:  {ok, checks:[{name,ok,critical,detail}]}
 
 Ошибки (в stdout при --json, exit code ≠ 0):
   {"ok":false,"error":{"code":"<код>","message":"<текст>"}}
 Коды: usage, api_failed, mr_not_found, mr_ambiguous, job_not_found, job_failed,
 build_failed, deploy_failed, agent_failed, not_pushed, no_commit, git_failed,
-config_invalid, canceled, judge_rejected, judge_schema, judge_failed,
+config_invalid, canceled, prompt_missing, prompt_var_missing,
+judge_rejected, judge_schema, judge_failed,
 judge_rubric_missing, secret_missing, run_not_found, run_incomplete.
 
 ## Важные детали поведения
@@ -60,7 +63,11 @@ judge_rubric_missing, secret_missing, run_not_found, run_incomplete.
   agent.txt, diff.patch, verdict.json, result.json). fsh conflict --judge-only <runId> пересудит
   сохранённый прогон, ничего не запуская заново.
 - commit: агент коммитит по паттерну "<ветка> <тип>(<область>): <описание>"; если в корне
-  репозитория есть .llm-commit-pattern — паттерн берётся из него. Push не делается.
+  репозитория есть .llm-commit-pattern — паттерн берётся из него. Файлы добавляются явными
+  путями, git add -A промптом запрещён. Push не делается.
+- Промпты агентов — отдельные .md-файлы, заменяются без правки кода: проектный
+  <projectDir>/.fs-harness/prompts/<имя>.md, личный ~/.config/fs-harness/prompts/<имя>.md,
+  встроенный. Смотреть и проверять: fsh prompts list|show <имя> [--for <mr>]|check.
 - git-операции конфликта делаются только в ветке MR (source), target не трогается, force-push запрещён.
 - Side-effect команды без -y/GL_HELPER_YES спрашивают подтверждение и при неинтерактивном stdin откажутся.`;
 

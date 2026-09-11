@@ -13,7 +13,7 @@ git clone https://github.com/kimci621/fs-harness.git ~/Projects/FS-Harness
 cd ~/Projects/FS-Harness
 npm ci            # зависимости
 npm link          # ставит `fsh` в PATH
-npm test          # 73 теста, сеть не нужна
+npm test          # 80 тестов, сеть не нужна
 ```
 
 `glab` должен быть залогинен на нужный GitLab-хост:
@@ -64,13 +64,14 @@ fsh config show
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
 | `deploy <ветка\|mr> [N]` | build → ждать ✅ → запустить `deploy_dev` (или `deploy_dev2`…`deploy_dev10`) → ждать итог. С `--rebuild` — перезапускает build и deploy даже при success (когда кто-то перезаписал слот своим MR) |
 | `commit` | Агент формирует сообщение коммита по паттерну и коммитит все изменения (без push). Паттерн — встроенный или из `.llm-commit-pattern` проекта |
+| `prompts list\|show <имя>\|check\|edit <имя>` | Промпты действий: где лежат, что внутри, всё ли цело (см. «Промпты») |
 | `doctor` | Самодиагностика: программы (`git` ≥ 2.38, `glab` + авторизация, `claude`), конфиг, доступ к API, git-репозиторий, ключи и бэкенды судьи |
 | `agent-guide` | Полная инструкция для AI-агента: команды, флаги, env, JSON-схемы, коды ошибок |
 | `mcp` | MCP-сервер (stdio): те же команды как типизированные инструменты для AI-клиентов |
 | `config init\|show` | Конфиг |
 | `help` | Справка |
 
-Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/conflict/commit — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (conflict).
+Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/conflict/commit — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (conflict), `--for <mr>` (prompts show).
 
 Примеры:
 
@@ -98,6 +99,24 @@ fsh -R other/repo mrs --json          # JSON для агентов/скрипт�
 7. В любом случае убирает за собой: worktree, временная ветка. `--keep-worktree` отключает очистку.
 
 Перед запуском спрашивает подтверждение (отключить — `-y`). `--dry-run` показывает план и список конфликтующих файлов, ничего не меняя; `fetch` при этом всё равно выполняется — без свежих ref'ов считать нечего.
+
+## Промпты
+
+Промпты агентов лежат отдельными `.md`-файлами и заменяются без правки кода. Порядок, первое попадание:
+
+1. `<projectDir>/.fs-harness/prompts/<имя>.md` — проектный, коммитится вместе с кодом, о котором говорит
+2. `~/.config/fs-harness/prompts/<имя>.md` — личный, поверх всех проектов
+3. встроенный в `src/prompts/<имя>.md`
+
+```bash
+fsh prompts list                                   # что есть и откуда берётся
+fsh prompts show actions/conflict                  # сырой шаблон
+fsh prompts show actions/conflict --for !2547      # отрендеренный на реальном MR
+fsh prompts edit actions/conflict                  # скопировать в проектный оверрайд и открыть $EDITOR
+fsh prompts check                                  # сверить front-matter с телом
+```
+
+Формат — markdown с необязательным front-matter; плейсхолдеры `{{var}}` и блоки `{{#var}}…{{/var}}` / `{{^var}}…{{/var}}` (mustache). HTML не экранируется: в промптах живут код и диффы. Переменная, объявленная в `vars`, но не переданная, — ошибка `prompt_var_missing`, а не тихая пустота.
 
 ## Судья
 
@@ -129,7 +148,7 @@ security add-generic-password -s fs-harness -a openrouter -w '<ключ>'
 
 ## Команда commit
 
-Агент (`claude` или `pi`) смотрит `git status`/`git diff`, формулирует сообщение коммита по паттерну и выполняет `git add -A && git commit`. Push не делает.
+Агент (`claude` или `pi`) смотрит `git status`/`git diff`, формулирует сообщение коммита по паттерну, добавляет изменённые файлы **явными путями** (`git add -A` промптом запрещён: в рабочем дереве может лежать чужой незаконченный код) и коммитит. Push не делает.
 
 **Встроенный паттерн** (файл `src/prompts/commit.md`):
 
@@ -140,7 +159,7 @@ feature/FD-5466 refactor(components): убрал дублирование лог
 
 Префикс — имя ветки ровно как есть (1в1). Тип: feat/fix/refactor/chore/style/perf/test/docs/ci. Область — компонент/модуль/директория. Описание — что сделано.
 
-**Свой паттерн на проект**: положи файл `.llm-commit-pattern` в корень репозитория — его содержимое полностью заменит встроенный промпт (инструкция «изучи изменения и закоммить» добавляется автоматически).
+**Свой паттерн на проект**: положи файл `.llm-commit-pattern` в корень репозитория — его содержимое заменит встроенный паттерн сообщения. Инструкция «изучи изменения и закоммить» остаётся общей. Можно заменить и весь промпт целиком — см. «Промпты».
 
 ```bash
 fsh commit --agent pi      # в текущей директории
@@ -155,7 +174,7 @@ export GL_HELPER_YES=1    # не спрашивать подтверждение
 ```
 
 - `--json` на read-командах — данные; на side-effect (`run`, `deploy`, `conflict`, `commit`) — **финальный результат** в stdout, прогресс в stderr.
-- Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `config_invalid`, `canceled`, `judge_rejected`, `judge_schema`, `judge_failed`, `judge_rubric_missing`, `secret_missing`, `run_not_found`, `run_incomplete`.
+- Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `config_invalid`, `canceled`, `prompt_missing`, `prompt_var_missing`, `judge_rejected`, `judge_schema`, `judge_failed`, `judge_rubric_missing`, `secret_missing`, `run_not_found`, `run_incomplete`.
 - Полная инструкция для агента встроена в CLI: `fsh agent-guide`.
 - Перед side-effect командами можно смотреть план: `--dry-run`.
 - Для нативного вызова инструментов из AI-клиентов: `fsh mcp` (см. раздел MCP-режим).
