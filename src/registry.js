@@ -251,10 +251,10 @@ export const COMMANDS = [
   },
   {
     name: 'config',
-    usage: 'config init|show',
-    description: 'Настроить/показать ~/.config/gl-helper/config.json',
-    example: 'fsh config init',
-    run: (ctx, args) => cmdConfig(args),
+    usage: 'config init|show|migrate',
+    description: 'Настроить/показать конфиг, перевести его на v2 (проекты)',
+    example: 'fsh config show',
+    run: (ctx, args, opts) => cmdConfig(args, opts),
   },
   {
     name: 'mcp',
@@ -305,16 +305,21 @@ export function findCommand(name) {
 
 // Команды, которым нужны repo и host из конфига, оборачиваются этим гардом:
 // без настроенного repo/host — понятная ошибка вместо «projects//merge_requests».
-export function withRepoHost(ctx, fn) {
+export function withProject(ctx, fn) {
   if (!ctx.repo || !ctx.cfg.host) {
+    const known = Object.keys(ctx.cfg.projects ?? {});
     throw new CliError(
-      'Репозиторий или хост GitLab не настроены. Выполни fsh config init и заполни конфиг, или передай -R <repo> --host <host>.',
+      `У проекта${ctx.cfg.activeProject ? ` "${ctx.cfg.activeProject}"` : ''} не заполнены repo или host. ` +
+        `Поправь конфиг (fsh config show)${known.length > 1 ? `, выбери другой проект: -P ${known.join(' | ')}` : ''}, или передай -R <repo> --host <host>.`,
       1,
       'config_invalid',
     );
   }
   return fn();
 }
+
+// Старое имя оставлено алиасом: им пользуются записи реестра и внешние вызовы.
+export const withRepoHost = withProject;
 
 // Инструменты для MCP tools/list.
 export function mcpTools(ctx) {

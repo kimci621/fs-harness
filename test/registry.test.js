@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COMMANDS, ACTIONS, findCommand, mcpTools, createCtx, withRepoHost } from '../src/registry.js';
+import { COMMANDS, ACTIONS, findCommand, mcpTools, createCtx, withProject, withRepoHost } from '../src/registry.js';
 import { ISOLATION_MODES, JUDGE_GATES } from '../src/engine.js';
 import { loadTemplate, checkTemplates } from '../src/prompts.js';
 import { buildAgentGuide } from '../src/commands/agent-guide.js';
@@ -48,13 +48,18 @@ test('registry: findCommand находит и отдаёт null для неиз�
   assert.equal(findCommand('nope'), null);
 });
 
-test('registry: withRepoHost — без repo/host понятная ошибка', () => {
+test('registry: withProject — без repo/host понятная ошибка, с двумя проектами подсказывает -P', () => {
   const ctx = createCtx({ cfg: { repo: '', host: '' }, g: {}, notify: () => {} });
   assert.throws(
-    () => withRepoHost(ctx, () => 'не дойдёт'),
-    (e) => e instanceof CliError && e.code === 'config_invalid' && /config init/.test(e.message),
+    () => withProject(ctx, () => 'не дойдёт'),
+    (e) => e instanceof CliError && e.code === 'config_invalid' && /config show/.test(e.message),
   );
-  assert.equal(withRepoHost(createCtx({ cfg: { repo: 'r/r', host: 'h' }, g: {}, notify: () => {} }), () => 'ok'), 'ok');
+  assert.throws(
+    () => withProject(createCtx({ cfg: { repo: '', host: '', activeProject: 'a', projects: { a: {}, b: {} } }, g: {}, notify: () => {} }), () => 'нет'),
+    (e) => /-P a \| b/.test(e.message) && /"a"/.test(e.message),
+  );
+  assert.equal(withProject(createCtx({ cfg: { repo: 'r/r', host: 'h' }, g: {}, notify: () => {} }), () => 'ok'), 'ok');
+  assert.equal(withRepoHost, withProject); // старое имя живо
 });
 
 test('registry: декларации действий валидны и синтезируют run/mcp', () => {

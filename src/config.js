@@ -1,29 +1,36 @@
 import { homedir } from 'node:os';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CliError } from './errors.js';
 
-export const CONFIG_PATH = path.join(homedir(), '.config', 'gl-helper', 'config.json');
+// Путь конфига не меняется вслед за именем пакета: рабочий файл уже лежит в gl-helper,
+// и переезд молча осиротил бы его. Новый путь читается первым, если владелец его завёл.
+export const CONFIG_PATHS = [
+  path.join(homedir(), '.config', 'fs-harness', 'config.json'),
+  path.join(homedir(), '.config', 'gl-helper', 'config.json'),
+];
+export const CONFIG_PATH = CONFIG_PATHS[1];
+
+export const configPath = () => CONFIG_PATHS.find(existsSync) ?? CONFIG_PATH;
+
+const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'claude', buildJob: '', targetBranch: '', jira: { baseUrl: '', email: '', projectKey: '' } };
 
 export const DEFAULTS = {
+  version: 2,
+  activeProject: '',
   // Пустые значения — намеренно: инструмент не привязан к конкретному GitLab.
   // Заполняются через fsh config init, конфиг или env (GL_HELPER_REPO / GL_HELPER_HOST).
-  repo: process.env.GL_HELPER_REPO || '',
-  host: process.env.GL_HELPER_HOST || '',
-  projectDir: '',
-  agent: 'claude',
+  projects: {},
   agentArgs: {
     claude: ['--dangerously-skip-permissions'],
     pi: [],
   },
-  // Судья сменный, и профиль выбирается на каждую роль отдельно: роли различаются
-  // по цене на порядки. Список у роли — фолбэк: первый ответивший выигрывает.
   workspace: {
     root: '~/.local/state/fs-harness/worktrees',
     deps: { strategy: 'clone' },
   },
-  // Jira только на чтение. Токен не здесь, а в keychain (fs-harness/jira).
-  jira: { baseUrl: '', email: '', projectKey: '' },
+  // Судья сменный, и профиль выбирается на каждую роль отдельно: роли различаются
+  // по цене на порядки. Список у роли — фолбэк: первый ответивший выигрывает.
   judge: {
     profiles: {
       'opus-cli': { provider: 'cli', bin: 'claude', model: 'opus', effort: 'xhigh' },
@@ -39,38 +46,88 @@ export const DEFAULTS = {
   },
 };
 
-export function loadConfig(env = process.env) {
-  const cfg = {
-    ...DEFAULTS,
-    agentArgs: { ...DEFAULTS.agentArgs },
-    workspace: { ...DEFAULTS.workspace, deps: { ...DEFAULTS.workspace.deps } },
-    judge: { profiles: { ...DEFAULTS.judge.profiles }, roles: { ...DEFAULTS.judge.roles } },
-    jira: { ...DEFAULTS.jira },
+// v1 → v2 в памяти. На диск ничего не пишется, пока владелец не скажет config migrate:
+// старый конфиг обязан работать бесконечно.
+export function migrateConfig(user) {
+  if (user?.version === 2) return user;
+  const { repo = '', host = '', projectDir = '', agent, jira, buildJob, targetBranch, ...rest } = user ?? {};
+  // Пустой v1 (конфига нет вовсе) не превращаем в проект-пустышку.
+  if (!repo && !projectDir) return { version: 2, activeProject: '', projects: {}, ...rest };
+  const name = path.basename(projectDir || '') || repo.split('/')[1] || repo;
+  return {
+    version: 2,
+    activeProject: name,
+    projects: {
+      [name]: {
+        repo,
+        host,
+        dir: projectDir,
+        ...(agent ? { agent } : {}),
+        ...(buildJob ? { buildJob } : {}),
+        ...(targetBranch ? { targetBranch } : {}),
+        ...(jira ? { jira } : {}),
+      },
+    },
+    ...rest,
   };
-  if (existsSync(CONFIG_PATH)) {
-    try {
-      const user = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
-      cfg.repo = user.repo || cfg.repo;
-      cfg.host = user.host || cfg.host;
-      cfg.projectDir = user.projectDir || cfg.projectDir;
-      cfg.agent = user.agent || cfg.agent;
-      cfg.agentArgs = { ...cfg.agentArgs, ...(user.agentArgs || {}) };
-      cfg.workspace = {
-        ...cfg.workspace,
-        ...(user.workspace || {}),
-        deps: { ...cfg.workspace.deps, ...(user.workspace?.deps || {}) },
-      };
-      cfg.judge = {
-        profiles: { ...cfg.judge.profiles, ...(user.judge?.profiles || {}) },
-        roles: { ...cfg.judge.roles, ...(user.judge?.roles || {}) },
-      };
-      cfg.jira = { ...cfg.jira, ...(user.jira || {}) };
-    } catch (err) {
-      throw new CliError(`Конфиг ${CONFIG_PATH} повреждён (${err.message}). Поправь или удали файл.`);
-    }
+}
+
+export function readRawConfig(file = configPath()) {
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new CliError(`Конфиг ${file} повреждён (${err.message}). Поправь или удали файл.`, 1, 'config_invalid');
   }
-  if (env.GL_HELPER_REPO) cfg.repo = env.GL_HELPER_REPO;
-  if (env.GL_HELPER_HOST) cfg.host = env.GL_HELPER_HOST;
+}
+
+// Выбор активного проекта: -P > FS_HARNESS_PROJECT > activeProject > единственный.
+export function pickProject(cfgV2, { project, env = process.env } = {}) {
+  const names = Object.keys(cfgV2.projects ?? {});
+  const wanted = project || env.FS_HARNESS_PROJECT || cfgV2.activeProject || (names.length === 1 ? names[0] : '');
+  if (!wanted) return { name: '', project: { ...PROJECT_DEFAULT } };
+  const found = cfgV2.projects?.[wanted];
+  if (!found) {
+    throw new CliError(
+      `Проекта "${wanted}" нет в конфиге. Есть: ${names.join(', ') || '—'}.`,
+      1,
+      'config_invalid',
+    );
+  }
+  return { name: wanted, project: { ...PROJECT_DEFAULT, ...found, jira: { ...PROJECT_DEFAULT.jira, ...(found.jira || {}) } } };
+}
+
+// Плоские поля (repo, host, projectDir, jira) — алиасы активного проекта:
+// команды про мультипроектность не знают и знать не должны.
+export function loadConfig(env = process.env, { project, file = configPath() } = {}) {
+  const raw = readRawConfig(file);
+  const v2 = migrateConfig(raw ?? {});
+  const { name, project: p } = pickProject(v2, { project, env });
+
+  const cfg = {
+    version: 2,
+    configPath: file,
+    activeProject: name,
+    projects: v2.projects ?? {},
+    project: p,
+    repo: env.GL_HELPER_REPO || p.repo,
+    host: env.GL_HELPER_HOST || p.host,
+    projectDir: p.dir,
+    agent: p.agent,
+    buildJob: p.buildJob,
+    targetBranch: p.targetBranch,
+    jira: p.jira,
+    agentArgs: { ...DEFAULTS.agentArgs, ...(v2.agentArgs || {}) },
+    workspace: {
+      ...DEFAULTS.workspace,
+      ...(v2.workspace || {}),
+      deps: { ...DEFAULTS.workspace.deps, ...(v2.workspace?.deps || {}), ...(p.deps || {}) },
+    },
+    judge: {
+      profiles: { ...DEFAULTS.judge.profiles, ...(v2.judge?.profiles || {}) },
+      roles: { ...DEFAULTS.judge.roles, ...(v2.judge?.roles || {}) },
+    },
+  };
   return cfg;
 }
 
@@ -78,15 +135,26 @@ export function expandHome(p) {
   return p.startsWith('~') ? path.join(homedir(), p.slice(1)) : p;
 }
 
-export function writeDefaultConfig() {
-  mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULTS, null, 2) + '\n');
-  return CONFIG_PATH;
+export function writeDefaultConfig(file = CONFIG_PATH) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ ...DEFAULTS, projects: { '<имя-проекта>': PROJECT_DEFAULT } }, null, 2) + '\n');
+  return file;
 }
 
 export function configInit() {
-  if (existsSync(CONFIG_PATH)) {
-    throw new CliError(`Конфиг уже есть: ${CONFIG_PATH}. Отредактируй его или удали перед повторным init.`);
+  const file = configPath();
+  if (existsSync(file)) {
+    throw new CliError(`Конфиг уже есть: ${file}. Отредактируй его или удали перед повторным init.`, 1, 'config_invalid');
   }
-  return writeDefaultConfig();
+  return writeDefaultConfig(file);
+}
+
+// Запись v2 на диск: рядом остаётся .v1.bak, чтобы откат был копированием файла.
+export function writeMigrated(file = configPath()) {
+  const raw = readRawConfig(file);
+  if (!raw) throw new CliError(`Конфига нет: ${file}. Сначала fsh config init.`, 1, 'config_invalid');
+  if (raw.version === 2) return { file, already: true };
+  copyFileSync(file, `${file}.v1.bak`);
+  writeFileSync(file, JSON.stringify(migrateConfig(raw), null, 2) + '\n');
+  return { file, backup: `${file}.v1.bak` };
 }
