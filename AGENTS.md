@@ -28,6 +28,9 @@ src/judge/schema.js     zod-схема вердикта, VERDICT_SHAPE, extractJ
 src/judge/payload.js    что показывать судье в роли acceptance
 src/judge/providers/    cli (процесс claude) и openai (всё OpenAI-совместимое)
 src/prompts/judge/*.md  рубрики по ролям — файл на роль
+src/engine.js           runAction: фазы действия, события, изоляция, гейт судьи; runActionCLI, judgeRun
+src/actions/*.js        декларации действий: precheck/context/verify/publish и блок action
+src/prompts.js          шаблоны: loadTemplate/renderTemplate/listTemplates/checkTemplates
 src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
 src/mcp.js              MCP-сервер (stdio): обработка JSON-RPC, инструменты берёт из registry
 test/*.test.js          node --test, мокнутый exec — без сети
@@ -58,6 +61,39 @@ test/*.test.js          node --test, мокнутый exec — без сети
 
 Каждый вызов идёт с `--hostname <host из конфига>` (иначе glab выберет хост по git remote cwd — источник загадочных 404) и ретраями GET до 5 раз (флапающий GitLab).
 
+## Действия (kind: 'action')
+
+Действие — это запуск агента с проверкой судьёй. Оно **не пишется как команда**: пишется декларация
+в `src/actions/<имя>.js`, а CLI-команду и MCP-инструмент из неё синтезирует `fromAction()` в реестре.
+Порядок фаз один на все действия и живёт в `runAction`:
+
+```
+resolve target → precheck → (skip?) → context → isolate → prompt
+  → agent → verify → judge → publish → cleanup
+```
+
+Блок `action`:
+
+| Поле | Что это |
+|---|---|
+| `target` | `'mr'` \| `'issue'` \| `'none'` — что резолвить из первого аргумента |
+| `writes` | меняет ли внешнее состояние; при `true` обязательны `publish` и гейт судьи |
+| `isolation` | `'checkout'` \| `'ephemeral-worktree'` \| `'task-worktree'` |
+| `prompt` | имя шаблона в `src/prompts/` |
+| `judge` | `{gate: 'pre-push'\|'advisory'\|'none', role}` |
+| `precheck(x)` | до изоляции: посчитать факты, решить `skip`, отдать описание workspace |
+| `dryRun(x)` / `renderPlan(plan, log)` | план без side-effect'ов и его отрисовка |
+| `context(x)` | переменные промпта (списки собираются здесь, в шаблоне только подстановка) |
+| `goal(x)` | одна фраза «что просили» — уходит судье |
+| `verify(x)` | механические факты после агента; ни одного «по словам агента» |
+| `publish(x)` | единственное место side-effect'ов, зовётся ТОЛЬКО после approve |
+| `result(x)` | финальный объект для `--json` |
+
+`x` — контекст рана: `{ctx, opts, input, target, pre, run, ws, vars, facts, verdict, published, say, emit, phase, signal}`.
+
+Вывод идёт только событиями (`{t:'log'|'phase'|'verdict'|'done'|'error'}`), их рендерит
+`runActionCLI`. Не печатай из хуков — используй `say`.
+
 ## Как добавить команду
 
 **Единственное место регистрации — `src/registry.js`.** Добавил запись в `COMMANDS` → команда появилась в dispatch, help, agent-guide и MCP tools/list одновременно.
@@ -76,7 +112,16 @@ test/*.test.js          node --test, мокнутый exec — без сети
 
 ## Промпты для агентов
 
-Промпты лежат отдельно от кода в `src/prompts/` (`.md`-файлы) — их можно править без правки логики. Для `commit` действует оверрайд проектом: если в корне git-репозитория есть файл `.llm-commit-pattern`, его содержимое заменяет встроенный промпт (см. `src/prompts.js`).
+Шаблоны лежат в `src/prompts/` (`.md` с необязательным front-matter). Порядок переопределения,
+первое попадание: `<projectDir>/.fs-harness/prompts/<имя>.md` → `~/.config/fs-harness/prompts/<имя>.md`
+→ встроенный. Рендер — `mustache` с выключенным HTML-экранированием; объявленная в `vars`, но не
+переданная переменная — `CliError('prompt_var_missing')`, а не тихая пустота.
+
+`.llm-commit-pattern` в корне репозитория по-прежнему работает: он подменяет переменную `pattern`
+в `commit.md`, то есть паттерн сообщения, а не всю инструкцию.
+
+`checkTemplates()` сверяет front-matter с телом и гоняется в `npm test` — правка шаблона, потерявшая
+переменную, падает на тестах, а не в проде.
 
 ## Судья
 

@@ -41,7 +41,7 @@ export async function cmdCommit(args, opts = {}) {
       branch,
       agent,
       prompt_source: source,
-      action: 'агент изучит изменения и выполнит: git add -A && git commit -m "<сообщение по паттерну>" (без push)',
+      action: 'агент изучит изменения и выполнит: git add <явные пути> && git commit -m "<сообщение по паттерну>" (без push)',
     };
     if (opts.asObject) return plan;
     if (opts.json) {
