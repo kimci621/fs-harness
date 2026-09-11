@@ -7,6 +7,7 @@ import { renderTemplate } from './prompts.js';
 import { judge, isApproved, formatVerdict } from './judge/index.js';
 import { buildAcceptancePayload } from './judge/payload.js';
 import { resolveMR } from './resolve.js';
+import { ISSUE_KEY } from './jira.js';
 import { expandHome } from './config.js';
 import { acquireWorkspace, MODES as ISOLATION_MODES } from './workspace.js';
 import { confirm } from './ui.js';
@@ -58,7 +59,7 @@ export function runAction(spec, ctx, input, opts = {}) {
   async function go() {
     try {
       x.phase('context', 'start');
-      x.target = a.target === 'none' ? null : await resolveMR(ctx.g, ctx.repo, input.query);
+      x.target = await resolveTarget(a.target, ctx, input.query);
       x.pre = (await a.precheck(x)) ?? {};
       if (opts.dryRun) return a.dryRun(x);
       if (x.pre.skip) {
@@ -128,7 +129,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       x.phase('verify', 'done');
 
       x.verdict = await gate(x);
-      x.published = (await a.publish(x)) ?? {};
+      x.published = (a.publish ? await a.publish(x) : null) ?? {};
       x.phase('publish', 'done');
 
       const res = a.result(x);
@@ -157,13 +158,15 @@ export function runAction(spec, ctx, input, opts = {}) {
       signal: ac.signal,
       makeProvider: opts.makeProvider, // шов для тестов: судья без сети
       onDelta: (text) => emit({ t: 'delta', text }), // видно, что судья думает, а не завис
-      payload: buildAcceptancePayload({
-        goal: x.goal,
-        facts: { ...x.facts, diff: undefined },
-        extra: x.extra,
-        diff: x.facts.diff,
-        agentText: x.agentText,
-      }),
+      payload: a.judgePayload
+        ? a.judgePayload(x)
+        : buildAcceptancePayload({
+            goal: x.goal,
+            facts: { ...x.facts, diff: undefined },
+            extra: x.extra,
+            diff: x.facts.diff,
+            agentText: x.agentText,
+          }),
     });
     saveArtifact(runDir, 'verdict.json', verdict);
     emit({ t: 'verdict', verdict });
@@ -215,6 +218,19 @@ export function runAction(spec, ctx, input, opts = {}) {
     abort: () => ac.abort(),
     result,
   };
+}
+
+// Цель действия: MR, задача Jira или ничего. Ключ задачи — по форме, а не по флагу.
+async function resolveTarget(kind, ctx, query) {
+  if (kind === 'none') return null;
+  if (kind === 'mr') return resolveMR(ctx.g, ctx.repo, query);
+  if (kind === 'issue') {
+    if (!ISSUE_KEY.test(String(query ?? ''))) {
+      throw new CliError(`"${query}" не похоже на ключ задачи Jira (FD-7647).`, 1, 'usage');
+    }
+    return ctx.jira().issue(query);
+  }
+  throw new CliError(`Неизвестный тип цели действия: ${kind}.`, 1, 'config_invalid');
 }
 
 // CLI-обёртка над движком, одна на все действия: разбор аргументов, отрисовка событий,
