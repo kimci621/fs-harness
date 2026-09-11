@@ -93,7 +93,7 @@ test/*.test.js          node --test, мокнутый exec — без сети
 
 `jobs`: `{pipeline: {id, status, web_url}, jobs: [{id, name, stage, status, web_url}]}`.
 
-`run`/`deploy`/`conflict`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков.
+`run`/`deploy`/`conflict`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков. У `conflict` дополнительно `conflict_files: string[]` и `has_conflicts` — посчитанные `git merge-tree`, а не взятые из GitLab.
 
 Ошибки: `{ok:false, error:{code, message}}`; коды перечислены в `agent-guide`.
 
