@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createGlab } from '../glab.js';
+import { createJira } from '../jira.js';
 import { loadConfig, CONFIG_PATH, expandHome } from '../config.js';
 import { readSecret, addCommand } from '../secrets.js';
 
@@ -55,6 +56,21 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject } = {})
 
   const dir = expandHome(projectDir || cfg?.projectDir || '~');
   add('projectDir', existsSync(path.join(dir, '.git')), `${dir}${existsSync(path.join(dir, '.git')) ? '' : ' — нет .git (conflict не заработает)'}`);
+
+  // Jira опциональна: пока не настроена, молчим — про неё спросит только analyze.
+  if (cfg?.jira?.baseUrl) {
+    const token = readSecret('jira', { required: false });
+    if (!token) {
+      add('jira', false, `токена нет. Заведи: ${addCommand('jira')}`);
+    } else {
+      try {
+        const me = await createJira({ ...cfg.jira, token }).myself();
+        add('jira', true, `${cfg.jira.baseUrl} · ${me?.displayName ?? me?.accountId ?? 'ok'}`);
+      } catch (err) {
+        add('jira', false, `${cfg.jira.baseUrl}: ${err.message}`);
+      }
+    }
+  }
 
   // Судью проверяем только по профилям, реально назначенным ролям: про остальные молчим.
   for (const name of [...new Set(Object.values(cfg?.judge?.roles ?? {}).flat())]) {

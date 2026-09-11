@@ -10,6 +10,9 @@ import { runActionCLI } from './engine.js';
 import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { cmdPrompts } from './commands/prompts.js';
+import { cmdJira } from './commands/jira.js';
+import { createJira } from './jira.js';
+import { readSecret } from './secrets.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdConfig } from './config-cmd.js';
 import { CliError } from './errors.js';
@@ -35,6 +38,8 @@ export function createCtx({ g, cfg, notify }) {
     cfg,
     notify,
     agentArgs: (agent) => (cfg.agentArgs || {})[agent] || [],
+    // Лениво: команды без Jira не должны требовать токен.
+    jira: () => createJira({ ...cfg.jira, token: readSecret('jira') }),
   };
 }
 
@@ -155,6 +160,21 @@ export const COMMANDS = [
   },
   fromAction(conflictAction),
   fromAction(threadsAction),
+  {
+    name: 'jira',
+    usage: 'jira [mine|<KEY>]',
+    description: 'Задачи Jira: свои открытые или одна задача с комментариями',
+    example: 'fsh jira FD-7647',
+    run: (ctx, args, opts) => cmdJira(ctx, args, opts),
+    mcp: {
+      description: 'Прочитать Jira: без аргументов или с mine — открытые задачи на текущем пользователе; с ключом (FD-7647) — задача целиком с описанием и комментариями. Только чтение.',
+      inputSchema: {
+        type: 'object',
+        properties: { key: { type: 'string', description: 'ключ задачи (FD-7647) или mine' } },
+      },
+      call: (ctx, a) => cmdJira(ctx, [a.key], { json: true, asObject: true }),
+    },
+  },
   {
     name: 'commit',
     usage: 'commit [--agent]',
