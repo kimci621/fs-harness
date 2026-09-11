@@ -93,8 +93,9 @@ test('conflict: чистый merge — skipped, несмотря на has_confli
 });
 
 test('conflict: падение до создания worktree долетает наружу, а не глохнет в finally', async () => {
-  // .worktrees файлом вместо каталога — git worktree add обязан упасть.
-  writeFileSync(path.join(project, '.worktrees'), 'не каталог\n');
+  // Рут worktree — файл вместо каталога: изоляция обязана упасть до запуска агента.
+  const notADir = path.join(root, 'не-каталог');
+  writeFileSync(notADir, 'файл\n');
   await assert.rejects(
     () =>
       runActionCLI(conflictAction, { g: fakeGitlab('source'), repo: 'r/repo' }, ['7'], {
@@ -102,8 +103,10 @@ test('conflict: падение до создания worktree долетает �
         projectDir: project,
         yes: true,
         asObject: true,
+        runsDir: path.join(root, 'runs'),
+        cfg: { workspace: { root: notADir } },
       }),
-    (err) => err instanceof CliError && err.code === 'git_failed',
+    (err) => err instanceof CliError && err.code === 'workspace_failed',
   );
 });
 

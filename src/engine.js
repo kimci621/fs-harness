@@ -7,25 +7,14 @@ import { renderTemplate } from './prompts.js';
 import { judge, isApproved, formatVerdict } from './judge/index.js';
 import { buildAcceptancePayload } from './judge/payload.js';
 import { resolveMR } from './resolve.js';
+import { expandHome } from './config.js';
+import { acquireWorkspace, MODES as ISOLATION_MODES } from './workspace.js';
 import { confirm } from './ui.js';
 import { makeLogger, finish } from './output.js';
 import { CliError } from './errors.js';
 
-export const ISOLATION_MODES = ['checkout', 'ephemeral-worktree', 'task-worktree'];
+export { ISOLATION_MODES };
 export const JUDGE_GATES = ['pre-push', 'advisory', 'none'];
-
-// git с рабочим каталогом по умолчанию.
-// allowFail — для команд, у которых ненулевой код это ответ, а не поломка (git grep).
-export function makeGit(defaultCwd) {
-  return (args, cwd = defaultCwd, { allowFail = false } = {}) => {
-    try {
-      return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-    } catch (err) {
-      if (allowFail) return String(err.stdout ?? '').trim();
-      throw new CliError(`git ${args.join(' ')} не удался: ${String(err.stderr || err.message).trim()}`, 1, 'git_failed');
-    }
-  };
-}
 
 // Движок действия. Порядок фаз один на все действия, различия живут в хуках декларации:
 //   resolve target → precheck → (skip?) → context → isolate → prompt
@@ -76,15 +65,25 @@ export function runAction(spec, ctx, input, opts = {}) {
         return x.pre.result;
       }
 
-      runDir = createRun(spec.name);
+      runDir = createRun(spec.name, { root: opts.runsDir });
       x.run = runDir;
+
+      // Изоляция до контекста: промпту нужны и путь worktree, и доступность зависимостей.
+      x.phase('isolate', 'start');
+      ws = await acquireWorkspace({
+        mode: a.isolation,
+        action: spec.name,
+        onEvent: x.say,
+        deps: opts.cfg?.workspace?.deps,
+        root: opts.cfg?.workspace?.root ? expandHome(opts.cfg.workspace.root) : undefined,
+        ...x.pre.workspace,
+      });
+      x.ws = ws;
+      x.before = a.isolation === 'checkout' ? ws.snapshot() : null;
+      x.phase('isolate', 'done', ws.dir);
+
       x.vars = await a.context(x);
       x.phase('context', 'done');
-
-      x.phase('isolate', 'start');
-      ws = acquire(a.isolation, x);
-      x.ws = ws;
-      x.phase('isolate', 'done', ws.dir);
 
       x.phase('prompt', 'start');
       const rendered = renderTemplate(a.prompt, x.vars, { projectDir: x.pre.projectDir });
@@ -111,6 +110,7 @@ export function runAction(spec, ctx, input, opts = {}) {
 
       x.agentText = await runAgent(x);
       x.facts = await a.verify(x);
+      if (x.before) ws.assertClean(x.before); // читающее действие не имеет права менять чекаут
       saveArtifact(runDir, 'agent.txt', x.agentText);
       saveArtifact(runDir, 'diff.patch', x.facts.diff ?? '');
       x.goal = a.goal(x);
@@ -131,7 +131,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       return res;
     } finally {
       // Без return: он проглатывал летящее исключение и действие возвращало undefined.
-      if (ws) release(ws, keep, x);
+      if (ws) ws.cleanup(keep);
     }
   }
 
@@ -207,32 +207,6 @@ export function runAction(spec, ctx, input, opts = {}) {
     abort: () => ac.abort(),
     result,
   };
-}
-
-// Изоляция. В фазе 3 это переезжает в workspace.js вместе с двумя остальными режимами.
-function acquire(mode, x) {
-  if (!ISOLATION_MODES.includes(mode)) throw new CliError(`Неизвестный режим изоляции "${mode}".`, 1, 'config_invalid');
-  const { projectDir, base, slug } = x.pre.workspace;
-  const git = makeGit(projectDir);
-  if (mode === 'checkout') return { dir: projectDir, git, base, branch: null, baseSha: git(['rev-parse', base]) };
-
-  const dir = path.join(projectDir, '.worktrees', slug);
-  const branch = `gl-helper/${slug.replace(/^gl-helper-/, '')}`;
-  git(['worktree', 'add', '--detach', dir, base]);
-  git(['checkout', '-b', branch], dir);
-  return { dir, git, base, branch, baseSha: git(['rev-parse', base]), ephemeral: true };
-}
-
-function release(ws, keep, x) {
-  if (!ws.ephemeral) return;
-  if (keep) {
-    x.say(`📁 Worktree сохранён: ${ws.dir}`);
-    return;
-  }
-  try { ws.git(['worktree', 'remove', '--force', ws.dir]); } catch { /* уже удалён */ }
-  try { ws.git(['worktree', 'prune']); } catch { /* не критично */ }
-  try { ws.git(['branch', '-D', ws.branch]); } catch { /* не критично */ }
-  x.say('🧹 Временный worktree и ветка удалены.');
 }
 
 // CLI-обёртка над движком, одна на все действия: разбор аргументов, отрисовка событий,

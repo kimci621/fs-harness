@@ -6,7 +6,7 @@ import { ensureMRPipeline, findJob, startJob } from '../pipeline.js';
 import { waitJob } from '../ui.js';
 import { jobJSON } from '../output.js';
 import { ACCEPTANCE_PATHSPECS } from '../judge/payload.js';
-import { makeGit } from '../engine.js';
+import { makeGit, WORKTREE_ROOT } from '../workspace.js';
 import { CliError } from '../errors.js';
 
 // Первая строка вывода merge-tree — OID результирующего дерева, а не имя файла.
@@ -71,16 +71,14 @@ export const conflictAction = {
       git(['fetch', 'origin', `${mr.source_branch}:refs/remotes/origin/${mr.source_branch}`, `${mr.target_branch}:refs/remotes/origin/${mr.target_branch}`]);
       const conflictFiles = conflictingFiles(projectDir, `origin/${mr.target_branch}`, `origin/${mr.source_branch}`);
 
-      const slug = `gl-helper-${mr.iid}-${Date.now().toString(36)}`;
-      const wt = path.join(projectDir, '.worktrees', slug);
       const skip = conflictFiles.length === 0;
       if (skip) say(`✅ В MR !${mr.iid} конфликтов нет (${mr.source_branch} → ${mr.target_branch}).`);
 
       return {
         projectDir,
         conflictFiles,
-        wt,
-        workspace: { projectDir, base: `origin/${mr.source_branch}`, slug },
+        // refs пустой: ветки уже подтянуты выше, второй fetch не нужен.
+        workspace: { project: projectDir, ref: mr.source_branch, baseRef: mr.target_branch, key: String(mr.iid), refs: [] },
         skip,
         reason: 'конфликтов нет',
         result: { ok: true, mr: mr.iid, has_conflicts: false, conflict_files: [], skipped: true },
@@ -106,9 +104,9 @@ export const conflictAction = {
         conflict_files: pre.conflictFiles,
         agent: opts.agent,
         project_dir: pre.projectDir,
-        worktree: pre.wt,
+        worktree_root: path.join(WORKTREE_ROOT, path.basename(pre.projectDir)),
         steps: [
-          `worktree add --detach ${pre.wt} origin/${mr.source_branch}`,
+          `worktree add --detach ${path.join(WORKTREE_ROOT, path.basename(pre.projectDir), `conflict-${mr.iid}-<ts>`)} origin/${mr.source_branch}`,
           `агент ${opts.agent}: git merge origin/${mr.target_branch}, решить конфликты, линт/тесты, коммит по правилам проекта`,
           opts.noJudge
             ? 'судья отключён (--no-judge)'
@@ -120,10 +118,10 @@ export const conflictAction = {
       };
     },
 
-    context({ ctx, opts, target: mr, pre, run, say }) {
+    context({ ctx, opts, target: mr, pre, ws, run, say }) {
       say(`🌿 MR !${mr.iid}: ${mr.source_branch} → ${mr.target_branch}`);
       say(`   Конфликт в ${pre.conflictFiles.length} файлах: ${pre.conflictFiles.join(', ')}`);
-      say(`   Агент: ${opts.agent} · worktree: ${pre.wt}`);
+      say(`   Агент: ${opts.agent} · worktree: ${ws.dir}${ws.deps.available ? '' : ' · без node_modules'}`);
       say(`   Ран: ${run.id}`);
       return {
         repo: ctx.repo,
@@ -134,6 +132,8 @@ export const conflictAction = {
         target_branch: mr.target_branch,
         conflict_files: pre.conflictFiles.map((f) => `  ${f}`).join('\n'),
         conflict_count: pre.conflictFiles.length,
+        worktree: ws.dir,
+        deps_available: ws.deps.available,
       };
     },
 
@@ -151,6 +151,7 @@ export const conflictAction = {
       }
       return {
         commits_ahead: commitsAhead,
+        deps_available: ws.deps.available,
         head_sha: git(['rev-parse', 'HEAD'], dir),
         changed_files: git(['diff', '--name-only', `${base}..HEAD`], dir).split('\n').filter(Boolean),
         conflict_files: pre.conflictFiles,
@@ -201,7 +202,7 @@ export const conflictAction = {
       log(`🔍 План конфликта (dry-run), MR !${plan.mr} ${plan.source_branch} → ${plan.target_branch}`);
       log(`   конфликт: ${plan.conflict_files.length ? `⚠ да, файлов ${plan.conflict_files.length}` : '✅ нет (ничего делать не нужно)'}`);
       plan.conflict_files.forEach((f) => log(`     ${f}`));
-      log(`   worktree: ${plan.worktree}`);
+      log(`   worktree: ${plan.worktree_root}/conflict-${plan.mr}-<ts>`);
       log(`   агент: ${plan.agent} (headless)`);
       plan.steps.forEach((s, i) => log(`   ${i + 1}. ${s}`));
     },
