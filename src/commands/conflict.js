@@ -95,6 +95,7 @@ export async function cmdConflict(g, repo, args, opts = {}) {
       steps: [
         `worktree add --detach ${wt} ${base}`,
         `агент ${agent}: git merge origin/${mr.target_branch}, решить конфликты, линт/тесты, коммит по правилам проекта`,
+        opts.noJudge ? 'судья отключён (--no-judge)' : `судья (роль acceptance, профиль ${opts.judgeProfile ?? (opts.cfg?.judge?.roles?.acceptance ?? []).join(' → ')}): approve или push не произойдёт`,
         `push origin HEAD:${mr.source_branch}`,
         'запуск build-джобы в актуальном MR-пайплайне + ожидание',
         'удаление временного worktree',
