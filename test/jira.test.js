@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createJira, ISSUE_KEY } from '../src/jira.js';
 import { CliError } from '../src/errors.js';
+import { cmdJira, MY_ISSUES_JQL } from '../src/commands/jira.js';
 
 // Подменённый fetch: отдаёт заготовленные ответы по порядку и пишет, что спрашивали.
 function fakeFetch(responses) {
@@ -83,4 +84,29 @@ test('ISSUE_KEY: ключ задачи отличается от номера MR
   assert.equal(ISSUE_KEY.test('fd-7647'), false);
   assert.equal(ISSUE_KEY.test('!2547'), false);
   assert.equal(ISSUE_KEY.test('feature/FD-7647'), false);
+});
+
+test('jira mine: JQL и колонки таблицы, задача — с комментариями и ссылкой', async () => {
+  const issue = {
+    key: 'FD-1', fields: { summary: 'Починить', status: { name: 'In Progress' }, issuetype: { name: 'Bug' }, priority: { name: 'High' }, updated: '2026-09-01T10:00:00.000+0300', description: 'текст', assignee: { displayName: 'Я' } },
+  };
+  let seenJql;
+  const ctx = {
+    cfg: { jira: { baseUrl: 'https://j.invalid/' } },
+    jira: () => ({
+      searchJql: async ({ jql }) => { seenJql = jql; return { issues: [issue], cursor: null }; },
+      issue: async () => issue,
+      comments: async () => ({ comments: [{ author: { displayName: 'Ревьюер' }, created: '2026-09-01T11:00:00.000+0300', body: 'вопрос' }] }),
+    }),
+  };
+  const list = await cmdJira(ctx, [], { asObject: true });
+  assert.equal(seenJql, MY_ISSUES_JQL);
+  assert.deepEqual(list.issues.map((i) => i.key), ['FD-1']);
+
+  const one = await cmdJira(ctx, ['FD-1'], { asObject: true });
+  assert.equal(one.issue.url, 'https://j.invalid/browse/FD-1');
+  assert.equal(one.issue.description, 'текст');
+  assert.deepEqual(one.comments.map((c) => c.author), ['Ревьюер']);
+
+  await assert.rejects(() => cmdJira(ctx, ['не-ключ'], { asObject: true }), (e) => e.code === 'usage');
 });
