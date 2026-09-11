@@ -12,6 +12,8 @@
   "scripts": {
     "test": "node --test \"test/*.test.js\""
   },
-  "dependencies": {},
+  "dependencies": {
+    "zod": "^4.6.2"
+  },
   "license": "MIT"
 }

@@ -8,6 +8,9 @@ import { ensureMRPipeline, findJob, startJob } from '../pipeline.js';
 import { waitJob, confirm } from '../ui.js';
 import { makeLogger, finish, jobJSON } from '../output.js';
 import { spawnAgent } from '../agent/spawn.js';
+import { createRun, saveArtifact, readRun } from '../agent/journal.js';
+import { judge, isApproved, formatVerdict } from '../judge/index.js';
+import { buildAcceptancePayload, ACCEPTANCE_PATHSPECS } from '../judge/payload.js';
 
 // Первая строка вывода merge-tree — OID результирующего дерева, а не имя файла.
 // Не отбросить её — хэш уедет в промпт и агент пойдёт искать несуществующий файл.
@@ -24,6 +27,8 @@ export function parseMergeTree(stdout) {
 // затем сам запускает build-джобу и ждёт её. Worktree всегда убирается (кроме аварийных случаев).
 // --dry-run: показать план без каких-либо действий.
 export async function cmdConflict(g, repo, args, opts = {}) {
+  if (opts.judgeOnly) return cmdJudgeOnly(opts.judgeOnly, opts);
+
   const [mrQuery] = args;
   if (!mrQuery) throw new CliError('Использование: fsh conflict <mr|ветка> [--agent claude|pi] [-y]', 1, 'usage');
 
@@ -43,10 +48,12 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     throw new CliError(`Каталог проекта ${projectDir} не является git-репозиторием. Укажи --project-dir.`, 1, 'config_invalid');
   }
 
-  const git = (a, cwd = projectDir) => {
+  // allowFail — для команд, у которых ненулевой код это ответ, а не поломка (git grep).
+  const git = (a, cwd = projectDir, { allowFail = false } = {}) => {
     try {
       return execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     } catch (err) {
+      if (allowFail) return String(err.stdout ?? '').trim();
       throw new CliError(`git ${a.join(' ')} не удался: ${String(err.stderr || err.message).trim()}`, 1, 'git_failed');
     }
   };
@@ -115,18 +122,41 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     return result;
   }
 
+  const runDir = createRun('conflict');
   let wtCreated = false;
   let keep = Boolean(opts.keepWorktree);
 
   log(`🌿 MR !${mr.iid}: ${mr.source_branch} → ${mr.target_branch}`);
   log(`   Конфликт в ${conflictFiles.length} файлах: ${conflictFiles.join(', ')}`);
   log(`   Агент: ${agent} · worktree: ${wt}`);
+  log(`   Ран: ${runDir.id}`);
 
   try {
     // Detached-worktree от origin/<source>, чтобы не трогать рабочую копию.
     git(['worktree', 'add', '--detach', wt, base]);
     wtCreated = true;
     git(['checkout', '-b', branch], wt);
+    const baseSha = git(['rev-parse', base]);
+
+    const prompt = buildPrompt({ repo, mr, conflictFiles });
+    saveArtifact(runDir, 'prompt.md', prompt);
+    saveArtifact(runDir, 'meta.json', {
+      id: runDir.id,
+      action: 'conflict',
+      created_at: new Date().toISOString(),
+      repo,
+      mr: mr.iid,
+      source_branch: mr.source_branch,
+      target_branch: mr.target_branch,
+      project_dir: projectDir,
+      worktree: wt,
+      branch,
+      base,
+      base_sha: baseSha,
+      agent,
+      conflict_files: conflictFiles,
+      judge: { role: 'acceptance' },
+    });
 
     if (!opts.yes && !opts.asObject && !confirm(`Запускаю агента ${agent}. Продолжить? [y/N] `)) {
       throw new CliError('Отменено.', 0, 'canceled');
@@ -135,14 +165,18 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     log(`🤖 Запускаю ${agent}…`);
     const run = spawnAgent({
       bin: agent,
-      args: [...(opts.agentArgs ?? []), '-p', buildPrompt({ repo, mr, conflictFiles })],
+      args: [...(opts.agentArgs ?? []), '-p', prompt],
       cwd: wt,
       env: { ...process.env, GL_HELPER_MR: String(mr.iid), GL_HELPER_REPO: repo },
     });
+    const agentOut = [];
     run.events.on((ev) => {
       if (ev.t !== 'log') return;
       if (ev.stream === 'stderr') process.stderr.write(`${ev.text}\n`);
-      else log(ev.text);
+      else {
+        agentOut.push(ev.text);
+        log(ev.text);
+      }
     });
     let done;
     try {
@@ -152,50 +186,57 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     }
     if (!done.ok) throw new CliError(`Агент ${agent} завершился с кодом ${done.code}.`, 1, 'agent_failed');
 
-    // Проверяем результат: коммиты есть? запушено?
-    const ahead = Number(git(['rev-list', '--count', `${base}..HEAD`], wt));
-    if (ahead === 0) {
-      throw new CliError(`Агент не создал коммитов в worktree (${wt}). Проверь вручную: git -C ${wt} status.`, 1, 'agent_failed');
-    }
-    const headSha = git(['rev-parse', 'HEAD'], wt);
-    const remoteSha = (git(['ls-remote', 'origin', `refs/heads/${mr.source_branch}`]).split(/\s+/)[0] || '');
-    if (remoteSha !== headSha) {
-      keep = true;
-      throw new CliError(
-        `Агент не запушл изменения (HEAD ${headSha.slice(0, 8)} ≠ origin ${remoteSha.slice(0, 8)}).\n` +
-          `Запушь вручную: git -C ${wt} push origin HEAD:${mr.source_branch}\nWorktree сохранён: ${wt}`,
-        1,
-        'not_pushed',
-      );
-    }
-    log(`✅ Изменения запушены в ${mr.source_branch} (${headSha.slice(0, 8)}).`);
+    // verify: механические факты, снятые с git, а не слова агента.
+    const facts = verify({ git, wt, base, conflictFiles });
+    const agentText = agentOut.join('\n');
+    saveArtifact(runDir, 'agent.txt', agentText);
+    saveArtifact(runDir, 'diff.patch', facts.diff);
+    saveArtifact(runDir, 'meta.json', {
+      ...JSON.parse(readRun(runDir.id).read('meta.json')),
+      head_sha: facts.head_sha,
+      facts: { ...facts, diff: undefined },
+      goal: goalOf(mr, conflictFiles),
+    });
 
-    // Пайплайн build жмёт fsh, не агент.
-    const freshMR = await g.getMR(repo, mr.iid);
-    const pipeline = await ensureMRPipeline(g, repo, freshMR);
-    const jobs = await g.getJobs(repo, pipeline.id);
-    const build = findJob(jobs, opts.buildJob ?? 'build_image');
-    if (!build) {
-      throw new CliError(`Build-джоба "${opts.buildJob ?? 'build_image'}" не найдена в пайплайне #${pipeline.id}.\nДоступные: ${jobs.map((j) => j.name).join(', ')}`, 1, 'job_not_found');
+    // Гейт: push случается только после approve. До него в origin не ушло ничего.
+    let verdict = null;
+    if (opts.noJudge) {
+      log('⚠ Судья отключён (--no-judge): push без приёмки.');
+    } else {
+      log('⚖ Судья смотрит результат…');
+      verdict = await judge({
+        role: 'acceptance',
+        cfg: opts.cfg,
+        profile: opts.judgeProfile,
+        payload: buildAcceptancePayload({ goal: goalOf(mr, conflictFiles), facts: { ...facts, diff: undefined }, diff: facts.diff, agentText }),
+      });
+      saveArtifact(runDir, 'verdict.json', verdict);
+      if (!opts.asObject) log(formatVerdict(verdict));
+      if (!isApproved(verdict)) {
+        keep = true;
+        throw new CliError(
+          `${formatVerdict(verdict)}\n\nPush не сделан. Worktree сохранён: ${wt}\nВердикт: ${runDir.dir}/verdict.json`,
+          1,
+          'judge_rejected',
+        );
+      }
     }
-    log(`▶ Запускаю build: ${build.name} (#${build.id}) в пайплайне #${pipeline.id}`);
-    const started = await startJob(g, repo, build);
-    const buildRun = started ?? { id: build.id };
-    if (started) log(`   ${build.status} → ${started.status} (#${started.id})`);
-    const final = await waitJob({ g, repo, pipelineId: pipeline.id, jobId: buildRun.id, label: build.name, quiet: opts.quiet, onTick: opts.onTick });
-    if (final.status !== 'success') {
-      throw new CliError(`Build завершился: ${final.status}.\nДетали: ${final.web_url}`, 1, 'build_failed');
-    }
+
+    // publish: единственное место, где происходит push.
+    const published = await publish({ g, repo, mr, git, wt, log, opts, facts });
+
     log(`✅ Конфликт решён, MR !${mr.iid} обновлён, build успешен.`);
     const result = {
       ok: true,
+      run: runDir.id,
       mr: mr.iid,
-      head_sha: headSha,
-      commits_ahead: ahead,
+      head_sha: facts.head_sha,
+      commits_ahead: facts.commits_ahead,
       conflict_files: conflictFiles,
-      pipeline: { id: pipeline.id, status: pipeline.status, web_url: pipeline.web_url },
-      build: jobJSON(final, 'success'),
+      judge: verdict ? { decision: verdict.decision, confidence: verdict.confidence, summary: verdict.summary, profile: verdict.meta.profile, cost: verdict.meta.cost } : { skipped: true },
+      ...published,
     };
+    saveArtifact(runDir, 'result.json', result);
     if (!opts.asObject) finish(opts.json, result);
     return result;
   } finally {
@@ -211,6 +252,97 @@ export async function cmdConflict(g, repo, args, opts = {}) {
       }
     }
   }
+}
+
+const goalOf = (mr, conflictFiles) =>
+  `Решить конфликт слияния в MR !${mr.iid} «${mr.title}»: ветка ${mr.source_branch} сливается с ${mr.target_branch}. ` +
+  `Конфликтующие файлы (${conflictFiles.length}): ${conflictFiles.join(', ')}. ` +
+  'Функциональность обеих сторон должна остаться рабочей, приоритет веток равный.';
+
+// Механические факты после агента. Ни одного «по словам агента».
+function verify({ git, wt, base, conflictFiles }) {
+  const commitsAhead = Number(git(['rev-list', '--count', `${base}..HEAD`], wt));
+  if (commitsAhead === 0) {
+    throw new CliError(`Агент не создал коммитов в worktree (${wt}). Проверь вручную: git -C ${wt} status.`, 1, 'agent_failed');
+  }
+  const changed = git(['diff', '--name-only', `${base}..HEAD`], wt).split('\n').filter(Boolean);
+  const markers = git(['grep', '-l', '-E', '^(<{7}|={7}|>{7})', 'HEAD', '--', ...conflictFiles], wt, { allowFail: true })
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => l.replace(/^HEAD:/, ''));
+  return {
+    commits_ahead: commitsAhead,
+    head_sha: git(['rev-parse', 'HEAD'], wt),
+    changed_files: changed,
+    conflict_files: conflictFiles,
+    leftover_markers: markers,
+    diff: git(['diff', `${base}..HEAD`, '--', ...ACCEPTANCE_PATHSPECS], wt),
+  };
+}
+
+// publish: push и build. Зовётся только после approve.
+async function publish({ g, repo, mr, git, wt, log, opts, facts }) {
+  log(`⬆ Пушу в ${mr.source_branch}…`);
+  git(['push', 'origin', `HEAD:${mr.source_branch}`], wt);
+  const remoteSha = git(['ls-remote', 'origin', `refs/heads/${mr.source_branch}`]).split(/\s+/)[0] || '';
+  if (remoteSha !== facts.head_sha) {
+    throw new CliError(`Push прошёл, но origin на ${remoteSha.slice(0, 8)} вместо ${facts.head_sha.slice(0, 8)}. Кто-то запушил параллельно.`, 1, 'not_pushed');
+  }
+  log(`✅ Запушено в ${mr.source_branch} (${facts.head_sha.slice(0, 8)}).`);
+
+  // Пайплайн build жмёт fsh, не агент.
+  const freshMR = await g.getMR(repo, mr.iid);
+  const pipeline = await ensureMRPipeline(g, repo, freshMR);
+  const jobs = await g.getJobs(repo, pipeline.id);
+  const build = findJob(jobs, opts.buildJob ?? 'build_image');
+  if (!build) {
+    throw new CliError(`Build-джоба "${opts.buildJob ?? 'build_image'}" не найдена в пайплайне #${pipeline.id}.\nДоступные: ${jobs.map((j) => j.name).join(', ')}`, 1, 'job_not_found');
+  }
+  log(`▶ Запускаю build: ${build.name} (#${build.id}) в пайплайне #${pipeline.id}`);
+  const started = await startJob(g, repo, build);
+  const buildRun = started ?? { id: build.id };
+  if (started) log(`   ${build.status} → ${started.status} (#${started.id})`);
+  const final = await waitJob({ g, repo, pipelineId: pipeline.id, jobId: buildRun.id, label: build.name, quiet: opts.quiet, onTick: opts.onTick });
+  if (final.status !== 'success') {
+    throw new CliError(`Build завершился: ${final.status}.\nДетали: ${final.web_url}`, 1, 'build_failed');
+  }
+  return {
+    pipeline: { id: pipeline.id, status: pipeline.status, web_url: pipeline.web_url },
+    build: jobJSON(final, 'success'),
+  };
+}
+
+// Прогнать судью по сохранённому рану. Работает по артефактам, а не по worktree:
+// дифф и отчёт агента зафиксированы на диске, значит рубрики и провайдеров можно
+// сравнивать на одном и том же материале даже после уборки worktree.
+export async function cmdJudgeOnly(runId, opts = {}) {
+  const log = opts.asObject ? () => {} : makeLogger(opts.json);
+  const saved = readRun(runId);
+  const { meta } = saved;
+  const diff = saved.read('diff.patch');
+  if (diff === null) {
+    throw new CliError(`У рана ${runId} нет diff.patch — судить нечего (ран не дошёл до verify).`, 1, 'run_incomplete');
+  }
+
+  log(`⚖ Судья по рану ${runId} (MR !${meta.mr}, ${meta.conflict_files?.length ?? 0} конфликтующих файлов)`);
+  const verdict = await judge({
+    role: meta.judge?.role ?? 'acceptance',
+    cfg: opts.cfg,
+    profile: opts.judgeProfile,
+    payload: buildAcceptancePayload({
+      goal: meta.goal,
+      facts: meta.facts ?? {},
+      diff,
+      agentText: saved.read('agent.txt') ?? '',
+    }),
+  });
+  saveArtifact(saved, 'verdict.json', verdict);
+
+  const result = { ok: true, run: runId, judge_only: true, mr: meta.mr, verdict };
+  if (opts.asObject) return result;
+  log(formatVerdict(verdict));
+  finish(opts.json, result);
+  return result;
 }
 
 function buildPrompt({ repo, mr, conflictFiles }) {
@@ -233,8 +365,8 @@ function buildPrompt({ repo, mr, conflictFiles }) {
     '2. Реши каждый конфликт внимательно и вручную: сохрани корректную функциональность обеих веток. Критерии приёмки — рабочий код и в текущей ветке, и в dev, приоритет равный. Запрещено бездумно брать всё из одной стороны (ours/theirs) и делать force-push.',
     '3. Проверь, что код рабочий: просмотри конфликтные файлы; если в проекте есть линт и unit-тесты, прогони их (npm run lint, npm run test) перед коммитом.',
     '4. Закоммить по правилам проекта: посмотри "git log --oneline -20" и повтори стиль сообщений коммита.',
-    `5. Запушь: "git push origin HEAD:${source}" — это обновит MR. Ветку ${target} не трогай, лишних коммитов не создавай.`,
-    '6. Если при merge конфликтов не оказалось — просто сообщи об этом, ничего не коммить и не пушь.',
+    `5. НЕ пуши. Push сделает fs-harness сам — после того, как результат посмотрит судья. "git push" в любом виде запрещён, ветку ${target} не трогай, лишних коммитов не создавай.`,
+    '6. Если при merge конфликтов не оказалось — просто сообщи об этом и ничего не коммить.',
     '',
     'В конце ответа кратко перечисли: какие файлы изменены, как решён каждый конфликт, что проверено, хэш последнего коммита.',
   ].join('\n');
