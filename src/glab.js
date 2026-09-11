@@ -8,6 +8,9 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
     if (host) args.push('--hostname', host);
     args.push(`projects/${encodeURIComponent(repo)}${path}`);
     if (method !== 'GET') args.push('-X', method);
+    // Тело только через stdin: --field ломает многострочный markdown, а на GET
+    // уходит в query независимо от --input, что нам как раз не надо.
+    if (input !== undefined) args.push('--input', '-');
     let lastErr;
     for (let attempt = 1; attempt <= retries; attempt++) {
       let out;
@@ -59,6 +62,30 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
     retryJob: (repo, jid) => api(repo, `/jobs/${jid}/retry`, { method: 'POST' }),
 
     createMRPipeline: (repo, iid) => api(repo, `/merge_requests/${iid}/pipelines`, { method: 'POST' }),
+
+    // Ответ в тред. Read-back обязателен: тихо потерянный ответ хуже явной ошибки.
+    async replyDiscussion(repo, iid, discussionId, body) {
+      const note = await api(repo, `/merge_requests/${iid}/discussions/${discussionId}/notes`, {
+        method: 'POST',
+        input: JSON.stringify({ body }),
+      });
+      if (!note?.id) throw new CliError(`Ответ в тред ${discussionId} не создан: GitLab не вернул заметку.`, 1, 'api_failed');
+      const back = await api(repo, `/merge_requests/${iid}/discussions/${discussionId}`);
+      if (!back?.notes?.some((n) => n.id === note.id)) {
+        throw new CliError(`Ответ в тред ${discussionId} отправлен, но при перечитывании его там нет.`, 1, 'api_failed');
+      }
+      return note;
+    },
+
+    // Резолв только query-параметром: --field resolved=true уходит в тело, GitLab его
+    // игнорирует и возвращает exit 0 — молчаливый no-op.
+    async resolveDiscussion(repo, iid, discussionId) {
+      await api(repo, `/merge_requests/${iid}/discussions/${discussionId}?resolved=true`, { method: 'PUT' });
+      const back = await api(repo, `/merge_requests/${iid}/discussions/${discussionId}`);
+      const resolved = back?.notes?.every((n) => n.system || n.resolved);
+      if (!resolved) throw new CliError(`Тред ${discussionId} не зарезолвился: после PUT он всё ещё открыт.`, 1, 'api_failed');
+      return back;
+    },
   };
 }
 
