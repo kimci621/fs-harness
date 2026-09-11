@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { createEventStream } from './agent/events.js';
-import { createRun, saveArtifact, readRun } from './agent/journal.js';
+import { createRun, saveArtifact, readRun, appendEvent } from './agent/journal.js';
 import { spawnAgent } from './agent/spawn.js';
 import { renderTemplate } from './prompts.js';
 import { judge, isApproved, formatVerdict } from './judge/index.js';
@@ -32,7 +32,11 @@ export function runAction(spec, ctx, input, opts = {}) {
   let meta = null;
   let keep = Boolean(opts.keepWorktree);
 
-  const emit = (ev) => events.push({ run: runDir?.id ?? null, ...ev });
+  const emit = (ev) => {
+    const full = { run: runDir?.id ?? null, ...ev };
+    appendEvent(runDir, full);
+    events.push(full);
+  };
   const x = {
     ctx,
     opts,
