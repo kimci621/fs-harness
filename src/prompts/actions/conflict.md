@@ -1,9 +1,9 @@
 ---
 id: conflict
-vars: [repo, mr_iid, mr_title, mr_url, source_branch, target_branch, conflict_files, conflict_count]
+vars: [repo, mr_iid, mr_title, mr_url, source_branch, target_branch, conflict_files, conflict_count, worktree, deps_available]
 judge: acceptance
 ---
-Ты работаешь в GitLab-проекте {{repo}}. Репозиторий уже склонирован в текущей директории — это временный git worktree с веткой на базе origin/{{source_branch}}.
+Ты работаешь в GitLab-проекте {{repo}}. Текущая директория {{worktree}} — временный git worktree с веткой на базе origin/{{source_branch}}. Основной чекаут проекта не трогай.
 
 Задача: решить конфликт в MR !{{mr_iid}} «{{mr_title}}» ({{mr_url}}), ветка {{source_branch}} → {{target_branch}}.
 
@@ -17,7 +17,8 @@ judge: acceptance
 Шаги:
 1. Выполни "git merge origin/{{target_branch}}" — конфликты появятся в твоей ветке.
 2. Реши каждый конфликт внимательно и вручную: сохрани корректную функциональность обеих веток. Критерии приёмки — рабочий код и в текущей ветке, и в dev, приоритет равный. Запрещено бездумно брать всё из одной стороны (ours/theirs) и делать force-push.
-3. Проверь, что код рабочий: просмотри конфликтные файлы; если в проекте есть линт и unit-тесты, прогони их (npm run lint, npm run test) перед коммитом.
+3. Проверь, что код рабочий: просмотри конфликтные файлы.
+{{#deps_available}}   Зависимости на месте: прогони линт и unit-тесты проекта (npm run lint, npm run test) перед коммитом.{{/deps_available}}{{^deps_available}}   node_modules недоступны (их нет или lock-файл ветки разошёлся с основным чекаутом). Линт и тесты НЕ прогоняй и не выдумывай их результат — напиши в итоге, что проверить сборкой не удалось.{{/deps_available}}
 4. Закоммить по правилам проекта: посмотри "git log --oneline -20" и повтори стиль сообщений коммита.
 5. НЕ пуши. Push сделает fs-harness сам — после того, как результат посмотрит судья. "git push" в любом виде запрещён, ветку {{target_branch}} не трогай, лишних коммитов не создавай.
 6. Если при merge конфликтов не оказалось — просто сообщи об этом и ничего не коммить.

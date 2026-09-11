@@ -7,6 +7,7 @@ export const RUNS_DIR = path.join(homedir(), '.local', 'state', 'fs-harness', 'r
 
 // Каталог рана. meta.json не для красоты: без него --judge-only не на чем работать.
 export function createRun(action, { root = RUNS_DIR } = {}) {
+  root = root || RUNS_DIR; // явный undefined из опций не должен обнулять дефолт
   const id = `${action}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const dir = path.join(root, id);
   mkdirSync(dir, { recursive: true });

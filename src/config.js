@@ -18,6 +18,10 @@ export const DEFAULTS = {
   },
   // Судья сменный, и профиль выбирается на каждую роль отдельно: роли различаются
   // по цене на порядки. Список у роли — фолбэк: первый ответивший выигрывает.
+  workspace: {
+    root: '~/.local/state/fs-harness/worktrees',
+    deps: { strategy: 'clone' },
+  },
   judge: {
     profiles: {
       'opus-cli': { provider: 'cli', bin: 'claude', model: 'opus', effort: 'xhigh' },
@@ -37,6 +41,7 @@ export function loadConfig(env = process.env) {
   const cfg = {
     ...DEFAULTS,
     agentArgs: { ...DEFAULTS.agentArgs },
+    workspace: { ...DEFAULTS.workspace, deps: { ...DEFAULTS.workspace.deps } },
     judge: { profiles: { ...DEFAULTS.judge.profiles }, roles: { ...DEFAULTS.judge.roles } },
   };
   if (existsSync(CONFIG_PATH)) {
@@ -47,6 +52,11 @@ export function loadConfig(env = process.env) {
       cfg.projectDir = user.projectDir || cfg.projectDir;
       cfg.agent = user.agent || cfg.agent;
       cfg.agentArgs = { ...cfg.agentArgs, ...(user.agentArgs || {}) };
+      cfg.workspace = {
+        ...cfg.workspace,
+        ...(user.workspace || {}),
+        deps: { ...cfg.workspace.deps, ...(user.workspace?.deps || {}) },
+      };
       cfg.judge = {
         profiles: { ...cfg.judge.profiles, ...(user.judge?.profiles || {}) },
         roles: { ...cfg.judge.roles, ...(user.judge?.roles || {}) },
