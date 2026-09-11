@@ -20,6 +20,7 @@ src/format.js           иконки статусов, humanize, таблицы,
 src/errors.js           CliError (сообщение без stack trace)
 src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, agent-guide, mr-comments, prompts
 src/jira.js             Jira REST только на чтение, fetch инжектируется (тесты)
+src/config.js           конфиг v1/v2, миграция v1 в памяти, выбор активного проекта
 src/secrets.js          ключи: env → keychain (security) → ошибка с командой заведения
 src/agent/spawn.js      запуск агента процессом: стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)

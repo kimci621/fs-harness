@@ -49,7 +49,7 @@ fsh config show
 
 - `repo` — дефолтный репозиторий (можно перебить флагом `-R` или env `GL_HELPER_REPO`).
 - `host` — **важно**: glab сам выбирает хост по git remote текущей директории. `fsh` всегда передаёт `--hostname` из конфига, чтобы команда работала из любой директории. Перебивается флагом `--host` или env `GL_HELPER_HOST`.
-- `projectDir` — проект: `conflict` и `threads` создают в нём временный worktree, `review` и `analyze` читают его как есть.
+- `projects` — проекты по имени: `repo`, `host`, `dir` (в нём `conflict` и `threads` создают временный worktree, а `review` и `analyze` читают его как есть), плюс необязательные `agent`, `buildJob`, `jira`, `deps`. Активный выбирается так: `-P <имя>` > `FS_HARNESS_PROJECT` > `activeProject` > единственный.
 - `jira` — `baseUrl`, `email`, `projectKey`. Токен не в конфиге, а в keychain: `security add-generic-password -s fs-harness -a jira -w '<токен>'`. Без токена работает всё, кроме `jira` и `analyze`.
 - `agent` / `agentArgs` — какой агент решает конфликты и с какими флагами (`claude` или `pi`, headless `-p`).
 - `judge` — профили судьи и назначение их на роли (см. раздел «Судья»).
@@ -74,10 +74,10 @@ fsh config show
 | `doctor` | Самодиагностика: программы (`git` ≥ 2.38, `glab` + авторизация, `claude`), конфиг, доступ к API, git-репозиторий, ключи и бэкенды судьи |
 | `agent-guide` | Полная инструкция для AI-агента: команды, флаги, env, JSON-схемы, коды ошибок |
 | `mcp` | MCP-сервер (stdio): те же команды как типизированные инструменты для AI-клиентов |
-| `config init\|show` | Конфиг |
+| `config init\|show\|migrate` | Конфиг: создать, показать активный проект, перевести старый файл на v2 (с бэкапом `.v1.bak`) |
 | `help` | Справка |
 
-Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show).
+Флаги: `-R/--repo`, `--host`, `-P/--project`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show).
 
 Примеры:
 
