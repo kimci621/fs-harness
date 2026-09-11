@@ -283,7 +283,9 @@ export const conflictAction = {
     async context(x) {},    // → плоский объект переменных промпта
     goal(x) {},             // одна фраза «что просили» — уходит судье
     async verify(x) {},     // после агента, до судьи → механические факты
-    async publish(x) {},    // ТОЛЬКО после approve: push + build + reply/resolve
+    judgeExtra(x) {},       // необяз.: материал действия судье (тексты тредов и ответы)
+    judgePayload(x) {},     // необяз.: собрать payload целиком (роль mr-review вместо acceptance)
+    async publish(x) {},    // необяз. у читающих; ТОЛЬКО после approve: push + build + reply/resolve
     result(x) {},           // финальный объект для --json
   },
 };
