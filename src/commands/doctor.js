@@ -72,6 +72,12 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject } = {})
     }
   }
 
+  // Mattermost проверяется по форме адреса: doctor не шлёт сообщений в чужой канал.
+  if (cfg?.mattermost?.webhook) {
+    const ok = /^https?:\/\/.+\/hooks\/.+/.test(cfg.mattermost.webhook);
+    add('mattermost', ok, ok ? 'webhook задан' : 'webhook не похож на incoming webhook (…/hooks/<id>)');
+  }
+
   // Судью проверяем только по профилям, реально назначенным ролям: про остальные молчим.
   for (const name of [...new Set(Object.values(cfg?.judge?.roles ?? {}).flat())]) {
     const p = cfg?.judge?.profiles?.[name];

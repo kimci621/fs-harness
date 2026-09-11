@@ -29,6 +29,8 @@ export const DEFAULTS = {
     root: '~/.local/state/fs-harness/worktrees',
     deps: { strategy: 'clone' },
   },
+  // Пустой webhook — уведомления просто не шлются: интеграция необязательная.
+  mattermost: { webhook: '' },
   // Судья сменный, и профиль выбирается на каждую роль отдельно: роли различаются
   // по цене на порядки. Список у роли — фолбэк: первый ответивший выигрывает.
   judge: {
@@ -125,6 +127,7 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
       ...(v2.workspace || {}),
       deps: { ...DEFAULTS.workspace.deps, ...(v2.workspace?.deps || {}), ...(p.deps || {}) },
     },
+    mattermost: { ...DEFAULTS.mattermost, ...(v2.mattermost || {}), ...(p.mattermost || {}) },
     judge: {
       ...DEFAULTS.judge,
       ...(v2.judge || {}),

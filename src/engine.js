@@ -13,6 +13,7 @@ import { expandHome } from './config.js';
 import { acquireWorkspace, MODES as ISOLATION_MODES } from './workspace.js';
 import { confirm } from './ui.js';
 import { makeLogger, finish } from './output.js';
+import { postMattermost, runMessage } from './notify.js';
 import { CliError } from './errors.js';
 
 export { ISOLATION_MODES };
@@ -69,17 +70,40 @@ export function runAction(spec, ctx, input, opts = {}) {
   };
 
   const result = go().then(
-    (res) => {
+    async (res) => {
+      await notify(true);
       emit({ t: 'done', ok: true, result: res });
       events.close();
       return res;
     },
-    (err) => {
+    async (err) => {
+      await notify(false, err);
       emit({ t: 'error', code: err.code ?? 'failed', message: err.message });
       events.close();
       throw err;
     },
   );
+
+  // Уведомление о завершении рана. Не настроен webhook — молчим; упал POST — это строка
+  // в логе, а не провал действия: работа агента уже сделана.
+  async function notify(ok, err) {
+    const webhook = opts.cfg?.mattermost?.webhook;
+    if (!webhook || !runDir) return;
+    const text = runMessage({
+      action: spec.name,
+      target: x.target?.iid ? `!${x.target.iid}` : x.target?.key ?? '',
+      ok,
+      cost: x.verdict?.meta?.cost ?? 0,
+      verdict: x.verdict,
+      error: err?.message,
+      url: x.target?.web_url ?? null,
+    });
+    try {
+      await postMattermost(webhook, text, { fetchImpl: opts.fetchImpl, signal: ac.signal });
+    } catch (e) {
+      emit({ t: 'log', stream: 'stderr', text: `⚠ Уведомление не ушло: ${e.message}` });
+    }
+  }
 
   async function go() {
     try {

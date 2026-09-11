@@ -161,3 +161,25 @@ test('judge.enabled=false — приёмки нет, как при --no-judge', 
   assert.deepEqual(published, ['push']);
   assert.equal(res.decision, null);
 });
+
+test('mattermost: по завершении уходит одна строка с вердиктом и ценой', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => { calls.push({ url, body: JSON.parse(init.body) }); return { ok: true, status: 200 }; };
+  const o = opts({ makeProvider: fakeJudge('approve'), fetchImpl });
+  o.cfg.mattermost = { webhook: 'https://mm.example/hooks/abc' };
+  await runAction(spec([]), {}, {}, o).result;
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://mm.example/hooks/abc');
+  assert.match(calls[0].body.text, /^✅ gate-test · судья: approve/);
+});
+
+test('mattermost: отказ вебхука не валит ран, а попадает в лог', async () => {
+  const o = opts({ makeProvider: fakeJudge('approve'), fetchImpl: async () => ({ ok: false, status: 500 }) });
+  o.cfg.mattermost = { webhook: 'https://mm.example/hooks/abc' };
+  const run = runAction(spec([]), {}, {}, o);
+  const logs = [];
+  run.on((ev) => { if (ev.t === 'log') logs.push(ev.text); });
+  const res = await run.result;
+  assert.equal(res.decision, 'approve');
+  assert.ok(logs.some((l) => l.includes('Уведомление не ушло') && l.includes('500')), logs.join('\n'));
+});

@@ -22,6 +22,7 @@ src/commands/*.js       по файлу на команду: mrs, mr, jobs, run,
 src/jira.js             Jira REST только на чтение, fetch инжектируется (тесты)
 src/config.js           конфиг v1/v2, миграция v1 в памяти, выбор активного проекта
 src/secrets.js          ключи: env → keychain (security) → ошибка с командой заведения
+src/notify.js           уведомления в Mattermost: runMessage + POST в incoming webhook, fetch инжектируется
 src/agent/spawn.js      запуск агента процессом: стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
 src/agent/journal.js    раны в ~/.local/state/fs-harness/runs/<id>/
