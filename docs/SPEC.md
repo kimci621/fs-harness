@@ -31,11 +31,11 @@ CLI-обёртка над `glab` для повседневной работы с
 
 ## Конфликт: цепочка
 
-1. Резолв MR, проверка `has_conflicts`. Нет конфликта → сообщить и выйти.
-2. `git fetch origin <source> <target>` в `projectDir` из конфига.
+1. Резолв MR, `git fetch origin <source> <target>` в `projectDir` из конфига.
+2. `git merge-tree --write-tree --name-only --no-messages origin/<target> origin/<source>`: exit 1 → конфликт, exit 0 → чисто. Первая строка stdout — OID дерева, отбрасывается; остальные строки — конфликтующие файлы. Нет конфликта → сообщить и выйти. Поле `has_conflicts` из GitLab не используется: при `unchecked` оно врёт.
 3. Временный worktree: `$projectDir/.worktrees/gl-helper-<iid>-<ts>` (detached от `origin/<source>`), внутри — ветка `gl-helper/<iid>-<ts>`.
 4. Агент (claude или pi, headless `-p`) работает **только внутри worktree**, cwd = worktree. Промпт (утверждён):
-   - данные MR: номер, URL, ветки `source→target`, worktree уже готов;
+   - данные MR: номер, URL, ветки `source→target`, worktree уже готов, список конфликтующих файлов;
    - шаги: `git merge origin/<target>`, решить конфликты вручную, сохраняя функциональность обеих веток (приоритет равный), запрещены «взять всё ours/theirs» и force-push;
    - верификация: линт и unit-тесты проекта перед коммитом;
    - коммит по правилам проекта (посмотреть `git log` и повторить стиль);
