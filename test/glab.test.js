@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGlab } from '../src/glab.js';
+import { createGlab, defaultRun } from '../src/glab.js';
 import { CliError } from '../src/errors.js';
 
 // Мок: перехватывает вызовы и отдаёт ответы по порядку.
 function fakeRun(responses) {
   const calls = [];
-  const run = (bin, args) => {
-    calls.push({ bin, args });
+  const run = (bin, args, opts = {}) => {
+    calls.push({ bin, args, opts });
     const r = responses.shift();
     if (r instanceof Error) {
       const err = new Error('exit 1');
@@ -48,4 +48,19 @@ test('api: retry при флапе — второй ответ побеждае�
   const mrs = await g.listOpenMRs('r/repo');
   assert.equal(mrs.length, 1);
   assert.equal(calls.length, 2);
+});
+
+test('api: input прокидывается в run — тело запроса уходит в stdin', async () => {
+  const { run, calls } = fakeRun([{ id: 'n1' }]);
+  const g = createGlab(run);
+  await g.api('r/repo', '/merge_requests/1/discussions/abc/notes', { method: 'POST', input: '{"body":"многострочный\nmarkdown"}' });
+  assert.equal(calls[0].opts.input, '{"body":"многострочный\nmarkdown"}');
+});
+
+test('defaultRun: input доезжает до stdin процесса', () => {
+  assert.equal(defaultRun('cat', [], { input: 'первая\nвторая\n' }), 'первая\nвторая\n');
+});
+
+test('defaultRun: без input stdin закрыт и процесс не виснет', () => {
+  assert.equal(defaultRun('cat', []), '');
 });

@@ -3,7 +3,7 @@ import { CliError } from './errors.js';
 
 // Все обращения к GitLab идут через `glab api` (JSON). exec инжектируется для тестов.
 export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
-  const api = async (repo, path, { method = 'GET', retries = method === 'GET' ? 5 : 2 } = {}) => {
+  const api = async (repo, path, { method = 'GET', retries = method === 'GET' ? 5 : 2, input } = {}) => {
     const args = ['api'];
     if (host) args.push('--hostname', host);
     args.push(`projects/${encodeURIComponent(repo)}${path}`);
@@ -12,7 +12,7 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
     for (let attempt = 1; attempt <= retries; attempt++) {
       let out;
       try {
-        out = run('glab', args);
+        out = run('glab', args, { input });
       } catch (err) {
         lastErr = err;
         const stderr = String(err.stderr || err.message || '').trim();
@@ -62,11 +62,14 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
   };
 }
 
-export function defaultRun(bin, args) {
+// input — тело запроса в stdin (для `glab api --input -`): многострочный markdown
+// иначе не проходит через --field.
+export function defaultRun(bin, args, { input } = {}) {
   return execFileSync(bin, args, {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    input,
   });
 }
 
