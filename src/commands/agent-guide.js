@@ -39,6 +39,8 @@ deploy:  {ok, mr, pipeline:{id,status,web_url}, build:{...}, deploy:{...}}
 conflict:{ok, run, mr, head_sha, commits_ahead, conflict_files:[...],
           judge:{decision,confidence,summary,profile,cost}|{skipped:true},
           pipeline:{...}, build:{...}}
+threads: {ok, run, mr, head_sha, commits_ahead, threads_open, replied:[id], resolved:[id],
+          judge:{...}|{skipped:true}}
 commit:  {ok, dir, branch, commit:{hash,message}}
 prompts: {ok, prompts:[{name,source,overridden,vars}]} | {ok, name, source, body|text}
 doctor:  {ok, checks:[{name,ok,critical,detail}]}
@@ -60,6 +62,9 @@ judge_rubric_missing, secret_missing, run_not_found, run_incomplete.
   невалидный ответ судьи или падение его бэкенда = гейт закрыт (judge_rejected, judge_schema,
   judge_failed). При любом провале после запуска агента worktree сохранён, путь к нему в
   сообщении. Дальше fsh сам запускает build.
+- threads: те же правила, что у conflict (worktree, гейт судьи, push силами fsh). Агент правит код
+  по нерешённым тредам ревью и пишет тексты ответов; отправку ответов и резолв тредов делает fsh
+  после approve. Коммитов может не быть — тред мог требовать только ответа, это не провал.
 - Каждый прогон conflict пишется в ~/.local/state/fs-harness/runs/<runId>/ (meta.json, prompt.md,
   agent.txt, diff.patch, verdict.json, result.json). fsh conflict --judge-only <runId> пересудит
   сохранённый прогон, ничего не запуская заново.
