@@ -13,6 +13,8 @@
     "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
+    "gray-matter": "^4.0.3",
+    "mustache": "^4.2.0",
     "openai": "^7.15.0",
     "zod": "^4.6.2"
   },
