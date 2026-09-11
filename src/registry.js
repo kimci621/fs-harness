@@ -13,6 +13,7 @@ import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { cmdPrompts } from './commands/prompts.js';
 import { cmdJira } from './commands/jira.js';
+import { cmdWatch } from './commands/watch.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
 import { readSecret } from './secrets.js';
@@ -256,6 +257,13 @@ export const COMMANDS = [
     description: 'Настроить/показать конфиг, перевести его на v2 (проекты)',
     example: 'fsh config show',
     run: (ctx, args, opts) => cmdConfig(args, opts),
+  },
+  {
+    name: 'watch',
+    usage: 'watch',
+    description: 'Что изменилось в MR с прошлого опроса: триаж судьёй и уведомление в Mattermost',
+    example: 'fsh watch',
+    run: (ctx, args, opts) => withProject(ctx, () => cmdWatch(ctx, { json: opts.json })),
   },
   {
     name: 'tui',
