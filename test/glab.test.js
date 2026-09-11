@@ -19,6 +19,12 @@ function fakeRun(responses) {
   return { run, calls };
 }
 
+// fakeRun + готовый g: в новых тестах нужен именно так.
+function fake(responses) {
+  const { run, calls } = fakeRun(responses);
+  return { g: createGlab(run, { sleepMs: 0 }), calls };
+}
+
 test('api: кодирует repo и строит URL', () => {
   const { run, calls } = fakeRun([[]]);
   const g = createGlab(run);
@@ -63,4 +69,39 @@ test('defaultRun: input доезжает до stdin процесса', () => {
 
 test('defaultRun: без input stdin закрыт и процесс не виснет', () => {
   assert.equal(defaultRun('cat', []), '');
+});
+
+test('api: input добавляет --input - в аргументы glab', async () => {
+  const { g, calls } = fake([{}]);
+  await g.api('r/repo', '/x', { method: 'POST', input: '{"body":"текст"}' });
+  assert.ok(calls[0].args.includes('--input'), '--input в аргументах');
+  assert.equal(calls[0].args[calls[0].args.indexOf('--input') + 1], '-');
+  const plain = fake([{}]);
+  await plain.g.api('r/repo', '/x');
+  assert.equal(plain.calls[0].args.includes('--input'), false);
+});
+
+test('replyDiscussion: read-back ловит потерянный ответ', async () => {
+  const ok = fake([{ id: 42 }, { notes: [{ id: 42, body: 'ответ' }] }]);
+  assert.equal((await ok.g.replyDiscussion('r/repo', 1, 'abc', 'ответ')).id, 42);
+  assert.equal(ok.calls[0].opts.input, JSON.stringify({ body: 'ответ' }));
+
+  const lost = fake([{ id: 42 }, { notes: [] }]);
+  await assert.rejects(
+    () => lost.g.replyDiscussion('r/repo', 1, 'abc', 'ответ'),
+    (e) => e.code === 'api_failed' && /перечитыван/.test(e.message),
+  );
+});
+
+test('resolveDiscussion: резолв идёт query-параметром, а результат перечитывается', async () => {
+  const ok = fake([{}, { notes: [{ id: 1, resolved: true }, { id: 2, system: true }] }]);
+  await ok.g.resolveDiscussion('r/repo', 1, 'abc');
+  assert.ok(ok.calls[0].args.some((a) => a.endsWith('/discussions/abc?resolved=true')), 'resolved в query');
+  assert.ok(ok.calls[0].args.includes('PUT'));
+
+  const noop = fake([{}, { notes: [{ id: 1, resolved: false }] }]);
+  await assert.rejects(
+    () => noop.g.resolveDiscussion('r/repo', 1, 'abc'),
+    (e) => e.code === 'api_failed' && /всё ещё открыт/.test(e.message),
+  );
 });
