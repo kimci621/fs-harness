@@ -7,7 +7,7 @@ import { commitPrompt } from '../prompts.js';
 import { confirm } from '../ui.js';
 import { makeLogger, finish } from '../output.js';
 
-// gl-helper commit [--agent claude|pi] [--project-dir <dir>] [-y] [--dry-run]
+// fsh commit [--agent claude|pi] [--project-dir <dir>] [-y] [--dry-run]
 // Агент формирует сообщение коммита по паттерну (.llm-commit-pattern или встроенный)
 // и коммитит все изменения. Push НЕ делает.
 export async function cmdCommit(args, opts = {}) {

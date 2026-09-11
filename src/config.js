@@ -7,7 +7,7 @@ export const CONFIG_PATH = path.join(homedir(), '.config', 'gl-helper', 'config.
 
 export const DEFAULTS = {
   // Пустые значения — намеренно: инструмент не привязан к конкретному GitLab.
-  // Заполняются через gl-helper config init, конфиг или env (GL_HELPER_REPO / GL_HELPER_HOST).
+  // Заполняются через fsh config init, конфиг или env (GL_HELPER_REPO / GL_HELPER_HOST).
   repo: process.env.GL_HELPER_REPO || '',
   host: process.env.GL_HELPER_HOST || '',
   projectDir: '',

@@ -21,7 +21,7 @@ export async function handleMessage(method, params, ctx) {
       return {
         protocolVersion: SUPPORTED_PROTOCOLS.includes(params?.protocolVersion) ? params.protocolVersion : '2024-11-05',
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'gl-helper', version: VERSION },
+        serverInfo: { name: 'fs-harness', version: VERSION },
       };
     case 'ping':
       return {};

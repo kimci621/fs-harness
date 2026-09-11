@@ -38,7 +38,7 @@ export const COMMANDS = [
     name: 'mrs',
     usage: 'mrs',
     description: 'Все открытые MR: название, ветки, пайплайн, комменты, конфликты',
-    example: 'gl-helper mrs',
+    example: 'fsh mrs',
     run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMRS(ctx.g, ctx.repo, { json: opts.json })),
     mcp: {
       description: 'Список всех открытых MR: название, ветки, статус пайплайна, комментарии, конфликты. Только чтение.',
@@ -50,7 +50,7 @@ export const COMMANDS = [
     name: 'mr',
     usage: 'mr <ветка|номер>',
     description: 'Один MR в том же формате (часть имени ветки, неточный поиск)',
-    example: 'gl-helper mr special-offer',
+    example: 'fsh mr special-offer',
     run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMR(ctx.g, ctx.repo, args[0], { json: opts.json })),
     mcp: {
       description: 'Один MR по номеру (!2547, 2547) или части имени ветки (неточный поиск). Только чтение.',
@@ -66,7 +66,7 @@ export const COMMANDS = [
     name: 'mr-comments',
     usage: 'mr-comments <mr|ветка>',
     description: 'Комментарии MR (--resolved / --open)',
-    example: 'gl-helper mr-comments fix/main-banner -open',
+    example: 'fsh mr-comments fix/main-banner -open',
     run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMRComments(ctx.g, ctx.repo, args, { json: opts.json, resolved: opts.resolved, open: opts.open })),
     mcp: {
       description: 'Комментарии MR, сгруппированные по тредам. filter: all — все, resolved — только решённые, open — нерешённые. Только чтение.',
@@ -88,7 +88,7 @@ export const COMMANDS = [
     name: 'jobs',
     usage: 'jobs <mr|ветка>',
     description: 'Джобы последнего MR-пайплайна',
-    example: 'gl-helper jobs fix/main-banner',
+    example: 'fsh jobs fix/main-banner',
     run: (ctx, args, opts) => withRepoHost(ctx, () => cmdJobs(ctx.g, ctx.repo, args[0], { json: opts.json })),
     mcp: {
       description: 'Джобы последнего MR-пайплайна: stage, имя, статус, id. Только чтение.',
@@ -104,7 +104,7 @@ export const COMMANDS = [
     name: 'run',
     usage: 'run <джоба> <mr|ветка>',
     description: 'Запустить manual-джобу (по имени или id)',
-    example: 'gl-helper run build_image fix/main-banner -w',
+    example: 'fsh run build_image fix/main-banner -w',
     run: (ctx, args, opts) => withRepoHost(ctx, () => cmdRun(ctx.g, ctx.repo, args, { json: opts.json, watch: opts.watch, dryRun: opts.dryRun })),
     mcp: {
       description: 'Запустить джобу (по имени или id) в последнем MR-пайплайне: manual → play, failed/canceled → retry. watch=true — дождаться завершения. Меняет состояние GitLab.',
@@ -126,7 +126,7 @@ export const COMMANDS = [
     name: 'deploy',
     usage: 'deploy <mr|ветка> [N]',
     description: 'build → ждать → deploy_dev (или deploy_dev2…10) → ждать',
-    example: 'gl-helper deploy feat/premium-banner 3',
+    example: 'fsh deploy feat/premium-banner 3',
     run: (ctx, args, opts) => withRepoHost(ctx, () => cmdDeploy(ctx.g, ctx.repo, args, {
       json: opts.json, buildJob: opts.buildJob, rebuild: opts.rebuild, dryRun: opts.dryRun,
     })),
@@ -152,7 +152,7 @@ export const COMMANDS = [
     name: 'conflict',
     usage: 'conflict <mr|ветка>',
     description: 'Решить конфликт силами AI-агента и запустить build',
-    example: 'gl-helper conflict !2547 --agent pi',
+    example: 'fsh conflict !2547 --agent pi',
     run: (ctx, args, opts) => withRepoHost(ctx, () => {
       const agent = opts.agent || ctx.cfg.agent;
       return cmdConflict(ctx.g, ctx.repo, args, {
@@ -189,7 +189,7 @@ export const COMMANDS = [
     name: 'commit',
     usage: 'commit [--agent]',
     description: 'Сформировать и сделать коммит по паттерну (агент, без push)',
-    example: 'gl-helper commit --agent pi',
+    example: 'fsh commit --agent pi',
     run: (ctx, args, opts) => {
       const agent = opts.agent || ctx.cfg.agent;
       return cmdCommit(args, {
@@ -223,7 +223,7 @@ export const COMMANDS = [
     name: 'doctor',
     usage: 'doctor',
     description: 'Самодиагностика: glab, конфиг, API, git, агенты',
-    example: 'gl-helper doctor',
+    example: 'fsh doctor',
     run: (ctx, args, opts) => cmdDoctor({
       repo: opts.repo || ctx.cfg.repo,
       host: opts.host || ctx.cfg.host,
@@ -240,10 +240,10 @@ export const COMMANDS = [
     name: 'agent-guide',
     usage: 'agent-guide',
     description: 'Полная инструкция для AI-агентов (что читать первой)',
-    example: 'gl-helper agent-guide',
+    example: 'fsh agent-guide',
     run: () => cmdAgentGuide(COMMANDS),
     mcp: {
-      description: 'Полная инструкция по работе с gl-helper: команды, флаги, JSON-схемы, коды ошибок. Вызови первой, если не знаешь, как работать с инструментами.',
+      description: 'Полная инструкция по работе с fsh: команды, флаги, JSON-схемы, коды ошибок. Вызови первой, если не знаешь, как работать с инструментами.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       call: () => ({ ok: true, guide: buildAgentGuide(COMMANDS) }),
     },
@@ -252,14 +252,14 @@ export const COMMANDS = [
     name: 'config',
     usage: 'config init|show',
     description: 'Настроить/показать ~/.config/gl-helper/config.json',
-    example: 'gl-helper config init',
+    example: 'fsh config init',
     run: (ctx, args) => cmdConfig(args),
   },
   {
     name: 'mcp',
     usage: 'mcp',
     description: 'MCP-сервер (stdio): инструменты для AI-клиентов',
-    example: 'claude mcp add gl-helper -- gl-helper mcp',
+    example: 'claude mcp add fs-harness -- fsh mcp',
     run: async () => (await import('./mcp.js')).runMCPServer(),
   },
 ];
@@ -273,7 +273,7 @@ export function findCommand(name) {
 export function withRepoHost(ctx, fn) {
   if (!ctx.repo || !ctx.cfg.host) {
     throw new CliError(
-      'Репозиторий или хост GitLab не настроены. Выполни gl-helper config init и заполни конфиг, или передай -R <repo> --host <host>.',
+      'Репозиторий или хост GitLab не настроены. Выполни fsh config init и заполни конфиг, или передай -R <repo> --host <host>.',
       1,
       'config_invalid',
     );

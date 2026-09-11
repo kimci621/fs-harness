@@ -4,10 +4,10 @@ import { CliError } from '../errors.js';
 import { waitJob } from '../ui.js';
 import { makeLogger, finish, jobJSON } from '../output.js';
 
-// gl-helper run <джоба> <mr|ветка> [--watch] [--dry-run]
+// fsh run <джоба> <mr|ветка> [--watch] [--dry-run]
 export async function cmdRun(g, repo, args, { json, watch, dryRun = false, asObject, quiet = false, onTick } = {}) {
   const [jobQuery, mrQuery] = args;
-  if (!jobQuery || !mrQuery) throw new CliError('Использование: gl-helper run <джоба|id> <mr|ветка> [--watch]', 1, 'usage');
+  if (!jobQuery || !mrQuery) throw new CliError('Использование: fsh run <джоба|id> <mr|ветка> [--watch]', 1, 'usage');
 
   const log = asObject ? () => {} : makeLogger(json);
   const mr = await resolveMR(g, repo, mrQuery);

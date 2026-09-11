@@ -37,7 +37,7 @@ test('registry: mcpTools отдаёт только инструменты с mcp
 test('registry: agent-guide содержит все команды', () => {
   const guide = buildAgentGuide(COMMANDS);
   for (const c of COMMANDS.filter((x) => x.name !== 'mcp')) {
-    assert.ok(guide.includes(`gl-helper ${c.usage}`), `guide содержит ${c.name}`);
+    assert.ok(guide.includes(`fsh ${c.usage}`), `guide содержит ${c.name}`);
   }
 });
 

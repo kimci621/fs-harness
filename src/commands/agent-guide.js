@@ -1,8 +1,8 @@
-// gl-helper agent-guide — самодостаточная инструкция для AI-агента.
+// fsh agent-guide — самодостаточная инструкция для AI-агента.
 // Список команд генерируется из реестра (src/registry.js), чтобы не рассинхронизироваться.
 // Агент запускает эту команду первой и получает всё, что нужно для работы.
 
-const GUIDE_TEMPLATE = `gl-helper — CLI для работы с GitLab (MR, пайплайны, деплой, конфликты, коммиты).
+const GUIDE_TEMPLATE = `fsh — CLI для работы с GitLab (MR, пайплайны, деплой, конфликты, коммиты).
 Обёртка над glab; все данные — JSON через API.
 
 ## Команды
@@ -21,7 +21,7 @@ const GUIDE_TEMPLATE = `gl-helper — CLI для работы с GitLab (MR, п�
 
 ## Рекомендуемый порядок работы
 
-1. gl-helper doctor — убедиться, что окружение готово (иначе чинить по выводу).
+1. fsh doctor — убедиться, что окружение готово (иначе чинить по выводу).
 2. read-команды (mrs, mr, mr-comments, jobs) — узнать состояние.
 3. side-effect команды сначала с --dry-run, показать план человеку, затем выполнить.
 
@@ -50,7 +50,7 @@ config_invalid, canceled.
 - deploy сам ждёт build и deploy-джобы (опрос 5с, live-статус в stderr), exit 0 только при success.
 - deploy с --rebuild перезапускает джобы даже при success (retry, новый id) — перезапись слота.
 - conflict: работу с git делает АГЕНТ (claude|pi headless) во временном worktree проекта,
-  gl-helper проверяет push и сам запускает build. Worktree удаляется автоматически.
+  fsh проверяет push и сам запускает build. Worktree удаляется автоматически.
 - commit: агент коммитит по паттерну "<ветка> <тип>(<область>): <описание>"; если в корне
   репозитория есть .llm-commit-pattern — паттерн берётся из него. Push не делается.
 - git-операции конфликта делаются только в ветке MR (source), target не трогается, force-push запрещён.
@@ -60,7 +60,7 @@ config_invalid, canceled.
 export function buildAgentGuide(commands) {
   const lines = commands
     .filter((c) => c.name !== 'mcp')
-    .map((c) => `  gl-helper ${c.usage.padEnd(24)} ${c.description}`)
+    .map((c) => `  fsh ${c.usage.padEnd(24)} ${c.description}`)
     .join('\n');
   return GUIDE_TEMPLATE.replace('{{COMMANDS}}', lines);
 }

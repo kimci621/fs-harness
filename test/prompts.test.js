@@ -6,7 +6,7 @@ import path from 'node:path';
 import { commitPrompt, findPatternFile } from '../src/prompts.js';
 
 function makeRepo(files = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'gl-helper-test-'));
+  const dir = mkdtempSync(path.join(tmpdir(), 'fsh-test-'));
   mkdirSync(path.join(dir, '.git'));
   for (const [name, content] of Object.entries(files)) {
     writeFileSync(path.join(dir, name), content);
