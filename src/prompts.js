@@ -105,3 +105,37 @@ export function commitPrompt(startDir) {
   const { source, text } = renderTemplate('commit', { pattern }, { projectDir: startDir });
   return { source: file ?? source, prompt: text };
 }
+
+// Статическая проверка всех шаблонов: front-matter против тела. Гоняется в npm test,
+// чтобы правка промпта (в том числе проектным оверрайдом) не уехала молча.
+export function checkTemplates({ projectDir } = {}) {
+  const problems = [];
+  for (const { name } of listTemplates({ projectDir })) {
+    let tpl;
+    try {
+      tpl = loadTemplate(name, { projectDir });
+    } catch (err) {
+      problems.push({ name, source: '?', level: 'error', message: err.message });
+      continue;
+    }
+    let used;
+    try {
+      used = [...new Set(tags(Mustache.parse(tpl.body)))];
+    } catch (err) {
+      problems.push({ name, source: tpl.source, level: 'error', message: `не парсится как mustache: ${err.message}` });
+      continue;
+    }
+    const declared = Array.isArray(tpl.meta.vars) ? tpl.meta.vars : null;
+    if (!declared) {
+      if (used.length) problems.push({ name, source: tpl.source, level: 'error', message: `использует ${used.map((v) => `{{${v}}}`).join(', ')}, но не объявляет vars во front-matter` });
+      continue;
+    }
+    for (const v of used.filter((v) => !declared.includes(v))) {
+      problems.push({ name, source: tpl.source, level: 'error', message: `использует {{${v}}}, не объявленную в vars` });
+    }
+    for (const v of declared.filter((v) => !used.includes(v))) {
+      problems.push({ name, source: tpl.source, level: 'warn', message: `объявляет ${v} в vars, но нигде её не использует` });
+    }
+  }
+  return problems;
+}
