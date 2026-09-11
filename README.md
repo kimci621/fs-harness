@@ -1,10 +1,10 @@
 # FS-Harness
 
-Персональный харнесс разработчика. Сейчас это `fsh` — CLI-обёртка над [`glab`](https://gitlab.com/gitlab-org/cli) для повседневной работы с merge request'ами и пайплайнами GitLab: детерминированный вывод, режим `--json`, понятные ошибки, живой прогресс. Ей одинаково удобно пользуются люди и AI-агенты.
+Персональный харнесс разработчика. `fsh` — это повседневная работа с merge request'ами и пайплайнами GitLab поверх [`glab`](https://gitlab.com/gitlab-org/cli) плюс запуск AI-агента на конфликтах с приёмкой результата судьёй: детерминированный вывод, режим `--json`, понятные ошибки, живой прогресс. Им одинаково удобно пользуются люди и AI-агенты.
 
 Куда растёт — в [PLAN.md](PLAN.md): движок «действие → контекстный промпт → запуск агента → проверка судьёй», TUI, Jira.
 
-Зависимости ставятся через `npm ci`; из внешних программ нужны только `node` (≥22), `glab`, `git`.
+Зависимости ставятся через `npm ci`; из внешних программ нужны только `node` (≥22), `git` (≥2.38), `glab` и `claude` (агент и судья). `pi` и локальная LM Studio опциональны.
 
 ## Установка
 
@@ -13,7 +13,7 @@ git clone https://github.com/kimci621/fs-harness.git ~/Projects/FS-Harness
 cd ~/Projects/FS-Harness
 npm ci            # зависимости
 npm link          # ставит `fsh` в PATH
-npm test          # 45 тестов, сеть не нужна
+npm test          # 73 теста, сеть не нужна
 ```
 
 `glab` должен быть залогинен на нужный GitLab-хост:
@@ -35,7 +35,14 @@ fsh config show
   "host": "ваш.gitlab.example.com",
   "projectDir": "~/Projects/ваш-проект",
   "agent": "claude",
-  "agentArgs": { "claude": ["--dangerously-skip-permissions"], "pi": [] }
+  "agentArgs": { "claude": ["--dangerously-skip-permissions"], "pi": [] },
+  "judge": {
+    "profiles": {
+      "opus-cli": { "provider": "cli", "bin": "claude", "model": "opus", "effort": "xhigh" },
+      "local": { "provider": "openai", "baseUrl": "http://127.0.0.1:1234/v1", "model": "local-model" }
+    },
+    "roles": { "acceptance": ["opus-cli"] }
+  }
 }
 ```
 
@@ -43,6 +50,7 @@ fsh config show
 - `host` — **важно**: glab сам выбирает хост по git remote текущей директории. `fsh` всегда передаёт `--hostname` из конфига, чтобы команда работала из любой директории. Перебивается флагом `--host` или env `GL_HELPER_HOST`.
 - `projectDir` — проект, в котором `conflict` создаёт временный worktree.
 - `agent` / `agentArgs` — какой агент решает конфликты и с какими флагами (`claude` или `pi`, headless `-p`).
+- `judge` — профили судьи и назначение их на роли (см. раздел «Судья»).
 
 ## Команды
 
@@ -50,19 +58,19 @@ fsh config show
 |---|---|
 | `mrs` | Все открытые MR: название, ветки `from→to`, статус пайплайна, комменты (всего / открытых тредов / решённых), конфликт ✅/⚠ |
 | `mr <ветка\|номер>` | Один MR в том же формате. Ветку можно вводить частично и с ошибками — `mr banner-fl` найдёт `fix/main-banner-flicker`. Принимает `!2547` и `2547` |
-| `conflict <mr\|ветка>` | Решает конфликт силами AI-агента в отдельном worktree, пушит в ветку MR и сам запускает build (подробнее ниже) |
+| `conflict <mr\|ветка>` | Решает конфликт силами AI-агента в отдельном worktree, отдаёт результат судье и пушит только после `approve`, затем запускает build (подробнее ниже) |
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id |
 | `mr-comments <mr\|ветка>` | Комментарии MR по тредам: `--resolved` — только решённые, `-open` — только нерешённые |
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
 | `deploy <ветка\|mr> [N]` | build → ждать ✅ → запустить `deploy_dev` (или `deploy_dev2`…`deploy_dev10`) → ждать итог. С `--rebuild` — перезапускает build и deploy даже при success (когда кто-то перезаписал слот своим MR) |
 | `commit` | Агент формирует сообщение коммита по паттерну и коммитит все изменения (без push). Паттерн — встроенный или из `.llm-commit-pattern` проекта |
-| `doctor` | Самодиагностика: glab, конфиг, доступ к API, git-репозиторий, агенты |
+| `doctor` | Самодиагностика: программы (`git` ≥ 2.38, `glab` + авторизация, `claude`), конфиг, доступ к API, git-репозиторий, ключи и бэкенды судьи |
 | `agent-guide` | Полная инструкция для AI-агента: команды, флаги, env, JSON-схемы, коды ошибок |
 | `mcp` | MCP-сервер (stdio): те же команды как типизированные инструменты для AI-клиентов |
 | `config init\|show` | Конфиг |
 | `help` | Справка |
 
-Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/conflict/commit — план без запусков).
+Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/conflict/commit — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (conflict).
 
 Примеры:
 
@@ -82,13 +90,42 @@ fsh -R other/repo mrs --json          # JSON для агентов/скрипт�
 ## Команда conflict
 
 1. `git fetch` обеих веток и `git merge-tree` — конфликт определяется локально и точно, вместе со списком конфликтующих файлов. Поле `has_conflicts` из GitLab для этого не годится: при статусе `unchecked` оно показывает «конфликтов нет». Конфликта нет — сообщает и выходит.
-2. Создаёт временный worktree `$projectDir/.worktrees/gl-helper-<iid>-<ts>` от `origin/<source-ветки>`.
-3. Запускает агента (`claude` или `pi`, неинтерактивно) внутри worktree с промптом, в котором уже подставлен список конфликтующих файлов: сделать `git merge origin/<target>`, решить конфликты вручную, сохранив логику **обеих** веток (приоритет равный), запрещены «взять всё ours/theirs» и force-push, прогнать линт/тесты, закоммитить по стилю проекта, запушить `git push origin HEAD:<source>`.
-4. Проверяет, что коммиты созданы и запушены. Если агент не запушил — worktree **сохраняется** (с инструкцией), чтобы ничего не потерять.
-5. Пайплайн build жмёт сам fsh: актуальный MR-пайплайн → джоба `build_image` → ожидание со спиннером и живым статусом → итог.
-6. В любом случае убирает за собой: worktree, временная ветка. `--keep-worktree` отключает очистку.
+2. Создаёт временный worktree `$projectDir/.worktrees/gl-helper-<iid>-<ts>` от `origin/<source-ветки>` и заводит ран в `~/.local/state/fs-harness/runs/<runId>/`.
+3. Запускает агента (`claude` или `pi`, неинтерактивно) внутри worktree с промптом, в котором уже подставлен список конфликтующих файлов: сделать `git merge origin/<target>`, решить конфликты вручную, сохранив логику **обеих** веток (приоритет равный), запрещены «взять всё ours/theirs» и force-push, закоммитить по стилю проекта. **Push агенту запрещён** — его делает сам fsh.
+4. `verify` снимает механические факты: число коммитов, `head_sha`, изменённые файлы, остатки маркеров конфликта, `git diff base..HEAD`.
+5. Судья (роль `acceptance`) получает цель, факты, дифф и финальный текст агента и выносит вердикт. **Push происходит только при `approve`.** Любое другое решение — как и невалидный ответ судьи, и падение бэкенда — гейт закрыт: worktree сохраняется, вердикт лежит в `verdict.json`, код ошибки `judge_rejected`.
+6. Пайплайн build жмёт сам fsh: актуальный MR-пайплайн → джоба `build_image` → ожидание со спиннером и живым статусом → итог.
+7. В любом случае убирает за собой: worktree, временная ветка. `--keep-worktree` отключает очистку.
 
 Перед запуском спрашивает подтверждение (отключить — `-y`). `--dry-run` показывает план и список конфликтующих файлов, ничего не меняя; `fetch` при этом всё равно выполняется — без свежих ref'ов считать нечего.
+
+## Судья
+
+Приёмщик работы агента. Смотрит на результат до того, как он уедет в origin, и отвечает на один вопрос: слияние сделано правильно или нет. Главное, что он ищет, — «взята одна сторона целиком»: агент оставил свой вариант файла и выкинул то, что приехало из target.
+
+```bash
+fsh conflict !2547                      # с приёмкой (по умолчанию)
+fsh conflict !2547 --judge haiku-cli    # разовая подмена профиля
+fsh conflict !2547 --no-judge           # без приёмки, на свой страх
+fsh conflict --judge-only conflict-mtx2z-181g   # пересудить сохранённый ран
+```
+
+**Профиль на роль.** Профиль — это «чем судить» (бэкенд, модель, effort), роль — «что судить». Роли различаются ценой на порядки, поэтому назначаются раздельно в `judge.roles`; список вместо одного имени означает фолбэк по порядку: не ответил первый — идём ко второму.
+
+**Два провайдера:**
+
+- `cli` — процесс `claude` (по подписке, ключ не нужен). Схему гарантировать не умеет, выпрашивает JSON текстом.
+- `openai` — всё OpenAI-совместимое одним адаптером: OpenRouter, DeepSeek, локальная LM Studio. Различаются `baseUrl`, `model` и именем ключа в `secret`. Схема — `json_schema` со `strict: true`, профиль может понизить её до `json_object` или `prompt`.
+
+**Ключи.** Лесенка: env → keychain → ошибка с готовой командой заведения. Имена: `openrouter`, `deepseek`, `jira`, `mattermost`; уже настроенные `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY` и прочие принимаются как алиасы.
+
+```bash
+security add-generic-password -s fs-harness -a openrouter -w '<ключ>'
+```
+
+**Вердикт** валидируется схемой всегда, независимо от того, что обещал бэкенд. Не прошёл — один ремонтный запрос с готовым списком «что не так», второй провал — `judge_schema` и закрытый гейт. Невалидный вердикт никогда не трактуется как `approve`.
+
+**Ран сохраняется целиком** в `~/.local/state/fs-harness/runs/<runId>/`: `meta.json`, `prompt.md`, `agent.txt`, `diff.patch`, `verdict.json`, `result.json`. По нему работает `--judge-only` — пересудить, не запуская агента заново.
 
 ## Команда commit
 
@@ -118,7 +155,7 @@ export GL_HELPER_YES=1    # не спрашивать подтверждение
 ```
 
 - `--json` на read-командах — данные; на side-effect (`run`, `deploy`, `conflict`, `commit`) — **финальный результат** в stdout, прогресс в stderr.
-- Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `config_invalid`, `canceled`.
+- Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `config_invalid`, `canceled`, `judge_rejected`, `judge_schema`, `judge_failed`, `judge_rubric_missing`, `secret_missing`, `run_not_found`, `run_incomplete`.
 - Полная инструкция для агента встроена в CLI: `fsh agent-guide`.
 - Перед side-effect командами можно смотреть план: `--dry-run`.
 - Для нативного вызова инструментов из AI-клиентов: `fsh mcp` (см. раздел MCP-режим).
