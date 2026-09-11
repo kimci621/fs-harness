@@ -1,21 +1,87 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Mustache from 'mustache';
+import matter from 'gray-matter';
+import { CliError } from './errors.js';
 
-// Промпт для команды commit. Если в корне git-репозитория лежит .llm-commit-pattern,
-// его содержимое заменяет встроенный промпт (свои правила на других проектах).
+// В промптах живут код, markdown и дифф — HTML-экранирование их испортит.
+Mustache.escape = (t) => t;
 
-const DEFAULT_PROMPT = readFileSync(
-  path.join(path.dirname(fileURLToPath(import.meta.url)), 'prompts', 'commit.md'),
-  'utf8',
-).trim();
+const BUILTIN_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'prompts');
+const USER_DIR = path.join(homedir(), '.config', 'fs-harness', 'prompts');
 
-const FOOTER = [
-  '',
-  'Задача: сформируй сообщение коммита по паттерну выше, изучив изменения (git status, git diff, git diff --cached),',
-  'и закоммить все изменения: git add -A && git commit -m "<сообщение>". Не пушь.',
-  'В конце ответа покажи итоговое сообщение коммита и его хэш.',
-].join('\n');
+// Порядок переопределения, первое попадание: проектный → личный → встроенный.
+export function templatePaths(name, { projectDir } = {}) {
+  const rel = `${name}.md`;
+  return [
+    projectDir ? path.join(projectDir, '.fs-harness', 'prompts', rel) : null,
+    path.join(USER_DIR, rel),
+    path.join(BUILTIN_DIR, rel),
+  ].filter(Boolean);
+}
+
+export function loadTemplate(name, { projectDir } = {}) {
+  const tried = templatePaths(name, { projectDir });
+  for (const p of tried) {
+    if (!existsSync(p)) continue;
+    const { data, content } = matter(readFileSync(p, 'utf8'));
+    return { source: p.startsWith(BUILTIN_DIR) ? 'builtin' : p, path: p, meta: data ?? {}, body: content.trim() };
+  }
+  throw new CliError(`Нет шаблона промпта "${name}". Искал:\n  ${tried.join('\n  ')}`, 1, 'prompt_missing');
+}
+
+// Строгость — наш слой: mustache молча рендерит пропущенную переменную в пустоту,
+// а промпт без переменной это испорченное задание агенту, а не мелочь.
+export function renderTemplate(name, vars = {}, { projectDir, strict = true } = {}) {
+  const tpl = loadTemplate(name, { projectDir });
+  const declared = Array.isArray(tpl.meta.vars) ? tpl.meta.vars : [];
+  const missing = declared.filter((v) => vars[v] === undefined);
+  if (strict && missing.length) {
+    throw new CliError(`Шаблон "${name}" (${tpl.source}) ждёт переменные, которых нет: ${missing.join(', ')}.`, 1, 'prompt_var_missing');
+  }
+  const used = [...new Set(tags(Mustache.parse(tpl.body)))];
+  return {
+    source: tpl.source,
+    text: Mustache.render(tpl.body, vars).trim(),
+    declared,
+    used,
+    missing,
+    unused: declared.filter((v) => !used.includes(v)),
+    undeclared: declared.length ? used.filter((v) => !declared.includes(v)) : [],
+  };
+}
+
+export function listTemplates({ projectDir } = {}) {
+  const names = new Set();
+  for (const dir of [BUILTIN_DIR, USER_DIR, projectDir ? path.join(projectDir, '.fs-harness', 'prompts') : null]) {
+    if (dir) collect(dir, '', names);
+  }
+  return [...names].sort().map((name) => {
+    const { source, meta } = loadTemplate(name, { projectDir });
+    return { name, source, overridden: source !== 'builtin', vars: Array.isArray(meta.vars) ? meta.vars : [] };
+  });
+}
+
+// Имя шаблона включает подкаталог: actions/conflict, judge/acceptance.
+function collect(dir, prefix, out) {
+  if (!existsSync(dir)) return;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) collect(path.join(dir, e.name), `${prefix}${e.name}/`, out);
+    else if (e.name.endsWith('.md')) out.add(`${prefix}${e.name.slice(0, -3)}`);
+  }
+}
+
+// Секции вложенные, поэтому рекурсия: подтокены лежат в t[4].
+function tags(tokens) {
+  const out = [];
+  for (const t of tokens) {
+    if (['name', '&', '#', '^'].includes(t[0])) out.push(t[1]);
+    if (Array.isArray(t[4])) out.push(...tags(t[4]));
+  }
+  return out;
+}
 
 // Ищет .llm-commit-pattern: от startDir вверх до корня git-репозитория (где лежит .git).
 export function findPatternFile(startDir) {
@@ -31,12 +97,11 @@ export function findPatternFile(startDir) {
   }
 }
 
-// Возвращает {source, prompt}: source — откуда взят промпт (путь файла или 'builtin').
+// Возвращает {source, prompt}: source — откуда взят паттерн (путь файла или 'builtin').
+// .llm-commit-pattern подменяет только паттерн сообщения, инструкция остаётся общей.
 export function commitPrompt(startDir) {
   const file = findPatternFile(startDir);
-  if (file) {
-    const body = readFileSync(file, 'utf8').trim();
-    return { source: file, prompt: `${body}\n\n${FOOTER}` };
-  }
-  return { source: 'builtin', prompt: DEFAULT_PROMPT };
+  const pattern = file ? readFileSync(file, 'utf8').trim() : '';
+  const { source, text } = renderTemplate('commit', { pattern }, { projectDir: startDir });
+  return { source: file ?? source, prompt: text };
 }
