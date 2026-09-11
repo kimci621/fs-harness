@@ -6,6 +6,7 @@ import { formatErrorJSON } from './output.js';
 
 const FLAGS_USAGE = `Флаги:
   -R, --repo <repo>       Репозиторий (дефолт из конфига / GL_HELPER_REPO)
+  -P, --project <имя>     Проект из конфига (дефолт activeProject / FS_HARNESS_PROJECT)
   --host <hostname>       GitLab-хост (дефолт из конфига)
   --json                  Вывод в JSON (mrs, mr, jobs, run, deploy) — удобно агентам
   --agent claude|pi       Агент для действий (conflict, threads) и commit
@@ -24,7 +25,8 @@ const FLAGS_USAGE = `Флаги:
 
 Режим агента (env):
   GL_HELPER_JSON=1        JSON-вывод и структурированные ошибки для агентов
-  GL_HELPER_YES=1         Не спрашивать подтверждение (как -y)`;
+  GL_HELPER_YES=1         Не спрашивать подтверждение (как -y)
+  FS_HARNESS_PROJECT      Активный проект (как -P)`;
 
 // USAGE генерируется из реестра — новую команду сюда добавлять не нужно.
 function buildUsage() {
@@ -75,7 +77,7 @@ export async function main(argv) {
   }
 
   try {
-    const cfg = loadConfig();
+    const cfg = loadConfig(process.env, { project: opts.project });
     const ctx = createCtx({
       g: createGlab(undefined, { host: opts.host || cfg.host }),
       cfg,
@@ -96,7 +98,7 @@ export async function main(argv) {
 
 function parseArgs(argv) {
   const opts = {
-    json: false, repo: null, host: null, agent: null, projectDir: null, buildJob: null,
+    json: false, repo: null, host: null, project: null, agent: null, projectDir: null, buildJob: null,
     watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
     noJudge: false, judgeProfile: null, judgeOnly: null, for: null,
@@ -105,6 +107,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-R' || a === '--repo') opts.repo = argv[++i];
+    else if (a === '-P' || a === '--project') opts.project = argv[++i];
     else if (a === '--host') opts.host = argv[++i];
     else if (a === '--json') opts.json = true;
     else if (a === '--agent') opts.agent = argv[++i];
