@@ -4,7 +4,7 @@
 export const TABS = [
   { key: 'mr', title: 'MR', hint: 'a конфликт · t треды · r ревью' },
   { key: 'issues', title: 'Задачи', hint: 'n разбор' },
-  { key: 'runs', title: 'Раны', hint: 'Enter — открыть журнал' },
+  { key: 'runs', title: 'Раны', hint: 'R обновить · путь к журналу справа' },
 ];
 
 // Действия по клавишам: одно действие — одна клавиша, как в плане.

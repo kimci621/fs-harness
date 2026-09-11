@@ -35,6 +35,9 @@ src/actions/*.js        декларации действий (conflict, threads
 src/prompts.js          шаблоны: loadTemplate/renderTemplate/listTemplates/checkTemplates
 src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
 src/mcp.js              MCP-сервер (stdio): обработка JSON-RPC, инструменты берёт из registry
+src/tui/store.js        TUI: чистое состояние и раскладка клавиш (reduce, keyIntent) — без ink
+src/tui/app.js          TUI: экран на ink + htm (вкладки, список, лог, карточки ранов)
+src/tui/index.js        startTUI: проверка живого терминала, ленивый импорт ink/react
 test/*.test.js          node --test, мокнутый exec — без сети
 ```
 
