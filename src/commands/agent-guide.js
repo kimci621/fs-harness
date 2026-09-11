@@ -41,6 +41,9 @@ conflict:{ok, run, mr, head_sha, commits_ahead, conflict_files:[...],
           pipeline:{...}, build:{...}}
 threads: {ok, run, mr, head_sha, commits_ahead, threads_open, replied:[id], resolved:[id],
           judge:{...}|{skipped:true}}
+review:  {ok, run, mr, review:"<текст находок>", judge:{...}|{skipped:true}}
+analyze: {ok, run, issue, analysis:"<текст разбора>"}
+jira:    {ok, issues:[{key,summary,status,type,priority,updated}]} | {ok, issue:{...}, comments:[...]}
 commit:  {ok, dir, branch, commit:{hash,message}}
 prompts: {ok, prompts:[{name,source,overridden,vars}]} | {ok, name, source, body|text}
 doctor:  {ok, checks:[{name,ok,critical,detail}]}
@@ -65,6 +68,9 @@ judge_rubric_missing, secret_missing, run_not_found, run_incomplete.
 - threads: те же правила, что у conflict (worktree, гейт судьи, push силами fsh). Агент правит код
   по нерешённым тредам ревью и пишет тексты ответов; отправку ответов и резолв тредов делает fsh
   после approve. Коммитов может не быть — тред мог требовать только ответа, это не провал.
+- review и analyze читающие: работают в самом чекауте проекта, ничего не правят и не публикуют.
+  Если действие всё же изменило чекаут — ошибка dirty_checkout. review судится advisory (второе
+  мнение, ничего не блокирует), у analyze судьи нет. analyze берёт ключ задачи Jira (FD-7647).
 - Каждый прогон conflict пишется в ~/.local/state/fs-harness/runs/<runId>/ (meta.json, prompt.md,
   agent.txt, diff.patch, verdict.json, result.json). fsh conflict --judge-only <runId> пересудит
   сохранённый прогон, ничего не запуская заново.

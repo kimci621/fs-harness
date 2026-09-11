@@ -49,7 +49,8 @@ fsh config show
 
 - `repo` — дефолтный репозиторий (можно перебить флагом `-R` или env `GL_HELPER_REPO`).
 - `host` — **важно**: glab сам выбирает хост по git remote текущей директории. `fsh` всегда передаёт `--hostname` из конфига, чтобы команда работала из любой директории. Перебивается флагом `--host` или env `GL_HELPER_HOST`.
-- `projectDir` — проект, в котором `conflict` создаёт временный worktree.
+- `projectDir` — проект: `conflict` и `threads` создают в нём временный worktree, `review` и `analyze` читают его как есть.
+- `jira` — `baseUrl`, `email`, `projectKey`. Токен не в конфиге, а в keychain: `security add-generic-password -s fs-harness -a jira -w '<токен>'`. Без токена работает всё, кроме `jira` и `analyze`.
 - `agent` / `agentArgs` — какой агент решает конфликты и с какими флагами (`claude` или `pi`, headless `-p`).
 - `judge` — профили судьи и назначение их на роли (см. раздел «Судья»).
 
@@ -60,6 +61,10 @@ fsh config show
 | `mrs` | Все открытые MR: название, ветки `from→to`, статус пайплайна, комменты (всего / открытых тредов / решённых), конфликт ✅/⚠ |
 | `mr <ветка\|номер>` | Один MR в том же формате. Ветку можно вводить частично и с ошибками — `mr banner-fl` найдёт `fix/main-banner-flicker`. Принимает `!2547` и `2547` |
 | `conflict <mr\|ветка>` | Решает конфликт силами AI-агента в отдельном worktree, отдаёт результат судье и пушит только после `approve`, затем запускает build (подробнее ниже) |
+| `threads <mr\|ветка>` | Разбирает нерешённые треды ревью: агент правит код и готовит ответы, fs-harness после `approve` пушит, отвечает и резолвит треды |
+| `review <mr\|ветка>` | Ревью диффа MR по правилам проекта. Читающее: ничего не правит и не комментирует MR |
+| `analyze <KEY>` | Разбор задачи Jira по коду проекта: что делать, где, что сломается, вопросы к постановщику. Читающее |
+| `jira [mine\|<KEY>]` | Свои незакрытые задачи или одна задача с комментариями. Только чтение |
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id |
 | `mr-comments <mr\|ветка>` | Комментарии MR по тредам: `--resolved` — только решённые, `-open` — только нерешённые |
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
@@ -72,7 +77,7 @@ fsh config show
 | `config init\|show` | Конфиг |
 | `help` | Справка |
 
-Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/conflict/commit — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (conflict), `--for <mr>` (prompts show).
+Флаги: `-R/--repo`, `--host`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show).
 
 Примеры:
 
@@ -88,6 +93,22 @@ fsh commit --agent pi
 fsh conflict !2547 --agent pi
 fsh -R other/repo mrs --json          # JSON для агентов/скриптов
 ```
+
+## Читающие действия: review и analyze
+
+Работают в самом чекауте проекта, без worktree. Страховка — снимок `HEAD` + `git status` до и после:
+изменил что-нибудь — ошибка `dirty_checkout`, а не молча испорченный рабочий каталог.
+
+```bash
+fsh review !2547            # находки по диффу: файл, строка, severity
+fsh analyze FD-7647         # что делать, где в коде, что сломается, вопросы
+```
+
+`review` берёт дифф из API GitLab и правила из `.claude/skills/mr-review/SKILL.md` проекта — того же
+файла, по которому ревьюит CI-бот. Судья в роли `mr-review` advisory: печатает второе мнение и ничего
+не блокирует, потому что блокировать нечего — действие ничего не публикует.
+
+`analyze` читает задачу Jira с комментариями и разбирает её по коду. Судьи нет.
 
 ## Команда conflict
 
@@ -184,7 +205,7 @@ export GL_HELPER_YES=1    # не спрашивать подтверждение
 
 `fsh mcp` — stdio MCP-сервер: те же команды как типизированные инструменты. Агент вызывает их нативно, без shell и парсинга: аргументы валидируются JSON-Schema, результат — структурированный JSON, ожидание джоб — внутри сервера.
 
-**Инструменты:** `mrs`, `mr`, `mr-comments`, `jobs` (только чтение) и `run`, `deploy`, `conflict`, `commit` (меняют состояние; клиент спрашивает разрешение), плюс `doctor`, `agent_guide`.
+**Инструменты:** `mrs`, `mr`, `mr-comments`, `jobs`, `jira`, `review`, `analyze` (только чтение) и `run`, `deploy`, `conflict`, `threads`, `commit` (меняют состояние; клиент спрашивает разрешение), плюс `doctor`, `agent_guide`.
 
 **Подключение:**
 
