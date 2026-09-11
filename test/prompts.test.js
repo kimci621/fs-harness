@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { commitPrompt, findPatternFile, loadTemplate, renderTemplate, listTemplates, templatePaths } from '../src/prompts.js';
+import { commitPrompt, findPatternFile, loadTemplate, renderTemplate, listTemplates, templatePaths, checkTemplates } from '../src/prompts.js';
 
 function makeRepo(files = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'fsh-test-'));
@@ -122,6 +122,20 @@ test('listTemplates: встроенные видны, проектный пом�
     writeFileSync(path.join(dir, '.fs-harness', 'prompts', 'commit.md'), 'мой');
     const commit = listTemplates({ projectDir: dir }).find((t) => t.name === 'commit');
     assert.equal(commit.overridden, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkTemplates: встроенные шаблоны без ошибок, кривой оверрайд ловится', () => {
+  assert.deepEqual(checkTemplates().filter((p) => p.level === 'error'), []);
+  const dir = makeRepo();
+  try {
+    mkdirSync(path.join(dir, '.fs-harness', 'prompts'), { recursive: true });
+    writeFileSync(path.join(dir, '.fs-harness', 'prompts', 'commit.md'), '---\nvars: [pattern]\n---\n{{pattern}} {{забыли}}');
+    const errs = checkTemplates({ projectDir: dir }).filter((p) => p.level === 'error');
+    assert.equal(errs.length, 1);
+    assert.match(errs[0].message, /\{\{забыли\}\}/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

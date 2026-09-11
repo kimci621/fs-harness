@@ -11,6 +11,7 @@ import { spawnAgent } from '../agent/spawn.js';
 import { createRun, saveArtifact, readRun } from '../agent/journal.js';
 import { judge, isApproved, formatVerdict } from '../judge/index.js';
 import { buildAcceptancePayload, ACCEPTANCE_PATHSPECS } from '../judge/payload.js';
+import { renderTemplate } from '../prompts.js';
 
 // Первая строка вывода merge-tree — OID результирующего дерева, а не имя файла.
 // Не отбросить её — хэш уедет в промпт и агент пойдёт искать несуществующий файл.
@@ -139,7 +140,7 @@ export async function cmdConflict(g, repo, args, opts = {}) {
     git(['checkout', '-b', branch], wt);
     const baseSha = git(['rev-parse', base]);
 
-    const prompt = buildPrompt({ repo, mr, conflictFiles });
+    const prompt = renderTemplate('actions/conflict', conflictVars({ repo, mr, conflictFiles }), { projectDir }).text;
     saveArtifact(runDir, 'prompt.md', prompt);
     saveArtifact(runDir, 'meta.json', {
       id: runDir.id,
@@ -346,29 +347,16 @@ export async function cmdJudgeOnly(runId, opts = {}) {
   return result;
 }
 
-function buildPrompt({ repo, mr, conflictFiles }) {
-  const source = mr.source_branch;
-  const target = mr.target_branch;
-  return [
-    `Ты работаешь в GitLab-проекте ${repo}. Репозиторий уже склонирован в текущей директории — это временный git worktree с веткой на базе origin/${source}.`,
-    '',
-    `Задача: решить конфликт в MR !${mr.iid} «${mr.title}» (${mr.web_url}), ветка ${source} → ${target}.`,
-    '',
-    `Конфликтующие файлы (посчитано локально через git merge-tree, ${conflictFiles.length} шт.):`,
-    ...conflictFiles.map((f) => `  ${f}`),
-    '',
-    'Данные о MR получай через glab, например:',
-    `  glab mr view ${mr.iid} -R ${repo}`,
-    `  glab api 'projects/${repo}/merge_requests/${mr.iid}'`,
-    '',
-    'Шаги:',
-    `1. Выполни "git merge origin/${target}" — конфликты появятся в твоей ветке.`,
-    '2. Реши каждый конфликт внимательно и вручную: сохрани корректную функциональность обеих веток. Критерии приёмки — рабочий код и в текущей ветке, и в dev, приоритет равный. Запрещено бездумно брать всё из одной стороны (ours/theirs) и делать force-push.',
-    '3. Проверь, что код рабочий: просмотри конфликтные файлы; если в проекте есть линт и unit-тесты, прогони их (npm run lint, npm run test) перед коммитом.',
-    '4. Закоммить по правилам проекта: посмотри "git log --oneline -20" и повтори стиль сообщений коммита.',
-    `5. НЕ пуши. Push сделает fs-harness сам — после того, как результат посмотрит судья. "git push" в любом виде запрещён, ветку ${target} не трогай, лишних коммитов не создавай.`,
-    '6. Если при merge конфликтов не оказалось — просто сообщи об этом и ничего не коммить.',
-    '',
-    'В конце ответа кратко перечисли: какие файлы изменены, как решён каждый конфликт, что проверено, хэш последнего коммита.',
-  ].join('\n');
+// Переменные шаблона actions/conflict. Списки собираются здесь, в шаблоне только подстановка.
+export function conflictVars({ repo, mr, conflictFiles }) {
+  return {
+    repo,
+    mr_iid: mr.iid,
+    mr_title: mr.title,
+    mr_url: mr.web_url,
+    source_branch: mr.source_branch,
+    target_branch: mr.target_branch,
+    conflict_files: conflictFiles.map((f) => `  ${f}`).join('\n'),
+    conflict_count: conflictFiles.length,
+  };
 }
