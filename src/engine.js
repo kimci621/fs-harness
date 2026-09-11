@@ -28,6 +28,7 @@ export function runAction(spec, ctx, input, opts = {}) {
   const ac = new AbortController();
   let runDir = null;
   let ws = null;
+  let meta = null;
   let keep = Boolean(opts.keepWorktree);
 
   const emit = (ev) => events.push({ run: runDir?.id ?? null, ...ev });
@@ -89,7 +90,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       const rendered = renderTemplate(a.prompt, x.vars, { projectDir: x.pre.projectDir });
       x.prompt = rendered.text;
       saveArtifact(runDir, 'prompt.md', rendered.text);
-      saveArtifact(runDir, 'meta.json', {
+      meta = {
         id: runDir.id,
         action: spec.name,
         created_at: new Date().toISOString(),
@@ -99,9 +100,10 @@ export function runAction(spec, ctx, input, opts = {}) {
         branch: ws.branch,
         base: ws.base,
         base_sha: ws.baseSha,
-        judge: { role: a.judge.role },
+        judge: { role: a.judge.role, profile: opts.judgeProfile ?? null },
         ...(x.pre.meta ?? {}),
-      });
+      };
+      saveArtifact(runDir, 'meta.json', meta);
       x.phase('prompt', 'done', rendered.source);
 
       if (!opts.yes && !opts.asObject && !confirm(`Запускаю агента ${opts.agent}. Продолжить? [y/N] `)) {
@@ -109,6 +111,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       }
 
       x.agentText = await runAgent(x);
+      keep = true; // дальше в worktree лежит работа агента: любой провал ниже её не выбрасывает
       x.facts = await a.verify(x);
       if (x.before) ws.assertClean(x.before); // читающее действие не имеет права менять чекаут
       saveArtifact(runDir, 'agent.txt', x.agentText);
@@ -116,7 +119,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       x.goal = a.goal(x);
       x.extra = a.judgeExtra ? a.judgeExtra(x) : '';
       saveArtifact(runDir, 'meta.json', {
-        ...JSON.parse(readRun(runDir.id).read('meta.json')),
+        ...meta,
         head_sha: x.facts.head_sha,
         facts: { ...x.facts, diff: undefined },
         goal: x.goal,
@@ -129,6 +132,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       x.phase('publish', 'done');
 
       const res = a.result(x);
+      keep = Boolean(opts.keepWorktree);
       saveArtifact(runDir, 'result.json', res);
       return res;
     } finally {
@@ -151,6 +155,8 @@ export function runAction(spec, ctx, input, opts = {}) {
       cfg: opts.cfg,
       profile: opts.judgeProfile,
       signal: ac.signal,
+      makeProvider: opts.makeProvider, // шов для тестов: судья без сети
+      onDelta: (text) => emit({ t: 'delta', text }), // видно, что судья думает, а не завис
       payload: buildAcceptancePayload({
         goal: x.goal,
         facts: { ...x.facts, diff: undefined },
@@ -164,7 +170,6 @@ export function runAction(spec, ctx, input, opts = {}) {
     x.say(formatVerdict(verdict));
     x.phase('judge', 'done', verdict.decision);
     if (mode === 'pre-push' && !isApproved(verdict)) {
-      keep = true;
       throw new CliError(
         `${formatVerdict(verdict)}\n\nPush не сделан. Worktree сохранён: ${ws.dir}\nВердикт: ${runDir.dir}/verdict.json`,
         1,
@@ -229,6 +234,7 @@ export async function runActionCLI(spec, ctx, args, opts = {}) {
   const log = opts.asObject ? () => {} : makeLogger(opts.json);
   const run = runAction(spec, ctx, { query }, opts);
   run.on((ev) => {
+    if (ev.t === 'delta') return void (opts.json || process.stderr.write(ev.text)); // поток судьи, без переводов строк
     if (ev.t !== 'log') return;
     if (ev.stream === 'stderr') process.stderr.write(`${ev.text}\n`);
     else log(ev.text);

@@ -57,8 +57,9 @@ judge_rubric_missing, secret_missing, run_not_found, run_incomplete.
 - deploy с --rebuild перезапускает джобы даже при success (retry, новый id) — перезапись слота.
 - conflict: работу с git делает АГЕНТ (claude|pi headless) во временном worktree проекта.
   Пушит не он, а fsh — и только после того, как судья вернул approve. Любой другой вердикт,
-  невалидный ответ судьи или падение его бэкенда = гейт закрыт, код judge_rejected, worktree
-  сохранён, путь к нему в сообщении. Дальше fsh сам запускает build.
+  невалидный ответ судьи или падение его бэкенда = гейт закрыт (judge_rejected, judge_schema,
+  judge_failed). При любом провале после запуска агента worktree сохранён, путь к нему в
+  сообщении. Дальше fsh сам запускает build.
 - Каждый прогон conflict пишется в ~/.local/state/fs-harness/runs/<runId>/ (meta.json, prompt.md,
   agent.txt, diff.patch, verdict.json, result.json). fsh conflict --judge-only <runId> пересудит
   сохранённый прогон, ничего не запуская заново.
