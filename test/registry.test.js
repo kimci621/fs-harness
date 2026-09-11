@@ -77,10 +77,30 @@ test('registry: декларации действий валидны и синт
   }
 });
 
+// Заглушка pre под каждое действие: нового действия без неё тест не пропустит.
+const STUB_PRE = {
+  conflict: { conflictFiles: ['src/a.ts'] },
+  threads: { threads: [{ id: 'aaa1', file: 'src/a.ts', line: 3, notes: [{ author: 'rev', body: 'тут утечка' }] }] },
+};
+
 test('registry: у промпта действия есть шаблон, и он объявляет ровно те переменные, что даёт context', () => {
   for (const c of ACTIONS) {
     const tpl = loadTemplate(c.action.prompt);
     assert.ok(Array.isArray(tpl.meta.vars), `vars во front-matter у ${c.action.prompt}`);
     assert.deepEqual(checkTemplates().filter((p) => p.name === c.action.prompt && p.level === 'error'), []);
+
+    const pre = STUB_PRE[c.name];
+    assert.ok(pre, `нет заглушки pre для действия ${c.name} — добавь её в STUB_PRE`);
+    const vars = c.action.context({
+      ctx: { repo: 'r/repo' },
+      opts: { agent: 'claude' },
+      target: { iid: 7, title: 'MR', web_url: 'https://example.invalid/7', source_branch: 's', target_branch: 't' },
+      pre,
+      ws: { dir: '/tmp/wt', deps: { available: true } },
+      run: { id: 'run-1', dir: '/tmp/run-1' },
+      say: () => {},
+    });
+    // Ровно те: лишняя переменная в шаблоне — prompt_var_missing в проде, лишняя в context — мусор.
+    assert.deepEqual(Object.keys(vars).sort(), [...tpl.meta.vars].sort(), `${c.action.prompt}: vars ↔ context`);
   }
 });
