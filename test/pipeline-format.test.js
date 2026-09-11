@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { findJob, deployJobName, mapLimit, startJob, jobAction } from '../src/pipeline.js';
 import { cmdDeploy } from '../src/commands/deploy.js';
+import { buildMRParams, applyLocalFilters, anyFilter } from '../src/commands/mrs.js';
 import { commentStats, fmtComments, fmtMRRow, humanize } from '../src/format.js';
 import { CliError } from '../src/errors.js';
 import { formatErrorJSON, makeLogger } from '../src/output.js';
@@ -170,4 +171,32 @@ test('waitJob: терминальный статус возвращает джо
     }),
     (e) => e instanceof CliError && e.code === 'job_timeout',
   );
+});
+
+test('mrs: фильтры делятся на серверные и клиентские, me резолвится в ник', async () => {
+  const params = await buildMRParams({ me: async () => ({ username: 'a.latipov' }) }, {
+    author: 'me', reviewer: 'petya', target: 'dev', draft: false, label: 'ui',
+  });
+  assert.equal(params.author_username, 'a.latipov');
+  assert.equal(params.reviewer_username, 'petya');
+  assert.equal(params.target_branch, 'dev');
+  assert.equal(params.labels, 'ui');
+  assert.equal(params.wip, 'no');
+  assert.equal(params.assignee_username, undefined);
+  assert.equal((await buildMRParams({}, {})).wip, null);
+
+  const rows = [
+    { mr: { iid: 1, has_conflicts: true, head_pipeline: { status: 'failed' } }, stats: { open: 0 } },
+    { mr: { iid: 2, has_conflicts: false, head_pipeline: { status: 'success' } }, stats: { open: 3 } },
+    { mr: { iid: 3, has_conflicts: false, head_pipeline: null }, stats: { open: 1 } },
+  ];
+  const iids = (f) => applyLocalFilters(rows, f).map((r) => r.mr.iid);
+  assert.deepEqual(iids({ conflicts: true }), [1]);
+  assert.deepEqual(iids({ threads: true }), [2, 3]);
+  assert.deepEqual(iids({ pipeline: 'failed' }), [1]);
+  assert.deepEqual(iids({ pipeline: 'none' }), [3]);
+  assert.deepEqual(iids({}), [1, 2, 3]);
+
+  assert.equal(anyFilter({ json: true, repo: 'r/r' }), false);
+  assert.equal(anyFilter({ pipeline: 'failed' }), true);
 });

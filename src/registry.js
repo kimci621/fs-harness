@@ -50,14 +50,29 @@ export function createCtx({ g, cfg, notify }) {
 export const COMMANDS = [
   {
     name: 'mrs',
-    usage: 'mrs',
-    description: 'Все открытые MR: название, ветки, пайплайн, комменты, конфликты',
-    example: 'fsh mrs',
-    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMRS(ctx.g, ctx.repo, { json: opts.json })),
+    usage: 'mrs [фильтры]',
+    description: 'Открытые MR: название, ветки, пайплайн, комменты, конфликты; фильтры по автору, ревьюеру, ветке, метке, статусу',
+    example: 'fsh mrs --author me --pipeline failed',
+    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMRS(ctx.g, ctx.repo, opts)),
     mcp: {
-      description: 'Список всех открытых MR: название, ветки, статус пайплайна, комментарии, конфликты. Только чтение.',
-      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      call: (ctx) => withRepoHost(ctx, () => cmdMRS(ctx.g, ctx.repo, { json: true, asObject: true })),
+      description: 'Список открытых MR: название, ветки, статус пайплайна, комментарии, конфликты. Фильтры необязательны; "me" в author/assignee/reviewer — текущий пользователь. Только чтение.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          author: { type: 'string', description: 'ник автора или me' },
+          assignee: { type: 'string', description: 'ник исполнителя или me' },
+          reviewer: { type: 'string', description: 'ник ревьюера или me' },
+          target: { type: 'string', description: 'целевая ветка' },
+          label: { type: 'string', description: 'метка' },
+          search: { type: 'string', description: 'поиск по названию и описанию' },
+          draft: { type: 'boolean', description: 'true — только черновики, false — только готовые' },
+          conflicts: { type: 'boolean', description: 'только конфликтующие' },
+          threads: { type: 'boolean', description: 'только с открытыми тредами' },
+          pipeline: { type: 'string', description: 'статус пайплайна: failed, success, running, none' },
+        },
+        additionalProperties: false,
+      },
+      call: (ctx, a) => withRepoHost(ctx, () => cmdMRS(ctx.g, ctx.repo, { ...a, json: true, asObject: true })),
     },
   },
   {

@@ -21,7 +21,16 @@ const FLAGS_USAGE = `Флаги:
   --judge <профиль>       В действиях: разовая подмена профиля судьи
   --judge-only <runId>    В действиях: прогнать судью по сохранённому рану
   --for <mr|ветка>        В prompts show: отрендерить промпт на реальных данных MR
-  --assignee me|<email>|any  В jira: чьи задачи (дефолт me)
+  --author me|<ник>       В mrs: чьи MR
+  --reviewer me|<ник>     В mrs: где ты (или кто-то) ревьюер
+  --target <ветка>        В mrs: только MR в эту целевую ветку
+  --label <метка>         В mrs: только с этой меткой
+  --search <текст>        В mrs: поиск по названию и описанию
+  --draft / --no-draft    В mrs: только черновики / только готовые
+  --conflicts             В mrs: только конфликтующие
+  --threads               В mrs: только с открытыми тредами
+  --pipeline <статус>     В mrs: по статусу пайплайна (failed, success, running, none)
+  --assignee me|<кто>     В mrs — исполнитель MR; в jira — чьи задачи (дефолт me)
   --sprint current|<имя>  В jira: только задачи спринта
   --component <значение>  В jira: фильтр по checkbox-полю «Компонент»
   --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые)
@@ -116,6 +125,8 @@ function parseArgs(argv) {
     resolved: false, open: false, help: false,
     noJudge: false, judgeProfile: null, judgeOnly: null, for: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
+    author: null, reviewer: null, target: null, label: null, search: null,
+    draft: null, conflicts: false, threads: false, pipeline: null,
   };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -141,6 +152,16 @@ function parseArgs(argv) {
     else if (a === '--component') opts.component = argv[++i];
     else if (a === '--status') opts.status = argv[++i];
     else if (a === '--jql') opts.jql = argv[++i];
+    else if (a === '--author') opts.author = argv[++i];
+    else if (a === '--reviewer') opts.reviewer = argv[++i];
+    else if (a === '--target') opts.target = argv[++i];
+    else if (a === '--label') opts.label = argv[++i];
+    else if (a === '--search') opts.search = argv[++i];
+    else if (a === '--draft') opts.draft = true;
+    else if (a === '--no-draft') opts.draft = false;
+    else if (a === '--conflicts') opts.conflicts = true;
+    else if (a === '--threads') opts.threads = true;
+    else if (a === '--pipeline') opts.pipeline = argv[++i];
     else if (a === '--resolved' || a === '-resolved') opts.resolved = true;
     else if (a === '--open' || a === '-open') opts.open = true;
     else if (a === '-h' || a === '--help') opts.help = true;

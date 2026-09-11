@@ -12,19 +12,49 @@ export function mrPipelineMap(pipelines) {
   return map;
 }
 
+const FILTER_KEYS = ['author', 'assignee', 'reviewer', 'target', 'label', 'search', 'draft', 'conflicts', 'threads', 'pipeline'];
+
+// Команде прилетает весь объект флагов, поэтому «фильтры заданы?» считаем по своим ключам.
+export const anyFilter = (f = {}) => FILTER_KEYS.some((k) => f[k] !== null && f[k] !== undefined && f[k] !== false && f[k] !== '');
+
+// Фильтры: часть уходит в API, часть считается по уже полученным данным
+// (конфликт, статус пайплайна и открытые треды в списке MR не приходят).
+export async function buildMRParams(g, { author, assignee, reviewer, target, label, search, draft } = {}) {
+  const who = async (v) => (v === 'me' ? (await g.me())?.username : v);
+  return {
+    author_username: await who(author),
+    assignee_username: await who(assignee),
+    reviewer_username: await who(reviewer),
+    target_branch: target,
+    labels: label,
+    search,
+    wip: draft === true ? 'yes' : draft === false ? 'no' : null,
+  };
+}
+
+// Клиентские фильтры: их нет в API списка MR, зато данные уже под рукой.
+export function applyLocalFilters(rows, { conflicts, pipeline, threads } = {}) {
+  return rows.filter(({ mr, stats }) => {
+    if (conflicts && !mr.has_conflicts) return false;
+    if (threads && !(stats.open > 0)) return false;
+    if (pipeline && (mr.head_pipeline?.status ?? 'none') !== pipeline) return false;
+    return true;
+  });
+}
+
 // asObject — вернуть данные без печати (MCP-режим).
-export async function cmdMRS(g, repo, { json, asObject } = {}) {
-  const mrs = await g.listOpenMRs(repo);
+export async function cmdMRS(g, repo, { json, asObject, ...filters } = {}) {
+  const mrs = await g.listOpenMRs(repo, await buildMRParams(g, filters));
   if (!mrs.length) {
     const result = { ok: true, mrs: [] };
     if (asObject) return result;
-    console.log(`В ${repo} нет открытых MR.`);
+    console.log(anyFilter(filters) ? 'Под фильтры не попал ни один MR.' : `В ${repo} нет открытых MR.`);
     return result;
   }
 
   const pipes = mrPipelineMap(await g.listMRPipelines(repo));
 
-  const rows = await mapLimit(mrs, 6, async (mr) => {
+  const all = await mapLimit(mrs, 6, async (mr) => {
     mr.head_pipeline = pipes[mr.iid] || null;
     let discussions = null;
     try {
@@ -35,6 +65,7 @@ export async function cmdMRS(g, repo, { json, asObject } = {}) {
     return { mr, stats: commentStats(discussions, mr.user_notes_count) };
   });
 
+  const rows = applyLocalFilters(all, filters);
   const result = { ok: true, mrs: rows.map(toJSON) };
   if (asObject) return result;
 
@@ -45,6 +76,7 @@ export async function cmdMRS(g, repo, { json, asObject } = {}) {
 
   const width = Math.min(process.stdout.columns || 160, 200);
   for (const { mr, stats } of rows) console.log(fmtMRRow(mr, stats, width));
+  if (!rows.length) console.log('Под фильтры не попал ни один MR.');
   return result;
 }
 
