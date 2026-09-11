@@ -60,6 +60,9 @@ src/
   ui.js          — спиннер, прогресс, перерисовка статусов, humanize времени
   format.js      — таблицы и строки вывода (текст/JSON)
   commands/      — по файлу на команду (mrs, mr, jobs, run, deploy, conflict, config)
+  engine.js      — runAction: фазы действия, события, изоляция, гейт судьи
+  actions/       — декларации действий (precheck/context/verify/publish)
+  prompts.js     — шаблоны промптов: оверрайды, front-matter, строгие переменные
   secrets.js     — ключи: env → keychain → ошибка с командой заведения
   agent/         — spawn (процесс агента), events (поток), journal (раны)
   judge/         — judge(), zod-схема вердикта, payload, провайдеры cli и openai

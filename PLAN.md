@@ -277,13 +277,21 @@ export const conflictAction = {
     agent: { default: 'claude', allow: ['claude', 'pi'], pickByJudge: false },
     judge: { gate: 'pre-push', role: 'acceptance' },  // 'pre-push' | 'advisory' | 'none'
     inputSchema: { /* JSON Schema, одна на CLI, MCP, TUI-форму и HTTP-валидацию */ },
-    async precheck(ctx, target) {},   // → {skip, reason} | {facts: {conflict_files}}
-    async context(ctx, target, pre) {},// → плоский объект переменных промпта
-    async verify(run) {},              // после агента, до судьи → {ok, facts}
-    async publish(run) {},             // ТОЛЬКО после approve: push + build + reply/resolve
+    async precheck(x) {},   // до изоляции → {skip, reason, result, facts, workspace, meta}
+    dryRun(x) {},           // план без side-effect'ов
+    renderPlan(plan, log) {},// как этот план печатать человеку
+    async context(x) {},    // → плоский объект переменных промпта
+    goal(x) {},             // одна фраза «что просили» — уходит судье
+    async verify(x) {},     // после агента, до судьи → механические факты
+    async publish(x) {},    // ТОЛЬКО после approve: push + build + reply/resolve
+    result(x) {},           // финальный объект для --json
   },
 };
 ```
+
+Хуки получают один объект `x` — контекст рана: `{ctx, opts, input, target, pre, run, ws, vars,
+facts, verdict, published, say, emit, phase, signal}`. Печатать из хуков нельзя, только `say` -
+вывод идёт событиями, и CLI, MCP и TUI рендерят один и тот же поток.
 
 `run` и `mcp` **не пишутся руками** - их синтезирует `fromAction(spec)` в `registry.js`. Одна
 запись → CLI-команда, MCP-инструмент, TUI-кнопка, HTTP-эндпоинт.
