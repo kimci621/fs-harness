@@ -1,0 +1,87 @@
+import { CliError } from './errors.js';
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Jira REST, только чтение. fetchImpl инжектируется ради тестов без сети.
+// Форма та же, что у glab.js: один низкоуровневый api() с ретраями, поверх — методы.
+export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs = 1000 } = {}) {
+  if (!baseUrl || !email) {
+    throw new CliError('Jira не настроена: нужны jira.baseUrl и jira.email в конфиге (fsh config init).', 1, 'config_invalid');
+  }
+  const root = baseUrl.replace(/\/+$/, '');
+  const auth = `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`;
+
+  // Какой поиск понял инстанс, запоминаем: пробовать обе ветки на каждый вызов незачем.
+  let searchPath = null;
+
+  async function api(path, { method = 'GET', body, retries = 4, allow404 = false } = {}) {
+    let lastErr;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      let res;
+      try {
+        res = await fetchImpl(`${root}${path}`, {
+          method,
+          headers: { authorization: auth, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+      } catch (err) {
+        lastErr = err;
+        if (attempt === retries) throw new CliError(`Jira недоступна: ${err.message}`, 1, 'api_failed');
+        await sleep(backoff(attempt, sleepMs));
+        continue;
+      }
+      if (res.ok) return res.status === 204 ? null : res.json();
+      if (allow404 && (res.status === 404 || res.status === 410)) return { gone: true };
+      if (res.status === 401 || res.status === 403) {
+        throw new CliError(`Jira отклонила токен (${res.status}). Проверь ключ: security find-generic-password -s fs-harness -a jira -w`, 1, 'api_failed');
+      }
+      // 429 и 5xx — ждём и повторяем, Retry-After уважаем.
+      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+        const after = Number(res.headers?.get?.('retry-after'));
+        const delay = Number.isFinite(after) && after > 0 ? after * sleepMs : backoff(attempt, sleepMs);
+        process.stderr.write(`\r\x1b[K⏳ Jira ответила ${res.status}, попытка ${attempt}/${retries}, повтор через ${Math.round(delay / sleepMs)}с…\n`);
+        await sleep(delay);
+        continue;
+      }
+      throw new CliError(`Jira ${method} ${path.replace(/\?.*$/, '')} → ${res.status}.`, 1, 'api_failed');
+    }
+    throw new CliError(`Jira ${method} ${path} не удался: ${lastErr?.message ?? 'нет ответа'}`, 1, 'api_failed');
+  }
+
+  return {
+    api,
+
+    myself: () => api('/rest/api/3/myself'),
+
+    // Новый /search/jql есть не на всех инстансах: 404/410 уводит на старый GET /search.
+    async searchJql({ jql, fields = ['summary', 'status', 'updated', 'issuetype', 'priority'], max = 50, cursor } = {}) {
+      if (searchPath !== '/rest/api/3/search') {
+        const res = await api('/rest/api/3/search/jql', {
+          method: 'POST',
+          body: { jql, fields, maxResults: max, ...(cursor ? { nextPageToken: cursor } : {}) },
+          allow404: searchPath === null,
+        });
+        if (!res?.gone) {
+          searchPath = '/rest/api/3/search/jql';
+          return { issues: res.issues ?? [], cursor: res.nextPageToken ?? null };
+        }
+        searchPath = '/rest/api/3/search';
+      }
+      const q = new URLSearchParams({ jql, fields: fields.join(','), maxResults: String(max), startAt: String(cursor ?? 0) });
+      const res = await api(`/rest/api/3/search?${q}`);
+      const next = (res.startAt ?? 0) + (res.issues?.length ?? 0);
+      return { issues: res.issues ?? [], cursor: next < (res.total ?? 0) ? next : null };
+    },
+
+    // v2, а не v3: description приходит текстом, а не ADF-деревом — флаттенер не нужен.
+    issue: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}?expand=renderedFields`),
+
+    comments: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/comment?maxResults=50`),
+
+    transitions: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/transitions`),
+  };
+}
+
+const backoff = (attempt, unit) => unit * 2 ** (attempt - 1); // 1с, 2с, 4с
+
+export const ISSUE_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
