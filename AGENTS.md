@@ -137,6 +137,8 @@ resolve target → precheck → (skip?) → context → isolate → prompt
 - Роль → рубрика `src/prompts/judge/<role>.md` + список профилей из `cfg.judge.roles`. Список означает фолбэк по порядку: не ответил бэкенд — идём к следующему. Исключение — `judge_schema`: невалидная схема это беда модели, а не бэкенда, и сменой профиля не лечится.
 - Схема проверяется всегда, что бы ни обещал провайдер. Провал → один ремонтный запрос с `error.issues` → второй провал → `CliError(..., 'judge_schema')`.
 
+- Вердикт `revise` на гейте `pre-push` — не отказ: движок зовёт агента снова с `reviseMessage(verdict)` в ту же сессию (`SESSION_ARGS` в `engine.js`), пересобирает факты и судит заново, не больше `cfg.judge.maxRevise` раз (дефолт 1). Агента без записи в `SESSION_ARGS` на доделку не зовут: без сессии он начал бы с нуля.
+
 **Новая роль:** файл рубрики в `src/prompts/judge/`, запись в `judge.roles` в `DEFAULTS` (`config.js`), сборщик payload рядом с `buildAcceptancePayload`. Схема вердикта общая на все роли — не плоди вторую.
 
 **Новый провайдер:** файл в `src/judge/providers/`, ветка в `createProvider`. Контракт один: `{name, schemaStrength, model, complete({system, user, effort, signal, onDelta}) → {text, model, usage, cost, sessionId}}`. Ошибки — `CliError(..., 'judge_failed')`, чтобы сработал фолбэк.
