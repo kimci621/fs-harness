@@ -100,11 +100,11 @@ export const COMMANDS = [
   {
     name: 'jobs',
     usage: 'jobs <mr|ветка>',
-    description: 'Джобы последнего MR-пайплайна',
+    description: 'Джобы последнего MR-пайплайна (устаревший пайплайн пересоздаётся)',
     example: 'fsh jobs fix/main-banner',
     run: (ctx, args, opts) => withRepoHost(ctx, () => cmdJobs(ctx.g, ctx.repo, args[0], { json: opts.json })),
     mcp: {
-      description: 'Джобы последнего MR-пайплайна: stage, имя, статус, id. Только чтение.',
+      description: 'Джобы последнего MR-пайплайна: stage, имя, статус, id. Если head-пайплайн отсутствует или устарел (sha ≠ HEAD ветки), создаёт новый MR-пайплайн — то есть меняет состояние GitLab.',
       inputSchema: {
         type: 'object',
         properties: { query: { type: 'string', description: 'номер MR или часть имени ветки' } },
