@@ -24,6 +24,7 @@ const fact = (v) =>
 
 export function buildAcceptancePayload({ goal, facts = {}, extra = '', diff = '', agentText = '', maxDiffLines = 4000, maxAgentLines = 200 }) {
   const factLines = Object.entries(facts)
+    .filter(([, v]) => v !== undefined) // diff вырезан из фактов и не должен светиться как «- diff: undefined»
     .map(([k, v]) => `- ${k}: ${fact(v)}`)
     .join('\n');
 
