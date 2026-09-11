@@ -63,9 +63,17 @@ export async function main(argv) {
     return cliErr.exitCode ?? 1;
   }
 
-  if (opts.help || !rest.length || rest[0] === 'help') {
+  if (opts.help || rest[0] === 'help') {
     console.log(buildUsage());
     return 0;
+  }
+  // Голый fsh в живом терминале — это TUI; в пайпе и в CI — справка.
+  if (!rest.length) {
+    if (!process.stdout.isTTY || opts.json) {
+      console.log(buildUsage());
+      return 0;
+    }
+    rest = ['tui'];
   }
 
   const [cmd, ...args] = rest;
