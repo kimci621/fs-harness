@@ -206,6 +206,7 @@ test('TUI: E правит поле задачи — выбор поля, выб�
         fields: {
           assignee: { name: 'Assignee', schema: { type: 'user' } },
           priority: { name: 'Priority', schema: { type: 'priority' }, allowedValues: [{ id: '2', name: 'High' }, { id: '3', name: 'Medium' }] },
+          labels: { name: 'Labels', schema: { type: 'array', items: 'string' } }, // Jira не перечисляет — вводим руками
           summary: { name: 'Summary', schema: { type: 'string' } }, // нечем заполнить — не показываем
         },
       }),
@@ -237,6 +238,21 @@ test('TUI: E правит поле задачи — выбор поля, выб�
     await tick(300);
     assert.deepEqual(puts, [{ key: 'FD-1', fields: { assignee: { accountId: 'a2' } } }]);
     assert.match(app.lastFrame(), /Assignee: Эмиль/); // видно в логе
+
+    app.stdin.write('E'); // Labels: список строк, его набирают через запятую
+    await tick(250);
+    app.stdin.write('j'); await tick(60);
+    app.stdin.write('j'); await tick(60);
+    app.stdin.write('j'); await tick(60); // Assignee → Ответственный… → Priority → Labels
+    assert.match(app.lastFrame(), /Labels/);
+    app.stdin.write('\r');
+    await tick(200);
+    assert.match(app.lastFrame(), /через запятую/);
+    assert.match(app.lastFrame(), /Frontend/); // текущее значение подставлено, а не пустое поле
+    for (const ch of ', ui') { app.stdin.write(ch); await tick(25); }
+    app.stdin.write('\r');
+    await tick(300);
+    assert.deepEqual(puts[1], { key: 'FD-1', fields: { labels: ['Frontend', 'ui'] } });
   } finally {
     app.unmount();
   }
