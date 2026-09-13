@@ -5,10 +5,11 @@ import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
 import htm from 'htm';
 import {
-  TABS, FILTER_FIELDS, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
+  TABS, FILTER_FIELDS, promptRow, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
   orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, toggleFilter, filterValueText, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
+import { listTemplates, loadTemplate, userOverride, dropUserOverride } from '../prompts.js';
 import { findCommand } from '../registry.js';
 import { runAction } from '../engine.js';
 import { cmdMRS, toJSON, anyFilter } from '../commands/mrs.js';
@@ -75,6 +76,17 @@ export function App({ ctx, opts }) {
     return () => clearInterval(id);
   }, []);
 
+  // Текст промпта читается с диска для выбранной строки: файлы маленькие, кеш на имя.
+  const promptName = state.tab === 'prompts' ? selected(state)?.name ?? null : null;
+  useEffect(() => {
+    if (!promptName || state.prompts[promptName] !== undefined) return;
+    try {
+      dispatch({ type: 'promptBody', name: promptName, body: loadTemplate(promptName, { projectDir: ctx.cfg.projectDir }).body });
+    } catch (err) {
+      dispatch({ type: 'promptBody', name: promptName, body: `не прочитался: ${err.message}` });
+    }
+  }, [promptName]);
+
   // Карточка задачи целиком — отдельным запросом и только для выбранной строки.
   const issueKey = state.tab === 'issues' ? selected(state)?.key ?? null : null;
   useEffect(() => {
@@ -107,6 +119,7 @@ export function App({ ctx, opts }) {
         }
       }
       if (tab === 'runs') dispatch({ type: 'items', tab, items: listRuns({ limit: 30 }) });
+      if (tab === 'prompts') dispatch({ type: 'items', tab, items: listTemplates({ projectDir: ctx.cfg.projectDir }) });
       if (tab === 'issues') {
         const { issues } = await withBusy('задачи Jira', () =>
           jira().searchJql({ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC' }));
@@ -273,6 +286,25 @@ export function App({ ctx, opts }) {
     });
   }
 
+  // Свой промпт — копия в ~/.config/fs-harness/prompts. В проектный каталог не пишем:
+  // он лежит в чужом репозитории, туда кладёт файлы только человек.
+  function promptSource(makeOwn) {
+    const item = selected(state);
+    if (!item?.name) return;
+    try {
+      const res = makeOwn ? userOverride(item.name, { projectDir: ctx.cfg.projectDir }) : dropUserOverride(item.name);
+      bufferRef.current.push(
+        makeOwn
+          ? `${item.name} ▸ ${res.created ? 'свой промпт создан' : 'свой промпт уже был'}: ${res.path}`
+          : `${item.name} ▸ ${res.removed ? 'свой промпт удалён, снова встроенный' : 'своего промпта и не было'}`,
+      );
+      dispatch({ type: 'promptBody', name: item.name, body: undefined });
+      load('prompts');
+    } catch (err) {
+      bufferRef.current.push(`${item.name} ▸ ❌ ${err.message}`);
+    }
+  }
+
   // Фильтры списка MR — те же, что у флагов CLI, только выбираются с клавиш.
   function openFilters() {
     dispatch({ type: 'modalOpen', kind: 'filters', title: 'Фильтры списка MR', items: FILTER_FIELDS });
@@ -352,6 +384,7 @@ export function App({ ctx, opts }) {
       return;
     }
     if (intent.type === 'openFilters') return openFilters();
+    if (intent.type === 'promptOverride' || intent.type === 'promptDrop') return promptSource(intent.type === 'promptOverride');
     if (intent.type === 'pipeline') return void openPipeline().catch((err) => dispatch({ type: 'error', tab: 'mr', message: err.message }));
     if (intent.type === 'modalApply') {
       if (state.modal.busy) return; // запрос уже идёт, второй Enter только навредит
@@ -486,10 +519,10 @@ function Body({ state, item, width, height }) {
   const inner = Math.max(1, height - 2); // рамка сверху и снизу
   return html`
     <${Box} height=${height}>
-      <${Box} flexDirection="column" width=${listWidth} flexShrink=${0} overflow="hidden" borderStyle="round" borderColor=${state.focus === 'list' ? 'cyan' : 'gray'}>
+      <${Box} flexDirection="column" width=${listWidth} flexShrink=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${state.focus === 'list' ? 'cyan' : 'gray'}>
         <${List} state=${state} height=${inner} width=${listWidth - 2} />
       <//>
-      <${Box} flexDirection="column" flexGrow=${1} minWidth=${0} overflow="hidden" borderStyle="round" borderColor=${state.focus === 'details' ? 'cyan' : 'gray'}>
+      <${Box} flexDirection="column" flexGrow=${1} minWidth=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${state.focus === 'details' ? 'cyan' : 'gray'}>
         <${Details} state=${state} item=${item} height=${inner} />
       <//>
     <//>
@@ -508,8 +541,12 @@ function List({ state, height, width }) {
   return rows.slice(start, start + visible).map((r, i) => {
     const active = start + i === cursor;
     if (state.tab === 'mr') return html`<${MRRow} key=${r.iid} r=${r} active=${active} width=${width} />`;
+    const row = state.tab === 'issues' ? issueRow(r) : state.tab === 'prompts' ? promptRow(r) : runRow(r);
     // wrap обязателен: эмодзи шире символа, и без него строка переносится, а список уезжает.
-    return html`<${Text} key=${r.key ?? r.id ?? i} inverse=${active} wrap="truncate-end">${state.tab === 'issues' ? issueRow(r) : runRow(r)}<//>`;
+    return html`<${Box} key=${r.key ?? r.name ?? r.id ?? i} flexShrink=${0}>
+      <${Text} color="cyan">${active ? '▌' : ' '}<//>
+      <${Text} wrap="truncate-end">${row.parts.map((pt, j) => html`<${Text} key=${j} bold=${pt.bold || active} dimColor=${pt.dim} color=${pt.color}>${pt.text}<//>`)}<//>
+    <//>`;
   });
 }
 
@@ -524,23 +561,36 @@ function MRRow({ r, active, width = 40 }) {
       <${Box} flexGrow=${1} minWidth=${0}><${Text} bold color=${active ? 'cyan' : undefined} wrap="truncate-end">${title}<//><//>
       ${badges && room > 8 ? html`<${Box} flexShrink=${0}><${Text} wrap="truncate-end"> ${badges}<//><//>` : null}
     <//>
-    <${Text} dimColor wrap="truncate-end">${active ? '▌' : ' '}${meta}<//>
+    <${Box}>
+      <${Text} color="cyan">${active ? '▌' : ' '}<//>
+      <${Text} wrap="truncate-end">${meta.parts.map((p, i) => html`<${Text} key=${i} bold=${p.bold} dimColor=${p.dim} color=${p.color}>${p.text}<//>`)}<//>
+    <//>
   <//>`;
 }
 
 function Details({ state, item, height }) {
   const full = item?.key ? state.details[item.key] : null;
-  const lines = detailLines(state.tab, item, { full: full?.issue ?? null, comments: full?.comments ?? [], expand: state.expand });
+  const lines = detailLines(state.tab, item, {
+    full: full?.issue ?? null,
+    comments: full?.comments ?? [],
+    expand: state.expand,
+    body: item?.name ? state.prompts[item.name] ?? '' : '',
+  });
   const off = Math.min(state.scroll.details, Math.max(0, lines.length - height));
-  return lines.slice(off, off + height).map((l, i) => html`
-    <${Text} key=${i} bold=${l.bold} dimColor=${l.dim} color=${l.color} wrap="truncate-end">${l.text}<//>
-  `);
+  return lines.slice(off, off + height).map((l, i) => html`<${Line} key=${i} line=${l} />`);
 }
+
+// Строка из кусков: у каждого свой цвет. Пустая строка-разделитель рисуется пробелом,
+// иначе ink схлопывает её и группы слипаются.
+const Line = ({ line }) =>
+  line.gap
+    ? html`<${Text}> <//>`
+    : html`<${Text} wrap="truncate-end">${line.parts.map((p, i) => html`<${Text} key=${i} bold=${p.bold} dimColor=${p.dim} color=${p.color}>${p.text}<//>`)}<//>`;
 
 function Log({ lines, height, offset, focused }) {
   const inner = Math.max(1, height - 2);
   const end = Math.max(inner, lines.length - offset);
-  return html`<${Box} flexDirection="column" height=${height} borderStyle="round" borderColor=${focused ? 'cyan' : 'gray'}>
+  return html`<${Box} flexDirection="column" height=${height} paddingX=${1} borderStyle="round" borderColor=${focused ? 'cyan' : 'gray'}>
     ${lines.slice(Math.max(0, end - inner), end).map((l, i) => html`<${Text} key=${i} wrap="truncate-end">${l}<//>`)}
     ${!lines.length ? html`<${Text} dimColor>лог пуст — запусти действие клавишей<//>` : null}
   <//>`;

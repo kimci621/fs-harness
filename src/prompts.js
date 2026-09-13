@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,24 @@ export function templatePaths(name, { projectDir } = {}) {
     path.join(USER_DIR, rel),
     path.join(BUILTIN_DIR, rel),
   ].filter(Boolean);
+}
+
+// Личный оверрайд: копия шаблона в ~/.config/fs-harness/prompts. Проектный каталог
+// намеренно не трогаем — он лежит в чужом репозитории, туда пишет только человек.
+export function userOverride(name, { projectDir } = {}) {
+  const dest = path.join(USER_DIR, `${name}.md`);
+  if (existsSync(dest)) return { path: dest, created: false };
+  const tpl = loadTemplate(name, { projectDir });
+  mkdirSync(path.dirname(dest), { recursive: true });
+  copyFileSync(tpl.path, dest); // целиком, вместе с front-matter — иначе оверрайд потеряет vars
+  return { path: dest, created: true };
+}
+
+export function dropUserOverride(name) {
+  const dest = path.join(USER_DIR, `${name}.md`);
+  if (!existsSync(dest)) return { path: dest, removed: false };
+  rmSync(dest);
+  return { path: dest, removed: true };
 }
 
 export function loadTemplate(name, { projectDir } = {}) {
