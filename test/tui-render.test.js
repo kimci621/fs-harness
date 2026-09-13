@@ -168,3 +168,28 @@ test('TUI: видно, что именно грузится, и панель о�
     app.unmount();
   }
 });
+
+// Узкое окно: две колонки по 38 знаков нечитаемы, поэтому остаётся одна.
+test('TUI: на узком терминале колонка одна и Tab переключает список ↔ карточку', async () => {
+  const app = render(React.createElement(App, { ctx, opts: {} }));
+  try {
+    await tick(400);
+    assert.match(app.lastFrame(), /!2547 fix: баннер/); // широко: список и карточка рядом
+    const resize = (columns, rows) => {
+      Object.defineProperty(app.stdout, 'columns', { value: columns, configurable: true });
+      Object.defineProperty(app.stdout, 'rows', { value: rows, configurable: true });
+      app.stdout.emit('resize');
+    };
+    resize(76, 24);
+    await tick(200);
+    assert.match(app.lastFrame(), /fix: баннер/);
+    assert.doesNotMatch(app.lastFrame(), /ветка {3}fix\/banner/); // карточки не видно
+
+    app.stdin.write('\t');
+    await tick(200);
+    assert.match(app.lastFrame(), /ветка {3}fix\/banner → dev/);
+    assert.doesNotMatch(app.lastFrame(), /!2547 · создан/); // теперь спрятан список
+  } finally {
+    app.unmount();
+  }
+});
