@@ -1,4 +1,4 @@
-import { ISSUE_KEY } from '../jira.js';
+import { ISSUE_KEY, fieldByName, openSprints } from '../jira.js';
 import { humanize, table, truncate } from '../format.js';
 import { finish } from '../output.js';
 import { confirm } from '../ui.js';
@@ -46,7 +46,33 @@ const brief = (issue) => ({
   updated: issue.fields?.updated ?? null,
 });
 
-// fsh jira [mine|<KEY>] [фильтры] | fsh jira move <KEY> <статус>
+// Спринт по имени: точное совпадение, потом вхождение. Неоднозначность — ошибка со списком.
+export function pickSprint(sprints, name) {
+  const all = sprints ?? [];
+  const lower = String(name).toLowerCase();
+  const exact = all.find((s) => s.name?.toLowerCase() === lower || String(s.id) === String(name));
+  if (exact) return exact;
+  const hits = all.filter((s) => s.name?.toLowerCase().includes(lower));
+  if (hits.length === 1) return hits[0];
+  const list = all.map((s) => s.name).join(', ') || 'нет активных и будущих';
+  throw new CliError(
+    hits.length ? `"${name}" подходит нескольким спринтам: ${hits.map((s) => s.name).join(', ')}.` : `Спринта "${name}" нет. Доступны: ${list}.`,
+    1,
+    'usage',
+  );
+}
+
+// Доска задачи: у спринта в самой задаче она уже указана, иначе ищем по ключу проекта.
+export async function boardOf(j, issue) {
+  const fromSprint = openSprints(fieldByName(issue, 'Sprint'))[0]?.boardId;
+  if (fromSprint) return fromSprint;
+  const projectKey = issue.key.split('-')[0];
+  const { values = [] } = (await j.boards(projectKey)) ?? {};
+  if (!values.length) throw new CliError(`У проекта ${projectKey} нет доски — спринт назначать некуда.`, 1, 'api_failed');
+  return values[0].id;
+}
+
+// fsh jira [mine|<KEY>] [фильтры] | move <KEY> <статус> | sprint <KEY> <спринт> | comment <KEY> <текст>
 export async function cmdJira(ctx, args, opts = {}) {
   const { json, asObject } = opts;
   const j = ctx.jira();
@@ -54,9 +80,13 @@ export async function cmdJira(ctx, args, opts = {}) {
   const result =
     query === 'move'
       ? await move(j, rest, ctx, opts)
-      : !query || query === 'mine'
-        ? await mine(j, { ...opts, componentField: ctx.cfg.jira?.componentField })
-        : await one(j, query, ctx);
+      : query === 'sprint'
+        ? await sprint(j, rest, ctx, opts)
+        : query === 'comment'
+          ? await comment(j, rest, ctx, opts)
+          : !query || query === 'mine'
+            ? await mine(j, { ...opts, componentField: ctx.cfg.jira?.componentField })
+            : await one(j, query, ctx);
 
   if (asObject) return result;
   if (json) finish(true, result);
@@ -93,6 +123,38 @@ async function move(j, [key, ...words], ctx, { yes, asObject, dryRun } = {}) {
   return { ok: true, key, from, to, transition: t.name, url: issueUrl(ctx, key) };
 }
 
+// Запись в Jira: перенос задачи в спринт. Список спринтов берётся с доски задачи.
+async function sprint(j, [key, ...words], ctx, { yes, asObject, dryRun } = {}) {
+  const name = words.join(' ').trim();
+  if (!key || !ISSUE_KEY.test(key) || !name) {
+    throw new CliError('Использование: fsh jira sprint <KEY> <спринт>, например fsh jira sprint FD-7647 "Спринт 18".', 1, 'usage');
+  }
+  const issue = await j.issue(key);
+  const from = openSprints(fieldByName(issue, 'Sprint')).map((s) => s.name).join(', ') || 'без спринта';
+  const { values = [] } = (await j.sprints(await boardOf(j, issue))) ?? {};
+  const s = pickSprint(values, name);
+  if (dryRun) return { ok: true, dry_run: true, key, from, to: s.name, sprint_id: s.id };
+  if (!yes && !asObject && !confirm(`${key}: ${from} → ${s.name}. Переносим? [y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  await j.moveToSprint(s.id, [key]);
+  return { ok: true, key, from, to: s.name, sprint_id: s.id, url: issueUrl(ctx, key) };
+}
+
+// Запись в Jira: комментарий. Текст уходит как есть, его увидит вся команда.
+async function comment(j, [key, ...words], ctx, { yes, asObject, dryRun } = {}) {
+  const text = words.join(' ').trim();
+  if (!key || !ISSUE_KEY.test(key) || !text) {
+    throw new CliError('Использование: fsh jira comment <KEY> <текст>.', 1, 'usage');
+  }
+  if (dryRun) return { ok: true, dry_run: true, key, comment: text };
+  if (!yes && !asObject && !confirm(`${key}: опубликовать комментарий «${truncate(text, 60)}»? [y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  const created = await j.addComment(key, text);
+  return { ok: true, key, comment: text, comment_id: created?.id ?? null, url: issueUrl(ctx, key) };
+}
+
 async function one(j, key, ctx) {
   if (!ISSUE_KEY.test(key)) {
     throw new CliError(`"${key}" не похоже на ключ задачи (FD-7647). Использование: fsh jira [mine|<KEY>].`, 1, 'usage');
@@ -119,8 +181,12 @@ async function one(j, key, ctx) {
 export const issueUrl = (ctx, key) => `${(ctx.cfg.jira?.baseUrl || '').replace(/\/+$/, '')}/browse/${key}`;
 
 function render(r, ctx) {
-  if (r.transition) {
+  if (r.transition || r.sprint_id) {
     console.log(`${r.key}: ${r.from} → ${r.to}${r.dry_run ? ' (dry-run, ничего не менял)' : ''}`);
+    return;
+  }
+  if (r.comment) {
+    console.log(`${r.key}: комментарий ${r.dry_run ? 'не опубликован (dry-run)' : `опубликован (#${r.comment_id})`}`);
     return;
   }
   if (r.issues) {
