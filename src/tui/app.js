@@ -20,6 +20,9 @@ import { statusIcon, commentStats } from '../format.js';
 
 const html = htm.bind(React.createElement);
 
+const NARROW = 100; // уже этого две колонки не читаются, показываем одну
+const EMPTY = { mr: 'нет открытых MR', issues: 'нет задач на тебе', runs: 'запусков ещё не было', prompts: 'шаблонов не нашлось' };
+
 // Размер окна терминала: экран занимает его целиком и переживает ресайз.
 function useTerminalSize() {
   const { stdout } = useStdout();
@@ -541,11 +544,15 @@ function Modal({ modal, filters, rows, height, onSubmit, onChange }) {
 }
 
 function Body({ state, item, width, height, onSearch, onSearchDone }) {
-  const listWidth = Math.max(30, Math.floor(width * (state.tab === 'mr' ? 0.58 : 0.45)));
+  // Узкий терминал: две колонки по 40 знаков нечитаемы, поэтому показываем ту,
+  // что в фокусе, и Tab становится переключателем «список ↔ карточка».
+  const narrow = width < NARROW;
+  const onDetails = state.focus === 'details';
+  const listWidth = narrow ? width : Math.max(30, Math.floor(width * (state.tab === 'mr' ? 0.58 : 0.45)));
   const inner = Math.max(1, height - 2); // рамка сверху и снизу
   return html`
     <${Box} height=${height}>
-      <${Box} flexDirection="column" width=${listWidth} flexShrink=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${state.focus === 'list' ? 'cyan' : 'gray'}>
+      ${narrow && onDetails ? null : html`<${Box} flexDirection="column" width=${listWidth} flexShrink=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${state.focus === 'list' ? 'cyan' : 'gray'}>
         ${state.searching || state.search[state.tab]
           ? html`<${Box} flexShrink=${0}>
               <${Text} color="cyan">/ <//>
@@ -556,10 +563,10 @@ function Body({ state, item, width, height, onSearch, onSearchDone }) {
             <//>`
           : null}
         <${List} state=${state} height=${state.searching || state.search[state.tab] ? inner - 1 : inner} width=${listWidth - 2} />
-      <//>
-      <${Box} flexDirection="column" flexGrow=${1} minWidth=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${state.focus === 'details' ? 'cyan' : 'gray'}>
+      <//>`}
+      ${narrow && !onDetails ? null : html`<${Box} flexDirection="column" flexGrow=${1} minWidth=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${onDetails ? 'cyan' : 'gray'}>
         <${Details} state=${state} item=${item} height=${inner} />
-      <//>
+      <//>`}
     <//>
   `;
 }
@@ -568,7 +575,14 @@ function List({ state, height, width }) {
   const rows = visibleItems(state);
   // Гасим список только пока показывать нечего: на обновлении старые строки полезнее пустоты.
   if (state.loading[state.tab] && !rows.length) return html`<${Text} dimColor>загружаю…<//>`;
-  if (!rows.length) return html`<${Text} dimColor>${state.search[state.tab] ? 'ничего не нашлось' : 'пусто'}<//>`;
+  if (!rows.length) {
+    const hint = state.search[state.tab]
+      ? `ничего не нашлось по «${state.search[state.tab]}» · / — поправить запрос`
+      : anyFilter(state.filters) && state.tab === 'mr'
+        ? 'под фильтры не попал ни один MR · f — фильтры'
+        : `${EMPTY[state.tab]} · R — перечитать`;
+    return html`<${Text} dimColor wrap="truncate-end">${hint}<//>`;
+  }
   const per = state.tab === 'mr' ? 2 : 1; // строка MR двухэтажная, как в GitLab
   const visible = Math.max(1, Math.floor(height / per));
   const cursor = state.cursor[state.tab];
