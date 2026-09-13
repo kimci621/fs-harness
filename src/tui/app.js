@@ -24,6 +24,7 @@ const html = htm.bind(React.createElement);
 // Наверх списка полей — то, что правят чаще всего.
 const EDIT_FIRST = ['Assignee', 'Ответственный разработчик', 'Ответственный тестировщик', 'Ответственный продакт', 'Priority'];
 const rank = (name) => (EDIT_FIRST.indexOf(name) + 1 || 99);
+const isTextList = (f) => f?.schema?.type === 'array' && f?.schema?.items === 'string';
 
 const NARROW = 100; // уже этого две колонки не читаются, показываем одну
 const EMPTY = { mr: 'нет открытых MR', issues: 'нет задач на тебе', runs: 'запусков ещё не было', prompts: 'шаблонов не нашлось' };
@@ -303,7 +304,7 @@ export function App({ ctx, opts }) {
     try {
       const meta = await withBusy('редактируемые поля', () => jira().editMeta(item.key));
       const fields = Object.entries(meta?.fields ?? {})
-        .filter(([, f]) => f.allowedValues?.length || f.schema?.type === 'user' || f.schema?.items === 'user')
+        .filter(([, f]) => f.allowedValues?.length || f.schema?.type === 'user' || f.schema?.items === 'user' || isTextList(f))
         .map(([id, f]) => ({ id, label: f.name ?? id, meta: f }))
         .sort((a, b) => rank(a.label) - rank(b.label) || a.label.localeCompare(b.label));
       dispatch({ type: 'modalItems', items: fields, busy: false, note: fields.length ? '' : 'править нечего' });
@@ -316,6 +317,11 @@ export function App({ ctx, opts }) {
     const field = state.modal.items[state.modal.cursor];
     const key = state.modal.issue;
     if (!field) return;
+    // Списки строк (Labels) Jira не перечисляет — их набирают через запятую.
+    if (isTextList(field.meta)) {
+      const now = (state.details[key]?.issue?.fields?.[field.id] ?? []).join(', ');
+      return void dispatch({ type: 'modalOpen', kind: 'editValue', title: `${key} · ${field.label}`, issue: key, field: field.id, meta: field.meta, items: [], editing: field.id, value: now });
+    }
     dispatch({ type: 'modalOpen', kind: 'editValue', title: `${key} · ${field.label}`, issue: key, field: field.id, meta: field.meta, items: [], busy: true, note: 'читаю значения…' });
     try {
       const opts = field.meta.allowedValues?.length
@@ -327,15 +333,16 @@ export function App({ ctx, opts }) {
     }
   }
 
-  async function applyEditValue() {
+  async function applyEditValue(text) {
     const { issue, field, meta, items, cursor } = state.modal;
-    const opt = items[cursor];
-    if (!opt) return;
+    const opt = text === undefined ? items[cursor] : null;
+    if (text === undefined && !opt) return;
+    const value = text === undefined ? editValueFor(meta, opt.clear ? null : opt) : text.split(',').map((v) => v.trim()).filter(Boolean);
     dispatch({ type: 'modalItems', busy: true, note: 'сохраняю…' });
     try {
-      await withBusy(`${meta.name} у ${issue}`, () => jira().updateIssue(issue, { [field]: editValueFor(meta, opt.clear ? null : opt) }));
+      await withBusy(`${meta.name} у ${issue}`, () => jira().updateIssue(issue, { [field]: value }));
       dispatch({ type: 'modalClose' });
-      bufferRef.current.push(`${issue} ▸ ${meta.name}: ${opt.clear ? 'очищено' : opt.label}`);
+      bufferRef.current.push(`${issue} ▸ ${meta.name}: ${text !== undefined ? value.join(', ') || 'очищено' : opt.clear ? 'очищено' : opt.label}`);
       await reloadIssue(issue);
     } catch (err) {
       dispatch({ type: 'modalItems', busy: false, note: `❌ ${err.message}` });
@@ -423,7 +430,9 @@ export function App({ ctx, opts }) {
   // В окне комментария кроме ввода ничего нет, поэтому Esc закрывает его целиком.
   useInput((input, key) => {
     if (!key.escape) return;
-    dispatch(state.modal?.kind === 'comment' ? { type: 'modalClose' } : { type: 'modalEdit', editing: null, value: '' });
+    if (state.modal?.kind === 'comment') return void dispatch({ type: 'modalClose' });
+    if (state.modal?.kind === 'editValue') return void openEditFields(); // назад к списку полей
+    dispatch({ type: 'modalEdit', editing: null, value: '' });
   }, { isActive: Boolean(editing) });
 
   useInput((input, key) => {
@@ -519,7 +528,7 @@ export function App({ ctx, opts }) {
       ${state.help
         ? html`<${Help} height=${bodyInner} />`
         : state.modal
-          ? html`<${Modal} modal=${state.modal} filters=${state.filters} rows=${state.items.mr} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
+          ? html`<${Modal} modal=${state.modal} filters=${state.filters} rows=${state.items.mr} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : state.modal.kind === 'editValue' ? applyEditValue : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
           : html`<${Body} state=${state} item=${item} width=${columns} height=${bodyInner}
               onSearch=${(v) => dispatch({ type: 'searchEdit', value: v })} onSearchDone=${() => dispatch({ type: 'searchClose' })} />`}
       ${cards.map((r) => html`
@@ -552,6 +561,12 @@ const Help = ({ height }) =>
 
 function Modal({ modal, filters, rows, height, onSubmit, onChange }) {
   const body = () => {
+    if (modal.kind === 'editValue' && modal.editing) {
+      return html`<${Box} flexDirection="column">
+        <${Box}><${Text}>› <//><${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} /><//>
+        <${Text} dimColor>через запятую · Enter — сохранить · Esc — назад к полям<//>
+      <//>`;
+    }
     if (modal.kind === 'comment') {
       return html`<${Box} flexDirection="column">
         <${Box}><${Text}>› <//><${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} /><//>
