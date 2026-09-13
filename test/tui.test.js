@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, busyText, lineText } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, filterValueText, busyText, lineText, filterOptions } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -225,8 +225,19 @@ test('фильтры MR: переключатели, сводка для шап�
   assert.equal(f.draft, null);
 
   assert.equal(filterSummary({}), '');
-  assert.equal(filterSummary({ author: 'me', threads: true, draft: false }), 'автор=me, draft=нет, только с открытыми тредами=да');
+  assert.equal(filterSummary({ author: 'me', threads: true, draft: false }), 'автор=я, draft=нет, только с открытыми тредами=да');
   assert.deepEqual(FILTER_FIELDS.map((x) => x.key).slice(0, 3), ['author', 'assignee', 'reviewer']);
+
+  // Значения фильтров — только те, что есть в списке: руками логины не набираются.
+  const rows = [
+    { author: 'Амир Латипов', author_username: 'amir', labels: ['review'], target_branch: 'dev', reviewers: [{ name: 'Эмиль', username: 'emil' }], pipeline: { status: 'success' } },
+    { author: 'Эмиль', author_username: 'emil', labels: ['review', 'bug'], target_branch: 'master', reviewers: [], pipeline: null },
+  ];
+  assert.deepEqual(filterOptions('author', rows).map((o) => o.label), ['— любой', 'я', 'Амир Латипов', 'Эмиль']);
+  assert.deepEqual(filterOptions('label', rows).map((o) => o.value), [null, 'bug', 'review']);
+  assert.deepEqual(filterOptions('pipeline', rows).map((o) => o.value), [null, 'success', 'none']);
+  assert.equal(filterOptions('draft', rows).length, 0); // переключатель, выбирать нечего
+  assert.equal(filterValueText(FILTER_FIELDS[0], 'amir', rows), 'Амир Латипов');
 
   const s = withItems();
   assert.deepEqual(keyIntent('f', {}, s), { type: 'openFilters' });

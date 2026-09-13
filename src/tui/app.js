@@ -6,7 +6,7 @@ import TextInput from 'ink-text-input';
 import htm from 'htm';
 import {
   TABS, FILTER_FIELDS, promptRow, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
-  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, toggleFilter, filterValueText, filterSummary, busyText,
+  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
 import { listTemplates, loadTemplate, userOverride, dropUserOverride } from '../prompts.js';
@@ -313,7 +313,19 @@ export function App({ ctx, opts }) {
   function applyFilterRow() {
     const field = FILTER_FIELDS[state.modal.cursor];
     if (field.type === 'text') return void dispatch({ type: 'modalEdit', editing: field.key, value: state.filters[field.key] ?? '' });
+    if (field.type === 'option') {
+      const items = filterOptions(field.key, state.items.mr);
+      const cursor = Math.max(0, items.findIndex((o) => o.value === (state.filters[field.key] ?? null)));
+      return void dispatch({ type: 'modalOpen', kind: 'filterValue', title: `Фильтр: ${field.label}`, field: field.key, items, cursor });
+    }
     dispatch({ type: 'filters', filters: toggleFilter(state.filters, field.key) });
+  }
+
+  // Значение выбирается из того, что реально встречается в списке MR, а не печатается руками.
+  function applyFilterValue() {
+    const { field, items, cursor } = state.modal;
+    dispatch({ type: 'filters', filters: { ...state.filters, [field]: items[cursor]?.value ?? null } });
+    openFilters();
   }
 
   function submitFilter(value) {
@@ -392,6 +404,7 @@ export function App({ ctx, opts }) {
       if (kind === 'pipeline') return void runJob();
       if (kind === 'sprint') return void applySprint();
       if (kind === 'filters') return applyFilterRow();
+      if (kind === 'filterValue') return applyFilterValue();
       return void applyTransition();
     }
     if (intent.type === 'modalClear') {
@@ -399,6 +412,7 @@ export function App({ ctx, opts }) {
       return void dispatch({ type: 'filters', filters: { ...state.filters, [FILTER_FIELDS[state.modal.cursor].key]: null } });
     }
     if (intent.type === 'modalClose') {
+      if (state.modal.kind === 'filterValue') return openFilters(); // назад к списку полей, а не наружу
       const wasFilters = state.modal.kind === 'filters';
       dispatch(intent);
       if (wasFilters) load('mr');
@@ -422,7 +436,7 @@ export function App({ ctx, opts }) {
   const item = selected(state);
   const running = activeRuns(state);
   const hint = TABS.find((t) => t.key === state.tab).hint;
-  const filters = state.tab === 'mr' ? filterSummary(state.filters) : '';
+  const filters = state.tab === 'mr' ? filterSummary(state.filters, state.items.mr) : '';
 
   return html`
     <${Box} flexDirection="column" width=${columns} height=${height}>
@@ -444,7 +458,7 @@ export function App({ ctx, opts }) {
       ${state.help
         ? html`<${Help} height=${bodyInner} />`
         : state.modal
-          ? html`<${Modal} modal=${state.modal} filters=${state.filters} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
+          ? html`<${Modal} modal=${state.modal} filters=${state.filters} rows=${state.items.mr} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
           : html`<${Body} state=${state} item=${item} width=${columns} height=${bodyInner} />`}
       ${cards.map((r) => html`
         <${Text} key=${r.id} wrap="truncate-end">${r.done ? (r.ok ? '✅' : '❌') : '⏳'} ${r.action} ${r.target} · ${r.phase}${r.decision ? ` · ${r.decision}` : ''}${r.cost ? ` · $${r.cost.toFixed(2)}` : ''}<//>
@@ -472,7 +486,7 @@ const Help = ({ height }) =>
     <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
   <//>`;
 
-function Modal({ modal, filters, height, onSubmit, onChange }) {
+function Modal({ modal, filters, rows, height, onSubmit, onChange }) {
   const body = () => {
     if (modal.kind === 'comment') {
       return html`<${Box} flexDirection="column">
@@ -484,10 +498,19 @@ function Modal({ modal, filters, height, onSubmit, onChange }) {
       return html`<${Box} flexDirection="column">
         ${FILTER_FIELDS.map((f, i) => html`
           <${Text} key=${f.key} inverse=${i === modal.cursor && !modal.editing} wrap="truncate-end">${f.label.padEnd(28)} ${
-            modal.editing === f.key ? html`<${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} />` : filterValueText(f, filters[f.key])
+            modal.editing === f.key ? html`<${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} />` : filterValueText(f, filters[f.key], rows)
           }<//>
         `)}
         <${Text} dimColor>Enter — задать или переключить · Backspace — сбросить · Esc — применить и закрыть<//>
+      <//>`;
+    }
+    if (modal.kind === 'filterValue') {
+      return html`<${Box} flexDirection="column">
+        ${modal.items.slice(0, Math.max(1, height - 4)).map((o, i) => html`
+          <${Text} key=${o.value ?? '—'} inverse=${i === modal.cursor} dimColor=${o.value === null} wrap="truncate-end">${o.label}<//>
+        `)}
+        ${modal.items.length > Math.max(1, height - 4) ? html`<${Text} dimColor>…ещё ${modal.items.length - Math.max(1, height - 4)}<//>` : null}
+        <${Text} dimColor>Enter — выбрать · Esc — назад к фильтрам<//>
       <//>`;
     }
     if (modal.kind === 'pipeline') {
