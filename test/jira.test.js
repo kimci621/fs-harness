@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createJira, ISSUE_KEY } from '../src/jira.js';
+import { createJira, ISSUE_KEY, fieldByName, fieldText, openSprints } from '../src/jira.js';
 import { CliError } from '../src/errors.js';
-import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition } from '../src/commands/jira.js';
+import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition, pickSprint, boardOf } from '../src/commands/jira.js';
 
 // Подменённый fetch: отдаёт заготовленные ответы по порядку и пишет, что спрашивали.
 function fakeFetch(responses) {
@@ -37,7 +37,7 @@ test('jira: issue и comments идут в v2 — description текстом, а 
   const { j, calls } = jira([{ status: 200, body: { key: 'FD-1' } }, { status: 200, body: { comments: [] } }]);
   await j.issue('FD-1');
   await j.comments('FD-1');
-  assert.match(calls[0].url, /\/rest\/api\/2\/issue\/FD-1\?expand=renderedFields$/);
+  assert.match(calls[0].url, /\/rest\/api\/2\/issue\/FD-1\?expand=renderedFields,names$/);
   assert.match(calls[1].url, /\/rest\/api\/2\/issue\/FD-1\/comment\?maxResults=50$/);
 });
 
@@ -170,4 +170,74 @@ test('jira move: --dry-run ничего не меняет, молчаливый 
 test('jira move: без ключа или без статуса — подсказка по использованию', async () => {
   await assert.rejects(() => cmdJira(ctxWith(fakeJira()), ['move', 'FD-1'], { asObject: true, yes: true }), (e) => e.code === 'usage');
   await assert.rejects(() => cmdJira(ctxWith(fakeJira()), ['move', 'мусор', 'x'], { asObject: true, yes: true }), (e) => e.code === 'usage');
+});
+
+test('поля задачи ищутся по названию, а не по customfield_*', () => {
+  const issue = {
+    names: { customfield_10341: 'Ответственный разработчик', customfield_10020: 'Sprint', summary: 'Summary' },
+    fields: {
+      customfield_10341: [{ displayName: 'Амир' }, { displayName: 'Эмиль' }],
+      customfield_10020: [{ id: 1, name: 'Спринт 17', state: 'closed' }, { id: 2, name: 'Спринт 18', state: 'active' }],
+    },
+  };
+  assert.equal(fieldText(fieldByName(issue, 'Ответственный разработчик')), 'Амир, Эмиль');
+  assert.equal(fieldByName(issue, 'Такого поля нет'), undefined);
+  assert.deepEqual(openSprints(fieldByName(issue, 'Sprint')).map((x) => x.name), ['Спринт 18']);
+  assert.deepEqual(openSprints(undefined), []);
+  assert.equal(fieldText(null), '');
+  assert.equal(fieldText({ value: 'Frontend' }), 'Frontend');
+});
+
+test('pickSprint: по имени, по id и по вхождению; неоднозначность — ошибка', () => {
+  const sprints = [{ id: 10, name: 'BE/FE. Спринт 18' }, { id: 11, name: 'Мобайл. Спринт 18' }, { id: 12, name: 'Design. Sprint 18' }];
+  assert.equal(pickSprint(sprints, 'BE/FE. Спринт 18').id, 10);
+  assert.equal(pickSprint(sprints, '11').id, 11);
+  assert.equal(pickSprint(sprints, 'мобайл').id, 11);
+  assert.throws(() => pickSprint(sprints, 'спринт 18'), (e) => /подходит нескольким/.test(e.message));
+  assert.throws(() => pickSprint(sprints, 'Спринт 19'), (e) => /Доступны/.test(e.message));
+});
+
+test('boardOf: доска берётся из спринта задачи, иначе ищется по ключу проекта', async () => {
+  const withSprint = { key: 'FD-1', names: { cf: 'Sprint' }, fields: { cf: [{ id: 1, name: 'С', state: 'active', boardId: 7 }] } };
+  assert.equal(await boardOf({ boards: async () => { throw new Error('не должно спрашивать'); } }, withSprint), 7);
+
+  const bare = { key: 'FD-1', names: {}, fields: {} };
+  let asked = null;
+  assert.equal(await boardOf({ boards: async (k) => { asked = k; return { values: [{ id: 3 }] }; } }, bare), 3);
+  assert.equal(asked, 'FD');
+  await assert.rejects(() => boardOf({ boards: async () => ({ values: [] }) }, bare), (e) => e.code === 'api_failed');
+});
+
+// Поддельная Jira для записи: спринт и комментарий складываются в журнал вызовов.
+function fakeWriter() {
+  const done = [];
+  return {
+    done,
+    issue: async () => ({ key: 'FD-1', names: { cf: 'Sprint' }, fields: { cf: [{ id: 1, name: 'Спринт 17', state: 'active', boardId: 7 }] } }),
+    sprints: async (board) => { done.push(['sprints', board]); return { values: [{ id: 42, name: 'Спринт 18' }] }; },
+    moveToSprint: async (id, keys) => { done.push(['move', id, keys]); return null; },
+    addComment: async (key, text) => { done.push(['comment', key, text]); return { id: '9001' }; },
+  };
+}
+
+test('jira sprint: спринт с доски задачи, dry-run не пишет', async () => {
+  const j = fakeWriter();
+  const dry = await cmdJira(ctxWith(j), ['sprint', 'FD-1', 'спринт 18'], { asObject: true, dryRun: true });
+  assert.deepEqual([dry.dry_run, dry.from, dry.to], [true, 'Спринт 17', 'Спринт 18']);
+  assert.deepEqual(j.done.filter((c) => c[0] === 'move'), []);
+
+  const res = await cmdJira(ctxWith(j), ['sprint', 'FD-1', 'спринт 18'], { asObject: true, yes: true });
+  assert.deepEqual([res.from, res.to, res.sprint_id], ['Спринт 17', 'Спринт 18', 42]);
+  assert.deepEqual(j.done.at(-1), ['move', 42, ['FD-1']]);
+  assert.deepEqual(j.done[0], ['sprints', 7]); // доску не искали — она уже была в спринте задачи
+});
+
+test('jira comment: текст уходит как есть, без ключа или текста — подсказка', async () => {
+  const j = fakeWriter();
+  const res = await cmdJira(ctxWith(j), ['comment', 'FD-1', 'нашёл', 'баг'], { asObject: true, yes: true });
+  assert.deepEqual([res.key, res.comment, res.comment_id], ['FD-1', 'нашёл баг', '9001']);
+  assert.deepEqual(j.done.at(-1), ['comment', 'FD-1', 'нашёл баг']);
+
+  await assert.rejects(() => cmdJira(ctxWith(j), ['comment', 'FD-1'], { asObject: true, yes: true }), (e) => e.code === 'usage');
+  await assert.rejects(() => cmdJira(ctxWith(j), ['comment', 'мусор', 'текст'], { asObject: true, yes: true }), (e) => e.code === 'usage');
 });

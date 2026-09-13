@@ -183,8 +183,8 @@ export const COMMANDS = [
   fromAction(analyzeAction),
   {
     name: 'jira',
-    usage: 'jira [mine|<KEY>|move <KEY> <статус>]',
-    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса',
+    usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>]',
+    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса и спринта, комментарий',
     example: 'fsh jira mine --sprint current --component Frontend',
     run: (ctx, args, opts) => cmdJira(ctx, args, opts),
     mcp: {

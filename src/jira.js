@@ -2,7 +2,7 @@ import { CliError } from './errors.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Jira REST: чтение плюс единственная запись — перевод задачи по статусу (fsh jira move).
+// Jira REST: чтение плюс три записи — статус (move), спринт (sprint) и комментарий (comment).
 // fetchImpl инжектируется ради тестов без сети.
 // Форма та же, что у glab.js: один низкоуровневый api() с ретраями, поверх — методы.
 export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs = 1000 } = {}) {
@@ -77,15 +77,30 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     },
 
     // v2, а не v3: description приходит текстом, а не ADF-деревом — флаттенер не нужен.
-    issue: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}?expand=renderedFields`),
+    // expand=names даёт карту id → имя поля: кастомные поля ищутся по названию,
+    // а не по customfield_10341, который в каждом проекте свой.
+    issue: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}?expand=renderedFields,names`),
 
     comments: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/comment?maxResults=50`),
 
     transitions: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/transitions`),
 
-    // Единственная запись в Jira. Ответ пустой (204), новый статус проверяем чтением.
+    // Запись 1. Ответ пустой (204), новый статус проверяем чтением.
     transition: (key, id) =>
       api(`/rest/api/2/issue/${encodeURIComponent(key)}/transitions`, { method: 'POST', body: { transition: { id: String(id) } }, retries: 1 }),
+
+    // Доски и спринты живут в отдельном agile-API, в /rest/api их нет.
+    boards: (projectKey) => api(`/rest/agile/1.0/board?projectKeyOrId=${encodeURIComponent(projectKey)}&maxResults=50`),
+
+    sprints: (boardId) => api(`/rest/agile/1.0/board/${boardId}/sprint?state=active,future&maxResults=50`),
+
+    // Запись 2. Через agile-API, а не PUT поля: id спринтового customfield у каждого проекта свой.
+    moveToSprint: (sprintId, keys) =>
+      api(`/rest/agile/1.0/sprint/${sprintId}/issue`, { method: 'POST', body: { issues: keys }, retries: 1 }),
+
+    // Запись 3. v2 принимает тело комментария обычным текстом, ADF собирать не надо.
+    addComment: (key, text) =>
+      api(`/rest/api/2/issue/${encodeURIComponent(key)}/comment`, { method: 'POST', body: { body: text }, retries: 1 }),
   };
 }
 
@@ -103,3 +118,22 @@ async function errorText(res) {
 const backoff = (attempt, unit) => unit * 2 ** (attempt - 1); // 1с, 2с, 4с
 
 export const ISSUE_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
+
+// Кастомные поля ищем по названию: id вида customfield_10341 в каждом проекте свой,
+// а expand=names отдаёт карту id → имя ровно для этой задачи.
+export function fieldByName(issue, name) {
+  const entry = Object.entries(issue?.names ?? {}).find(([, n]) => n === name);
+  return entry ? issue.fields?.[entry[0]] : undefined;
+}
+
+// Значение поля Jira в строку: люди, опции, спринты и просто текст приходят по-разному.
+export function fieldText(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (Array.isArray(v)) return v.map(fieldText).filter(Boolean).join(', ');
+  if (typeof v === 'object') return v.displayName ?? v.name ?? v.value ?? v.key ?? '';
+  return String(v);
+}
+
+// Спринты задачи без закрытых: закрытые копятся годами и в карточке только шумят.
+export const openSprints = (v) => (Array.isArray(v) ? v : []).filter((s) => s && s.state !== 'closed');
+
