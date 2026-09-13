@@ -58,6 +58,8 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
 
     getDiscussions: (repo, iid) => api(repo, `/merge_requests/${iid}/discussions?per_page=100`),
 
+    getApprovals: (repo, iid) => api(repo, `/merge_requests/${iid}/approvals`),
+
     // Дифф MR берём из API, а не из локального git: review работает в живом
     // чекауте и не имеет права фетчить чужие ветки.
     getMRChanges: (repo, iid) => api(repo, `/merge_requests/${iid}/changes`),
