@@ -308,3 +308,29 @@ test('поиск по списку: терпит опечатку, курсор 
   assert.equal(keyIntent('a', {}, typing), null);
   assert.deepEqual(keyIntent('', { escape: true }, typing), { type: 'searchClose' });
 });
+
+// Маркер курсора занимает колонку всегда: на обрезанной строке ink иначе сжимает его в ноль
+// и ключи задач разъезжаются по списку.
+test('строка списка: маркер не жмётся, под строкой разделитель', async () => {
+  const { render } = await import('ink-testing-library');
+  const React = (await import('react')).default;
+  const { App } = await import('../src/tui/app.js');
+  const issues = [1, 2].map((i) => ({ key: `FD-${i}`, fields: { summary: 'очень длинный заголовок '.repeat(4), status: { name: 'В работе' }, updated: new Date().toISOString() } }));
+  const ctx = {
+    repo: 'g/a', cfg: { activeProject: 'app', agent: 'claude' }, agentArgs: () => [],
+    g: { listOpenMRs: async () => [] },
+    jira: () => ({ searchJql: async () => ({ issues }), issue: async () => { throw new Error('нет'); }, comments: async () => ({ comments: [] }) }),
+  };
+  const app = render(React.createElement(App, { ctx, opts: {} }));
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    app.stdin.write('2');
+    await new Promise((r) => setTimeout(r, 300));
+    const frame = app.lastFrame();
+    assert.match(frame, /│ ▌FD-1/);
+    assert.match(frame, /│ {2}FD-2/); // та же колонка, хотя строка обрезана
+    assert.match(frame, /─{10}/);
+  } finally {
+    app.unmount();
+  }
+});

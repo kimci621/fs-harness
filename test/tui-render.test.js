@@ -103,6 +103,7 @@ test('TUI: рисует MR, переключает вкладку и показ�
     await tick();
     const issues = app.lastFrame();
     assert.match(issues, /FD-1 · В работе · Починить/); // статус между ключом и названием
+    assert.match(issues, /─{10}/); // бледная линия между строками списка
     assert.match(issues, /n проанализировать задачу/);
     assert.match(issues, /Assignee {2}Амир/);
     assert.match(issues, /Ответственный разработчик {2}Амир/);
