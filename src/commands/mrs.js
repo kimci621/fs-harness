@@ -62,7 +62,14 @@ export async function cmdMRS(g, repo, { json, asObject, ...filters } = {}) {
     } catch {
       // API тредов недоступен — покажем только общее число комментов.
     }
-    return { mr, stats: commentStats(discussions, mr.user_notes_count) };
+    let approved = null;
+    try {
+      const a = await g.getApprovals(repo, mr.iid);
+      approved = Boolean(a?.approved ?? a?.approved_by?.length);
+    } catch {
+      // approvals бывают выключены на проекте — тогда просто не показываем бейдж
+    }
+    return { mr, approved, stats: commentStats(discussions, mr.user_notes_count) };
   });
 
   const rows = applyLocalFilters(all, filters);
@@ -80,11 +87,15 @@ export async function cmdMRS(g, repo, { json, asObject, ...filters } = {}) {
   return result;
 }
 
-export function toJSON({ mr, stats }) {
+export function toJSON({ mr, stats, approved = null }) {
   return {
     iid: mr.iid,
     title: mr.title,
     draft: Boolean(mr.draft),
+    author: mr.author?.name ?? null,
+    labels: mr.labels ?? [],
+    approved,
+    created_at: mr.created_at,
     source_branch: mr.source_branch,
     target_branch: mr.target_branch,
     has_conflicts: mr.has_conflicts,
