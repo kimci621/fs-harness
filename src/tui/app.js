@@ -9,6 +9,7 @@ import {
   orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, visibleItems, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
+import { fieldText, editValueFor } from '../jira.js';
 import { listTemplates, loadTemplate, userOverride, dropUserOverride } from '../prompts.js';
 import { findCommand } from '../registry.js';
 import { runAction } from '../engine.js';
@@ -19,6 +20,10 @@ import { cmdDeploy } from '../commands/deploy.js';
 import { statusIcon, commentStats } from '../format.js';
 
 const html = htm.bind(React.createElement);
+
+// Наверх списка полей — то, что правят чаще всего.
+const EDIT_FIRST = ['Assignee', 'Ответственный разработчик', 'Ответственный тестировщик', 'Ответственный продакт', 'Priority'];
+const rank = (name) => (EDIT_FIRST.indexOf(name) + 1 || 99);
 
 const NARROW = 100; // уже этого две колонки не читаются, показываем одну
 const EMPTY = { mr: 'нет открытых MR', issues: 'нет задач на тебе', runs: 'запусков ещё не было', prompts: 'шаблонов не нашлось' };
@@ -289,6 +294,54 @@ export function App({ ctx, opts }) {
     });
   }
 
+  // Что у задачи можно править, спрашиваем у самой Jira: editmeta знает и список полей,
+  // и форму значения. Показываем только то, что есть чем заполнить — люди и готовые опции.
+  async function openEditFields() {
+    const item = selected(state);
+    if (!item?.key) return;
+    dispatch({ type: 'modalOpen', kind: 'editField', title: `${item.key}: изменить поле`, issue: item.key, items: [], busy: true, note: 'читаю, что можно править…' });
+    try {
+      const meta = await withBusy('редактируемые поля', () => jira().editMeta(item.key));
+      const fields = Object.entries(meta?.fields ?? {})
+        .filter(([, f]) => f.allowedValues?.length || f.schema?.type === 'user' || f.schema?.items === 'user')
+        .map(([id, f]) => ({ id, label: f.name ?? id, meta: f }))
+        .sort((a, b) => rank(a.label) - rank(b.label) || a.label.localeCompare(b.label));
+      dispatch({ type: 'modalItems', items: fields, busy: false, note: fields.length ? '' : 'править нечего' });
+    } catch (err) {
+      dispatch({ type: 'modalItems', items: [], busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  async function openEditValue() {
+    const field = state.modal.items[state.modal.cursor];
+    const key = state.modal.issue;
+    if (!field) return;
+    dispatch({ type: 'modalOpen', kind: 'editValue', title: `${key} · ${field.label}`, issue: key, field: field.id, meta: field.meta, items: [], busy: true, note: 'читаю значения…' });
+    try {
+      const opts = field.meta.allowedValues?.length
+        ? field.meta.allowedValues.map((v) => ({ id: v.id, value: v.value ?? v.name, label: fieldText(v) || String(v.id) }))
+        : (await withBusy('люди проекта', () => jira().assignableUsers(key))).map((u) => ({ accountId: u.accountId, label: u.displayName }));
+      dispatch({ type: 'modalItems', items: [{ label: '— очистить', clear: true }, ...opts], busy: false, note: '' });
+    } catch (err) {
+      dispatch({ type: 'modalItems', items: [], busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  async function applyEditValue() {
+    const { issue, field, meta, items, cursor } = state.modal;
+    const opt = items[cursor];
+    if (!opt) return;
+    dispatch({ type: 'modalItems', busy: true, note: 'сохраняю…' });
+    try {
+      await withBusy(`${meta.name} у ${issue}`, () => jira().updateIssue(issue, { [field]: editValueFor(meta, opt.clear ? null : opt) }));
+      dispatch({ type: 'modalClose' });
+      bufferRef.current.push(`${issue} ▸ ${meta.name}: ${opt.clear ? 'очищено' : opt.label}`);
+      await reloadIssue(issue);
+    } catch (err) {
+      dispatch({ type: 'modalItems', busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
   // Свой промпт — копия в ~/.config/fs-harness/prompts. В проектный каталог не пишем:
   // он лежит в чужом репозитории, туда кладёт файлы только человек.
   function promptSource(makeOwn) {
@@ -400,6 +453,7 @@ export function App({ ctx, opts }) {
     }
     if (intent.type === 'openFilters') return openFilters();
     if (intent.type === 'searchOpen' || intent.type === 'searchClose') return void dispatch(intent);
+    if (intent.type === 'editField') return void openEditFields();
     if (intent.type === 'promptOverride' || intent.type === 'promptDrop') return promptSource(intent.type === 'promptOverride');
     if (intent.type === 'pipeline') return void openPipeline().catch((err) => dispatch({ type: 'error', tab: 'mr', message: err.message }));
     if (intent.type === 'modalApply') {
@@ -409,6 +463,8 @@ export function App({ ctx, opts }) {
       if (kind === 'sprint') return void applySprint();
       if (kind === 'filters') return applyFilterRow();
       if (kind === 'filterValue') return applyFilterValue();
+      if (kind === 'editField') return void openEditValue();
+      if (kind === 'editValue') return void applyEditValue();
       return void applyTransition();
     }
     if (intent.type === 'modalClear') {
@@ -417,6 +473,7 @@ export function App({ ctx, opts }) {
     }
     if (intent.type === 'modalClose') {
       if (state.modal.kind === 'filterValue') return openFilters(); // назад к списку полей, а не наружу
+      if (state.modal.kind === 'editValue') return void openEditFields();
       const wasFilters = state.modal.kind === 'filters';
       dispatch(intent);
       if (wasFilters) load('mr');
@@ -487,6 +544,7 @@ const Help = ({ height }) =>
     <${Text}>a — решить конфликт · t — обработать тикеты · r — локальное ревью (вкладка MR)<//>
     <${Text}>p — пайплайн MR: все джобы и их запуск · f — фильтры списка MR<//>
     <${Text}>n — проанализировать задачу · s — статус · S — спринт · c — комментарий · e — раскрыть поля<//>
+    <${Text}>E — изменить поле задачи: Assignee, Ответственный разработчик, Priority и всё, что даёт Jira<//>
     <${Text}>/ — поиск по списку (терпит опечатки, ищет по всем полям) · f — фильтры списка MR<//>
     <${Text}>x — прервать все запуски · R — перечитать список · o — открыть в браузере · q — выход<//>
     <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
@@ -529,12 +587,15 @@ function Modal({ modal, filters, rows, height, onSubmit, onChange }) {
         <${Text} dimColor>Enter — запустить (deploy_dev* сам собирает build_image и ждёт его) · Esc — закрыть<//>
       <//>`;
     }
+    const room = Math.max(1, height - 3);
+    // Окно вокруг курсора: список полей задачи длиннее экрана, и без него выбор уезжает вслепую.
+    const from = Math.max(0, Math.min(modal.cursor - Math.floor(room / 2), modal.items.length - room));
     return html`<${Box} flexDirection="column">
       ${modal.note ? html`<${Text} color="yellow">${modal.busy ? html`<${Spinner} type="dots" /> ` : ''}${modal.note}<//>` : null}
-      ${modal.items.slice(0, Math.max(1, height - 3)).map((t, i) => html`
-        <${Text} key=${t.id} inverse=${i === modal.cursor} wrap="truncate-end">${t.name}${t.to && t.to !== t.name ? ` → ${t.to}` : ''}<//>
+      ${modal.items.slice(from, from + room).map((t, i) => html`
+        <${Text} key=${t.id ?? t.accountId ?? t.label} inverse=${from + i === modal.cursor} wrap="truncate-end">${t.label ?? t.name}${t.to && t.to !== t.name ? ` → ${t.to}` : ''}<//>
       `)}
-      <${Text} dimColor>Enter — применить · Esc — отмена<//>
+      <${Text} dimColor>${modal.items.length > room ? `${modal.cursor + 1}/${modal.items.length} · ` : ''}Enter — применить · Esc — ${modal.kind === 'editValue' ? 'назад к полям' : 'отмена'}<//>
     <//>`;
   };
   return html`<${Box} flexDirection="column" height=${height} borderStyle="round" borderColor="cyan" paddingX=${1}>

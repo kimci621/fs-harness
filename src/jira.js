@@ -101,6 +101,17 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     // Запись 3. v2 принимает тело комментария обычным текстом, ADF собирать не надо.
     addComment: (key, text) =>
       api(`/rest/api/2/issue/${encodeURIComponent(key)}/comment`, { method: 'POST', body: { body: text }, retries: 1 }),
+
+    // Что у этой задачи вообще разрешено править и чем: схема поля и, если есть,
+    // готовый список значений. Без него форму значения пришлось бы угадывать.
+    editMeta: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/editmeta`),
+
+    assignableUsers: (key) =>
+      api(`/rest/api/2/user/assignable/search?issueKey=${encodeURIComponent(key)}&maxResults=50`),
+
+    // Запись 4. Одним PUT правится любое поле — форму значения берём из editmeta.
+    updateIssue: (key, fields) =>
+      api(`/rest/api/2/issue/${encodeURIComponent(key)}`, { method: 'PUT', body: { fields }, retries: 1 }),
   };
 }
 
@@ -124,6 +135,23 @@ export const ISSUE_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
 export function fieldByName(issue, name) {
   const entry = Object.entries(issue?.names ?? {}).find(([, n]) => n === name);
   return entry ? issue.fields?.[entry[0]] : undefined;
+}
+
+// id поля по названию: без него PUT некуда адресовать — customfield_* в каждом проекте свой.
+export function fieldIdByName(issue, name) {
+  return Object.entries(issue?.names ?? {}).find(([, n]) => n === name)?.[0] ?? null;
+}
+
+// Форма значения для PUT считается по схеме из editmeta, а не угадывается по текущему значению:
+// пустое поле не подсказывает, ждёт оно объект или массив.
+export function editValueFor(meta, option) {
+  const type = meta?.schema?.type;
+  const items = meta?.schema?.items;
+  if (option === null) return type === 'array' ? [] : null;
+  const one = items === 'user' || type === 'user'
+    ? { accountId: option.accountId }
+    : items === 'string' ? option.value : { id: String(option.id) };
+  return type === 'array' ? [one] : one;
 }
 
 // Значение поля Jira в строку: люди, опции, спринты и просто текст приходят по-разному.

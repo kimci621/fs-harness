@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createJira, ISSUE_KEY, fieldByName, fieldText, openSprints } from '../src/jira.js';
+import { createJira, ISSUE_KEY, fieldByName, fieldIdByName, fieldText, editValueFor, openSprints } from '../src/jira.js';
 import { CliError } from '../src/errors.js';
 import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition, pickSprint, boardOf } from '../src/commands/jira.js';
 
@@ -240,4 +240,40 @@ test('jira comment: текст уходит как есть, без ключа �
 
   await assert.rejects(() => cmdJira(ctxWith(j), ['comment', 'FD-1'], { asObject: true, yes: true }), (e) => e.code === 'usage');
   await assert.rejects(() => cmdJira(ctxWith(j), ['comment', 'мусор', 'текст'], { asObject: true, yes: true }), (e) => e.code === 'usage');
+});
+
+test('jira: правка поля — форма значения берётся из схемы editmeta', () => {
+  const user = { schema: { type: 'user' }, name: 'Assignee' };
+  const users = { schema: { type: 'array', items: 'user' }, name: 'Ответственный разработчик' };
+  const priority = { schema: { type: 'priority' }, name: 'Priority' };
+  const labels = { schema: { type: 'array', items: 'string' }, name: 'Labels' };
+
+  assert.deepEqual(editValueFor(user, { accountId: 'a1' }), { accountId: 'a1' });
+  assert.deepEqual(editValueFor(users, { accountId: 'a1' }), [{ accountId: 'a1' }]);
+  assert.deepEqual(editValueFor(priority, { id: 3 }), { id: '3' });
+  assert.deepEqual(editValueFor(labels, { value: 'Frontend' }), ['Frontend']);
+
+  // Очистка: у списка это пустой массив, у одиночного поля null — Jira другого не принимает.
+  assert.deepEqual(editValueFor(users, null), []);
+  assert.equal(editValueFor(user, null), null);
+
+  assert.equal(fieldIdByName({ names: { customfield_10341: 'Ответственный разработчик' } }, 'Ответственный разработчик'), 'customfield_10341');
+  assert.equal(fieldIdByName({ names: {} }, 'Нет такого'), null);
+});
+
+test('jira: updateIssue — один PUT с полями, editmeta и люди читаются GET-ом', async () => {
+  const { j, calls } = jira([
+    { status: 200, body: { fields: { assignee: { name: 'Assignee', schema: { type: 'user' } } } } },
+    { status: 200, body: [{ accountId: 'a1', displayName: 'Амир' }] },
+    { status: 204, body: null },
+  ]);
+  await j.editMeta('FD-1');
+  await j.assignableUsers('FD-1');
+  await j.updateIssue('FD-1', { assignee: { accountId: 'a1' } });
+
+  assert.match(calls[0].url, /\/rest\/api\/2\/issue\/FD-1\/editmeta$/);
+  assert.match(calls[1].url, /\/user\/assignable\/search\?issueKey=FD-1&maxResults=50$/);
+  assert.equal(calls[2].method, 'PUT');
+  assert.match(calls[2].url, /\/rest\/api\/2\/issue\/FD-1$/);
+  assert.deepEqual(calls[2].body, { fields: { assignee: { accountId: 'a1' } } });
 });

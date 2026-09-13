@@ -194,3 +194,50 @@ test('TUI: на узком терминале колонка одна и Tab п�
     app.unmount();
   }
 });
+
+// Правка поля задачи: список полей из editmeta, значения из allowedValues или из людей проекта.
+test('TUI: E правит поле задачи — выбор поля, выбор значения, один PUT', async () => {
+  const puts = [];
+  const ctxEdit = {
+    ...ctx,
+    jira: () => ({
+      ...ctx.jira(),
+      editMeta: async () => ({
+        fields: {
+          assignee: { name: 'Assignee', schema: { type: 'user' } },
+          priority: { name: 'Priority', schema: { type: 'priority' }, allowedValues: [{ id: '2', name: 'High' }, { id: '3', name: 'Medium' }] },
+          summary: { name: 'Summary', schema: { type: 'string' } }, // нечем заполнить — не показываем
+        },
+      }),
+      assignableUsers: async () => [{ accountId: 'a1', displayName: 'Амир' }, { accountId: 'a2', displayName: 'Эмиль' }],
+      updateIssue: async (key, fields) => { puts.push({ key, fields }); return null; },
+    }),
+  };
+  const app = render(React.createElement(App, { ctx: ctxEdit, opts: {} }));
+  try {
+    await tick(300);
+    app.stdin.write('2');
+    await tick(300);
+    app.stdin.write('E');
+    await tick(200);
+    assert.match(app.lastFrame(), /FD-1: изменить поле/);
+    assert.match(app.lastFrame(), /Assignee/);
+    assert.match(app.lastFrame(), /Priority/);
+    assert.doesNotMatch(app.lastFrame(), /Summary/); // выбирать нечего, поле скрыто
+
+    app.stdin.write('\r'); // Assignee → люди проекта
+    await tick(250);
+    assert.match(app.lastFrame(), /FD-1 · Assignee/);
+    assert.match(app.lastFrame(), /— очистить/);
+    assert.match(app.lastFrame(), /Эмиль/);
+
+    app.stdin.write('j'); await tick(60);
+    app.stdin.write('j'); await tick(60); // «— очистить» → Амир → Эмиль
+    app.stdin.write('\r');
+    await tick(300);
+    assert.deepEqual(puts, [{ key: 'FD-1', fields: { assignee: { accountId: 'a2' } } }]);
+    assert.match(app.lastFrame(), /Assignee: Эмиль/); // видно в логе
+  } finally {
+    app.unmount();
+  }
+});

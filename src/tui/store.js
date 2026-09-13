@@ -6,7 +6,7 @@ import { fieldByName, fieldText, openSprints } from '../jira.js';
 
 export const TABS = [
   { key: 'mr', title: 'MR', hint: 'a решить конфликт · t обработать тикеты · r локальное ревью · p пайплайн · f фильтры' },
-  { key: 'issues', title: 'Задачи', hint: 'n проанализировать задачу · s статус · S спринт · c комментарий · e раскрыть' },
+  { key: 'issues', title: 'Задачи', hint: 'n проанализировать задачу · s статус · S спринт · E поле · c комментарий · e раскрыть' },
   { key: 'runs', title: 'История', hint: 'прошлые запуски действий: вердикт, цена, каталог' },
   { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
 ];
@@ -180,7 +180,7 @@ export function reduce(state, ev) {
     case 'help':
       return { ...state, help: !state.help };
     case 'modalOpen':
-      return { ...state, modal: { kind: ev.kind ?? 'transition', title: ev.title, issue: ev.issue, mr: ev.mr, field: ev.field, items: ev.items, cursor: ev.cursor ?? 0, note: ev.note ?? '', busy: Boolean(ev.busy), editing: ev.editing ?? null, value: ev.value ?? '' } };
+      return { ...state, modal: { kind: ev.kind ?? 'transition', title: ev.title, issue: ev.issue, mr: ev.mr, field: ev.field, meta: ev.meta, items: ev.items, cursor: ev.cursor ?? 0, note: ev.note ?? '', busy: Boolean(ev.busy), editing: ev.editing ?? null, value: ev.value ?? '' } };
     case 'modalItems': // обновление списка на месте: курсор и признак работы не трогаем
       return state.modal ? { ...state, modal: { ...state.modal, items: ev.items ?? state.modal.items, cursor: clamp(state.modal.cursor, (ev.items ?? state.modal.items).length), busy: ev.busy ?? state.modal.busy, note: ev.note ?? state.modal.note } } : state;
     case 'modalMove':
@@ -477,6 +477,7 @@ export function keyIntent(input, key, state) {
   if (input === 's' && state.tab === 'issues') return { type: 'transition' };
   if (input === 'S' && state.tab === 'issues') return { type: 'sprint' };
   if (input === 'c' && state.tab === 'issues') return { type: 'comment' };
+  if (input === 'E' && state.tab === 'issues') return { type: 'editField' };
   if (input === 'p' && state.tab === 'mr') return { type: 'pipeline' };
   if (input === 'f' && state.tab === 'mr') return { type: 'openFilters' };
   if (input === 'R') return { type: 'reload' };
