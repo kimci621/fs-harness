@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { CliError } from './errors.js';
 
 // Все обращения к GitLab идут через `glab api` (JSON). exec инжектируется для тестов.
@@ -16,7 +16,7 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
     for (let attempt = 1; attempt <= retries; attempt++) {
       let out;
       try {
-        out = run('glab', args, { input });
+        out = await run('glab', args, { input });
       } catch (err) {
         lastErr = err;
         const stderr = String(err.stderr || err.message || '').trim();
@@ -104,12 +104,19 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
 
 // input — тело запроса в stdin (для `glab api --input -`): многострочный markdown
 // иначе не проходит через --field.
+// Асинхронно, и это принципиально: execFileSync держит event loop, а с ним TUI не
+// перерисовывается и не слышит клавиш — экран выглядит зависшим на всё время запроса.
 export function defaultRun(bin, args, { input } = {}) {
-  return execFileSync(bin, args, {
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-    input,
+  return new Promise((resolve, reject) => {
+    const child = execFile(bin, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        err.stderr = stderr;
+        reject(err);
+        return;
+      }
+      resolve(stdout);
+    });
+    child.stdin?.end(input ?? '');
   });
 }
 

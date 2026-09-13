@@ -6,7 +6,7 @@ import TextInput from 'ink-text-input';
 import htm from 'htm';
 import {
   TABS, FILTER_FIELDS, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
-  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, toggleFilter, filterValueText, filterSummary,
+  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, toggleFilter, filterValueText, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
 import { findCommand } from '../registry.js';
@@ -36,13 +36,24 @@ export function App({ ctx, opts }) {
   const { exit } = useApp();
   const { columns, rows } = useTerminalSize();
   const [state, dispatch] = useReducer(reduce, initialState(ctx.cfg.activeProject));
-  const [, setNow] = useState(Date.now()); // тик перерисовки, значение не нужно
+  const [now, setNow] = useState(Date.now()); // тик: по нему же считается «идёт 12с»
   const runsRef = useRef(new Map()); // id → AgentRun, чтобы было кого прерывать
   const bufferRef = useRef([]);
   const quitArmedRef = useRef(false);
   const pipeRef = useRef({ iid: null, pipelineId: null, busy: false });
   const jiraRef = useRef(null);
   const jira = () => (jiraRef.current ??= ctx.jira());
+
+  // Любой запрос оборачиваем в подпись: пока он идёт, в шапке крутится спиннер с ней.
+  // Без этого экран выглядит зависшим — половина запросов к GitLab и Jira идёт секундами.
+  async function withBusy(label, fn) {
+    dispatch({ type: 'busy', label, on: true, at: Date.now() });
+    try {
+      return await fn();
+    } finally {
+      dispatch({ type: 'busy', label, on: false });
+    }
+  }
 
   // Буфер + слив по таймеру: на каждую дельту агента перерисовывать бессмысленно.
   useEffect(() => {
@@ -69,11 +80,11 @@ export function App({ ctx, opts }) {
   useEffect(() => {
     if (!issueKey || state.details[issueKey]) return undefined;
     let alive = true;
-    (async () => {
+    withBusy(`карточка ${issueKey}`, async () => {
       const j = jira();
       const [issue, comments] = await Promise.all([j.issue(issueKey), j.comments(issueKey).catch(() => null)]);
       if (alive) dispatch({ type: 'issueDetails', key: issueKey, issue, comments: comments?.comments ?? [] });
-    })().catch((err) => dispatch({ type: 'error', tab: 'issues', message: err.message }));
+    }).catch((err) => dispatch({ type: 'error', tab: 'issues', message: err.message }));
     return () => { alive = false; };
   }, [issueKey]);
 
@@ -83,20 +94,22 @@ export function App({ ctx, opts }) {
       if (tab === 'mr') {
         // Под фильтрами короткого пути нет: конфликты и треды считаются только после дозагрузки.
         if (anyFilter(state.filters)) {
-          dispatch({ type: 'items', tab, items: (await cmdMRS(ctx.g, ctx.repo, { asObject: true, ...state.filters })).mrs });
+          const res = await withBusy('список MR под фильтрами', () => cmdMRS(ctx.g, ctx.repo, { asObject: true, ...state.filters }));
+          dispatch({ type: 'items', tab, items: res.mrs });
         } else {
           // Список MR приходит быстро, а треды, аппрувы и пайплайны — это запрос на каждый MR.
           // Поэтому в два захода: сперва показываем что есть, потом дополняем строки маркерами.
-          const mrs = await ctx.g.listOpenMRs(ctx.repo);
+          const mrs = await withBusy('список MR', () => ctx.g.listOpenMRs(ctx.repo));
           dispatch({ type: 'items', tab, items: mrs.map((mr) => toJSON({ mr, stats: commentStats(null, mr.user_notes_count) })) });
-          cmdMRS(ctx.g, ctx.repo, { asObject: true })
+          withBusy('треды, аппрувы и пайплайны', () => cmdMRS(ctx.g, ctx.repo, { asObject: true }))
             .then((full) => dispatch({ type: 'items', tab, items: full.mrs }))
             .catch(() => {}); // не дополнилось — список и так на экране
         }
       }
       if (tab === 'runs') dispatch({ type: 'items', tab, items: listRuns({ limit: 30 }) });
       if (tab === 'issues') {
-        const { issues } = await jira().searchJql({ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC' });
+        const { issues } = await withBusy('задачи Jira', () =>
+          jira().searchJql({ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC' }));
         dispatch({ type: 'items', tab, items: issues });
       }
     } catch (err) {
@@ -109,17 +122,20 @@ export function App({ ctx, opts }) {
     const item = selected(state);
     if (!item?.iid) return;
     const id = item.pipeline_stale ? null : item.pipeline?.id;
-    const jobs = id ? orderJobs(await ctx.g.getJobs(ctx.repo, id)) : [];
     pipeRef.current = { iid: item.iid, pipelineId: id, busy: false };
+    // Панель открывается сразу, джобы приезжают следом: иначе клавиша молчит секунду-две.
     dispatch({
       type: 'modalOpen',
       kind: 'pipeline',
       title: `!${item.iid} · пайплайн${id ? ` #${id}` : ''}`,
       mr: item.iid,
-      items: jobs,
-      note: id ? '' : 'Пайплайна нет или он устарел — запуск джобы создаст новый.',
+      items: [],
+      note: id ? 'загружаю джобы…' : 'Пайплайна нет или он устарел — запуск джобы создаст новый.',
+      busy: Boolean(id),
     });
-    if (!id) dispatch({ type: 'modalItems', items: [{ id: 0, name: 'build_image', stage: 'build', status: 'нет пайплайна' }] });
+    if (!id) return void dispatch({ type: 'modalItems', items: [{ id: 0, name: 'build_image', stage: 'build', status: 'нет пайплайна' }] });
+    const jobs = orderJobs(await withBusy('джобы пайплайна', () => ctx.g.getJobs(ctx.repo, id)));
+    dispatch({ type: 'modalItems', items: jobs, busy: false, note: '' });
   }
 
   // Запуск джобы из панели. deploy_dev* идёт цепочкой через deploy: сборка,
@@ -135,8 +151,9 @@ export function App({ ctx, opts }) {
     const chain = DEPLOY_JOB.test(job.name);
     bufferRef.current.push(`${tag} ▸ ${chain ? 'сборка → ожидание → деплой' : 'запуск'}…`);
     try {
-      if (chain) await cmdDeploy(ctx.g, ctx.repo, [String(mr), deploySlot(job.name)], { asObject: true, quiet: true, onTick, buildJob: ctx.cfg.buildJob || undefined });
-      else await cmdRun(ctx.g, ctx.repo, [job.name, String(mr)], { asObject: true, quiet: true, watch: true, onTick });
+      await withBusy(`джоба ${job.name}`, () => (chain
+        ? cmdDeploy(ctx.g, ctx.repo, [String(mr), deploySlot(job.name)], { asObject: true, quiet: true, onTick, buildJob: ctx.cfg.buildJob || undefined })
+        : cmdRun(ctx.g, ctx.repo, [job.name, String(mr)], { asObject: true, quiet: true, watch: true, onTick })));
       bufferRef.current.push(`${tag} ▸ ✅ готово`);
     } catch (err) {
       bufferRef.current.push(`${tag} ▸ ❌ ${err.message.split('\n')[0]}`);
@@ -165,11 +182,16 @@ export function App({ ctx, opts }) {
   async function openTransitions() {
     const item = selected(state);
     if (!item?.key) return;
+    dispatch({ type: 'modalOpen', title: `${item.key}: куда переводим?`, issue: item.key, items: [], note: 'загружаю переходы…', busy: true });
     try {
-      const { transitions = [] } = (await jira().transitions(item.key)) ?? {};
-      if (!transitions.length) return void bufferRef.current.push(`${item.key} ▸ доступных переходов нет`);
-      dispatch({ type: 'modalOpen', title: `${item.key}: куда переводим?`, issue: item.key, items: transitions.map((t) => ({ id: t.id, name: t.name, to: t.to?.name ?? t.name })) });
+      const { transitions = [] } = (await withBusy('переходы задачи', () => jira().transitions(item.key))) ?? {};
+      if (!transitions.length) {
+        dispatch({ type: 'modalClose' });
+        return void bufferRef.current.push(`${item.key} ▸ доступных переходов нет`);
+      }
+      dispatch({ type: 'modalItems', items: transitions.map((t) => ({ id: t.id, name: t.name, to: t.to?.name ?? t.name })), busy: false, note: '' });
     } catch (err) {
+      dispatch({ type: 'modalClose' });
       dispatch({ type: 'error', tab: 'issues', message: err.message });
     }
   }
@@ -177,12 +199,15 @@ export function App({ ctx, opts }) {
   async function applyTransition() {
     const { issue, items, cursor } = state.modal;
     const t = items[cursor];
-    dispatch({ type: 'modalClose' });
+    if (!t) return;
+    dispatch({ type: 'modalItems', busy: true, note: `перевожу в ${t.to}…` });
     try {
-      await jira().transition(issue, t.id);
+      await withBusy(`перевод ${issue}`, () => jira().transition(issue, t.id));
       bufferRef.current.push(`${issue} ▸ статус → ${t.to}`);
+      dispatch({ type: 'modalClose' });
       load('issues');
     } catch (err) {
+      dispatch({ type: 'modalClose' });
       bufferRef.current.push(`${issue} ▸ ❌ ${err.message}`);
     }
   }
@@ -191,12 +216,19 @@ export function App({ ctx, opts }) {
   async function openSprints() {
     const item = selected(state);
     if (!item?.key) return;
+    dispatch({ type: 'modalOpen', kind: 'sprint', title: `${item.key}: в какой спринт?`, issue: item.key, items: [], note: 'загружаю спринты доски…', busy: true });
     try {
-      const full = state.details[item.key]?.issue ?? (await jira().issue(item.key));
-      const { values = [] } = (await jira().sprints(await boardOf(jira(), full))) ?? {};
-      if (!values.length) return void bufferRef.current.push(`${item.key} ▸ активных спринтов на доске нет`);
-      dispatch({ type: 'modalOpen', kind: 'sprint', title: `${item.key}: в какой спринт?`, issue: item.key, items: values.map((s) => ({ id: s.id, name: s.name, to: s.state })) });
+      const { values = [] } = (await withBusy('спринты доски', async () => {
+        const full = state.details[item.key]?.issue ?? (await jira().issue(item.key));
+        return jira().sprints(await boardOf(jira(), full));
+      })) ?? {};
+      if (!values.length) {
+        dispatch({ type: 'modalClose' });
+        return void bufferRef.current.push(`${item.key} ▸ активных спринтов на доске нет`);
+      }
+      dispatch({ type: 'modalItems', items: values.map((s) => ({ id: s.id, name: s.name, to: s.state })), busy: false, note: '' });
     } catch (err) {
+      dispatch({ type: 'modalClose' });
       dispatch({ type: 'error', tab: 'issues', message: err.message });
     }
   }
@@ -204,33 +236,41 @@ export function App({ ctx, opts }) {
   async function applySprint() {
     const { issue, items, cursor } = state.modal;
     const s = items[cursor];
-    dispatch({ type: 'modalClose' });
+    if (!s) return;
+    dispatch({ type: 'modalItems', busy: true, note: `переношу в ${s.name}…` });
     try {
-      await jira().moveToSprint(s.id, [issue]);
+      await withBusy(`спринт ${issue}`, () => jira().moveToSprint(s.id, [issue]));
       bufferRef.current.push(`${issue} ▸ спринт → ${s.name}`);
+      dispatch({ type: 'modalClose' });
       await reloadIssue(issue);
     } catch (err) {
+      dispatch({ type: 'modalClose' });
       bufferRef.current.push(`${issue} ▸ ❌ ${err.message}`);
     }
   }
 
   async function submitComment(text) {
     const { issue } = state.modal;
-    dispatch({ type: 'modalClose' });
-    if (!text.trim()) return;
+    if (!text.trim()) return void dispatch({ type: 'modalClose' });
+    dispatch({ type: 'modalEdit', editing: null, value: '' });
+    dispatch({ type: 'modalItems', busy: true, note: 'публикую комментарий…' });
     try {
-      await jira().addComment(issue, text);
+      await withBusy(`комментарий ${issue}`, () => jira().addComment(issue, text));
       bufferRef.current.push(`${issue} ▸ комментарий опубликован`);
+      dispatch({ type: 'modalClose' });
       await reloadIssue(issue);
     } catch (err) {
+      dispatch({ type: 'modalClose' });
       bufferRef.current.push(`${issue} ▸ ❌ ${err.message}`);
     }
   }
 
   async function reloadIssue(key) {
-    const j = jira();
-    const [issue, comments] = await Promise.all([j.issue(key), j.comments(key).catch(() => null)]);
-    dispatch({ type: 'issueDetails', key, issue, comments: comments?.comments ?? [] });
+    await withBusy(`карточка ${key}`, async () => {
+      const j = jira();
+      const [issue, comments] = await Promise.all([j.issue(key), j.comments(key).catch(() => null)]);
+      dispatch({ type: 'issueDetails', key, issue, comments: comments?.comments ?? [] });
+    });
   }
 
   // Фильтры списка MR — те же, что у флагов CLI, только выбираются с клавиш.
@@ -314,6 +354,7 @@ export function App({ ctx, opts }) {
     if (intent.type === 'openFilters') return openFilters();
     if (intent.type === 'pipeline') return void openPipeline().catch((err) => dispatch({ type: 'error', tab: 'mr', message: err.message }));
     if (intent.type === 'modalApply') {
+      if (state.modal.busy) return; // запрос уже идёт, второй Enter только навредит
       const kind = state.modal.kind;
       if (kind === 'pipeline') return void runJob();
       if (kind === 'sprint') return void applySprint();
@@ -353,8 +394,15 @@ export function App({ ctx, opts }) {
   return html`
     <${Box} flexDirection="column" width=${columns} height=${height}>
       <${Box} justifyContent="space-between" flexShrink=${0}>
-        <${Text} bold color="cyan">fs-harness · ${state.project || ctx.repo}<//>
-        <${Text} dimColor>запусков: ${running.length}${running.length ? ' ' : ''}${running.length ? html`<${Spinner} type="dots" />` : ''} · $${totalCost(state).toFixed(2)}<//>
+        <${Box} minWidth=${0}>
+          <${Text} bold color="cyan">fs-harness · ${state.project || ctx.repo}<//>
+          ${state.busy.length
+            ? html`<${Text} color="yellow" wrap="truncate-end">  <${Spinner} type="dots" /> ${busyText(state.busy, now)}…<//>`
+            : null}
+        <//>
+        <${Box} flexShrink=${0}>
+          <${Text} dimColor>запусков: ${running.length}${running.length ? ' ' : ''}${running.length ? html`<${Spinner} type="dots" />` : ''} · $${totalCost(state).toFixed(2)}<//>
+        <//>
       <//>
       <${Box} flexShrink=${0}>
         ${TABS.map((t, i) => html`<${Text} key=${t.key} color=${state.tab === t.key ? 'cyan' : undefined} inverse=${state.tab === t.key}> [${i + 1}] ${t.title} <//>`)}
@@ -411,7 +459,7 @@ function Modal({ modal, filters, height, onSubmit, onChange }) {
     }
     if (modal.kind === 'pipeline') {
       return html`<${Box} flexDirection="column">
-        ${modal.note ? html`<${Text} dimColor>${modal.note}<//>` : null}
+        ${modal.note ? html`<${Text} color="yellow">${modal.busy ? html`<${Spinner} type="dots" /> ` : ''}${modal.note}<//>` : null}
         ${modal.items.slice(0, Math.max(1, height - 4)).map((j, i) => html`
           <${Text} key=${j.id} inverse=${i === modal.cursor} wrap="truncate-end">${(j.stage ?? '—').padEnd(16)} ${j.name.padEnd(24)} ${statusIcon(j.status)} ${j.status}<//>
         `)}
@@ -420,6 +468,7 @@ function Modal({ modal, filters, height, onSubmit, onChange }) {
       <//>`;
     }
     return html`<${Box} flexDirection="column">
+      ${modal.note ? html`<${Text} color="yellow">${modal.busy ? html`<${Spinner} type="dots" /> ` : ''}${modal.note}<//>` : null}
       ${modal.items.slice(0, Math.max(1, height - 3)).map((t, i) => html`
         <${Text} key=${t.id} inverse=${i === modal.cursor} wrap="truncate-end">${t.name}${t.to && t.to !== t.name ? ` → ${t.to}` : ''}<//>
       `)}
@@ -449,7 +498,8 @@ function Body({ state, item, width, height }) {
 
 function List({ state, height, width }) {
   const rows = state.items[state.tab];
-  if (state.loading[state.tab]) return html`<${Text} dimColor>загружаю…<//>`;
+  // Гасим список только пока показывать нечего: на обновлении старые строки полезнее пустоты.
+  if (state.loading[state.tab] && !rows.length) return html`<${Text} dimColor>загружаю…<//>`;
   if (!rows.length) return html`<${Text} dimColor>пусто<//>`;
   const per = state.tab === 'mr' ? 2 : 1; // строка MR двухэтажная, как в GitLab
   const visible = Math.max(1, Math.floor(height / per));

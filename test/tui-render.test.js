@@ -111,3 +111,30 @@ test('TUI: рисует MR, переключает вкладку и показ�
     app.unmount();
   }
 });
+
+// Медленный GitLab: пока запрос идёт, экран обязан сказать, чем он занят.
+test('TUI: видно, что именно грузится, и панель открывается сразу', async () => {
+  const slow = (value, ms) => () => new Promise((r) => setTimeout(() => r(value), ms));
+  const ctxSlow = {
+    ...ctx,
+    g: { ...ctx.g, listOpenMRs: slow(await ctx.g.listOpenMRs(), 600), getJobs: slow(await ctx.g.getJobs(), 600) },
+  };
+  const app = render(React.createElement(App, { ctx: ctxSlow, opts: {} }));
+  try {
+    await tick(150);
+    assert.match(app.lastFrame(), /список MR/); // подпись занятости в шапке
+    assert.match(app.lastFrame(), /загружаю…/);
+    await tick(1200);
+    assert.doesNotMatch(app.lastFrame(), /список MR…/);
+
+    app.stdin.write('p'); // панель пайплайна открывается до того, как приедут джобы
+    await tick(150);
+    assert.match(app.lastFrame(), /загружаю джобы…/);
+    assert.match(app.lastFrame(), /джобы пайплайна/);
+    await tick(1200);
+    assert.match(app.lastFrame(), /build_image/);
+    assert.doesNotMatch(app.lastFrame(), /загружаю джобы/);
+  } finally {
+    app.unmount();
+  }
+});
