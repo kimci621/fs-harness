@@ -562,7 +562,7 @@ function Body({ state, item, width, height, onSearch, onSearchDone }) {
               <${Text} dimColor> · ${visibleItems(state).length} из ${state.items[state.tab].length}<//>
             <//>`
           : null}
-        <${List} state=${state} height=${state.searching || state.search[state.tab] ? inner - 1 : inner} width=${listWidth - 2} />
+        <${List} state=${state} height=${state.searching || state.search[state.tab] ? inner - 1 : inner} width=${listWidth - 4} />
       <//>`}
       ${narrow && !onDetails ? null : html`<${Box} flexDirection="column" flexGrow=${1} minWidth=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${onDetails ? 'cyan' : 'gray'}>
         <${Details} state=${state} item=${item} height=${inner} />
@@ -583,21 +583,28 @@ function List({ state, height, width }) {
         : `${EMPTY[state.tab]} · R — перечитать`;
     return html`<${Text} dimColor wrap="truncate-end">${hint}<//>`;
   }
-  const per = state.tab === 'mr' ? 2 : 1; // строка MR двухэтажная, как в GitLab
+  const per = (state.tab === 'mr' ? 2 : 1) + 1; // строка MR двухэтажная + разделитель под каждой
   const visible = Math.max(1, Math.floor(height / per));
   const cursor = state.cursor[state.tab];
   const start = Math.max(0, Math.min(cursor - Math.floor(visible / 2), rows.length - visible));
-  return rows.slice(start, start + visible).map((r, i) => {
+  return rows.slice(start, start + visible).flatMap((r, i) => {
     const active = start + i === cursor;
-    if (state.tab === 'mr') return html`<${MRRow} key=${r.iid} r=${r} active=${active} width=${width} />`;
-    const row = state.tab === 'issues' ? issueRow(r) : state.tab === 'prompts' ? promptRow(r) : runRow(r);
-    // wrap обязателен: эмодзи шире символа, и без него строка переносится, а список уезжает.
-    return html`<${Box} key=${r.key ?? r.name ?? r.id ?? i} flexShrink=${0}>
-      <${Text} color="cyan">${active ? '▌' : ' '}<//>
-      <${Text} wrap="truncate-end">${row.parts.map((pt, j) => html`<${Text} key=${j} bold=${pt.bold || active} dimColor=${pt.dim} color=${pt.color}>${pt.text}<//>`)}<//>
-    <//>`;
+    const key = r.iid ?? r.key ?? r.name ?? r.id ?? i;
+    const body = state.tab === 'mr'
+      ? html`<${MRRow} key=${key} r=${r} active=${active} width=${width} />`
+      : html`<${Box} key=${key} flexShrink=${0}>
+          <${Marker} active=${active} />
+          <${Text} wrap="truncate-end">${row(state.tab, r).parts.map((pt, j) => html`<${Text} key=${j} bold=${pt.bold || active} dimColor=${pt.dim} color=${pt.color}>${pt.text}<//>`)}<//>
+        <//>`;
+    // Тонкая бледная линия между строками: без неё список читается как сплошной абзац.
+    return [body, html`<${Text} key=${`${key}-sep`} dimColor wrap="truncate-end">${'─'.repeat(Math.max(1, width))}<//>`];
   });
 }
+
+const row = (tab, r) => (tab === 'issues' ? issueRow(r) : tab === 'prompts' ? promptRow(r) : runRow(r));
+
+// Маркер курсора не жмётся: иначе на обрезанной строке ink съедает его ширину и строки разъезжаются.
+const Marker = ({ active }) => html`<${Box} flexShrink=${0} width=${1}><${Text} color="cyan">${active ? '▌' : ' '}<//><//>`;
 
 // Две строки на MR: заголовок с бейджами справа и метаданные снизу — как в списке GitLab.
 function MRRow({ r, active, width = 40 }) {
@@ -606,12 +613,12 @@ function MRRow({ r, active, width = 40 }) {
   const room = width - 4 - badges.length;
   return html`<${Box} flexDirection="column" flexShrink=${0}>
     <${Box}>
-      <${Text} color="cyan">${active ? '▌' : ' '}<//>
+      <${Marker} active=${active} />
       <${Box} flexGrow=${1} minWidth=${0}><${Text} bold color=${active ? 'cyan' : undefined} wrap="truncate-end">${title}<//><//>
       ${badges && room > 8 ? html`<${Box} flexShrink=${0}><${Text} wrap="truncate-end"> ${badges}<//><//>` : null}
     <//>
     <${Box}>
-      <${Text} color="cyan">${active ? '▌' : ' '}<//>
+      <${Marker} active=${active} />
       <${Text} wrap="truncate-end">${meta.parts.map((p, i) => html`<${Text} key=${i} bold=${p.bold} dimColor=${p.dim} color=${p.color}>${p.text}<//>`)}<//>
     <//>
   <//>`;
