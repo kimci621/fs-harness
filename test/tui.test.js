@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, busyText } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, busyText, lineText } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -12,7 +12,8 @@ test('вкладки: цифры, Tab по кругу', () => {
   s = reduce(s, { type: 'tab', tab: 'runs' });
   assert.equal(s.tab, 'runs');
   s = reduce(s, { type: 'nextTab' });
-  assert.equal(s.tab, 'mr');
+  assert.equal(s.tab, 'prompts');
+  assert.equal(reduce(s, { type: 'nextTab' }).tab, 'mr');
 });
 
 test('курсор не выезжает за список и переживает смену списка', () => {
@@ -165,13 +166,13 @@ test('строки списка: MR двухэтажный с бейджами, 
   assert.match(row.badges, /✅Approved/);
   assert.match(row.badges, /💬2 of 4/);
   assert.match(row.badges, /⚠конфликт/);
-  assert.match(row.meta, /^!2785 · создан 2 дн назад · Амир Латипов · review$/);
+  assert.match(row.metaText, /^!2785 · создан 2 дн назад · Амир Латипов · review$/);
 
   // Ещё не дозагрузились треды и аппрувы — бейджей просто нет, а не «0 of 0».
   const bare = mrRow({ iid: 1, title: 'x', comments: { open: null, resolved: null } });
   assert.equal(bare.badges, '');
 
-  assert.equal(issueRow({ key: 'FD-1', fields: { status: { name: 'В работе' }, summary: 'Починить' } }), 'FD-1 · В работе · Починить');
+  assert.equal(lineText(issueRow({ key: 'FD-1', fields: { status: { name: 'В работе' }, summary: 'Починить' } })), 'FD-1 · В работе · Починить');
 });
 
 test('карточка задачи: поля по названию, длинные блоки раскрываются по e', () => {
@@ -188,16 +189,16 @@ test('карточка задачи: поля по названию, длинн�
       customfield_3: [{ id: 4, name: 'Спринт 18', state: 'active' }],
     },
   };
-  const text = (lines) => lines.map((l) => l.text).join('\n');
+  const text = (lines) => lines.map(lineText).join('\n');
 
   assert.match(text(detailLines('issues', item, {})), /подробности загружаются/);
 
   const closed = text(detailLines('issues', item, { full, comments: [] }));
-  assert.match(closed, /Assignee: Амир · Reporter: Эмиль/);
-  assert.match(closed, /Ответственный разработчик: Амир/);
-  assert.match(closed, /Priority: Medium · Labels: Frontend/);
-  assert.match(closed, /Sprint: Спринт 18 \(active\)/);
-  assert.match(closed, /Parent: FD-0 Эпик/);
+  assert.match(closed, /Assignee {2}Амир\nReporter {2}Эмиль/);
+  assert.match(closed, /Ответственный разработчик {2}Амир/);
+  assert.match(closed, /Priority {2}Medium {3}Labels {2}Frontend/);
+  assert.match(closed, /Sprint {4}Спринт 18 \(active\)/);
+  assert.match(closed, /Parent {4}FD-0 Эпик/);
   assert.match(closed, /блокирует FD-9 Другая/);
   assert.match(closed, /▸ Technical details for QA · 1 стр\. · e раскрыть/);
   assert.doesNotMatch(closed, /проверить чекаут/); // свёрнуто — текста не видно

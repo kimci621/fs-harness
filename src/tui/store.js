@@ -7,6 +7,7 @@ export const TABS = [
   { key: 'mr', title: 'MR', hint: 'a решить конфликт · t обработать тикеты · r локальное ревью · p пайплайн · f фильтры' },
   { key: 'issues', title: 'Задачи', hint: 'n проанализировать задачу · s статус · S спринт · c комментарий · e раскрыть' },
   { key: 'runs', title: 'История', hint: 'прошлые запуски действий: вердикт, цена, каталог' },
+  { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
 ];
 
 // Действия по клавишам: одно действие — одна клавиша, как в плане.
@@ -78,13 +79,14 @@ export const initialState = (project = '') => ({
   project,
   tab: 'mr',
   focus: 'list',
-  cursor: { mr: 0, issues: 0, runs: 0 },
-  items: { mr: [], issues: [], runs: [] },
-  loading: { mr: true, issues: false, runs: true },
+  cursor: { mr: 0, issues: 0, runs: 0, prompts: 0 },
+  items: { mr: [], issues: [], runs: [], prompts: [] },
+  loading: { mr: true, issues: false, runs: true, prompts: false },
   scroll: { details: 0, log: 0 }, // details — строк вниз от начала, log — строк вверх от конца
   expand: false,
   filters: {},
   details: {}, // ключ задачи → {issue, comments}: подробности догружаются по выбору
+  prompts: {}, // имя шаблона → текст: читается с диска при выборе строки
   error: null,
   busy: [], // {label, at} по каждому идущему запросу: пока список не пуст, в шапке спиннер
   runs: {}, // id → {id, action, target, phase, done, ok, cost, decision, error}
@@ -139,6 +141,8 @@ export function reduce(state, ev) {
     }
     case 'issueDetails':
       return { ...state, details: { ...state.details, [ev.key]: { issue: ev.issue, comments: ev.comments ?? [] } } };
+    case 'promptBody':
+      return { ...state, prompts: { ...state.prompts, [ev.name]: ev.body } };
     case 'filters':
       return { ...state, filters: ev.filters };
     case 'loading':
@@ -210,6 +214,21 @@ export const activeRuns = (state) => Object.values(state.runs).filter((r) => !r.
 export const selected = (state) => state.items[state.tab][state.cursor[state.tab]] ?? null;
 export const totalCost = (state) => Object.values(state.runs).reduce((s, r) => s + (r.cost ?? 0), 0);
 
+// Куски строки со своим цветом: важное — номер, исполнитель, статус, ветка — должно
+// выделяться, иначе панель читается как сплошная серая простыня.
+const KEY = { color: 'cyan', bold: true };   // идентификаторы: !2785, FD-7653
+const VAL = { bold: true };                  // значения, за которыми приходят
+const LBL = { dim: true };                   // подписи полей
+const seg = (text, style = {}) => ({ text: String(text ?? ''), ...style });
+const line = (...parts) => ({ parts: parts.filter((p) => p && p.text !== '') });
+const GAP = { gap: true, parts: [] };        // пустая строка между смысловыми группами
+export const lineText = (l) => (l?.parts ?? []).map((p) => p.text).join('');
+
+const PIPE_TONE = { success: 'green', failed: 'red', canceled: 'gray', running: 'cyan', manual: 'yellow' };
+export const pipeTone = (status) => PIPE_TONE[status] ?? 'yellow';
+const CAT_TONE = { done: 'green', indeterminate: 'yellow', new: 'gray' };
+export const statusTone = (status) => CAT_TONE[status?.statusCategory?.key] ?? 'yellow';
+
 // Строка MR в списке — две строки, как в самом GitLab: заголовок с бейджами и метаданные.
 export function mrRow(r) {
   const badges = [
@@ -218,65 +237,109 @@ export function mrRow(r) {
     r.comments?.open ? `💬${r.comments.resolved} of ${r.comments.resolved + r.comments.open}` : r.comments?.resolved ? '💬Resolved' : '',
     r.has_conflicts ? '⚠конфликт' : '',
   ].filter(Boolean).join(' ');
-  const meta = [`!${r.iid}`, `создан ${humanize(r.created_at)}`, r.author, ...(r.labels ?? [])].filter(Boolean).join(' · ');
-  return { title: `${r.draft ? 'Draft: ' : ''}${cleanTitle(r)}`, badges, meta };
+  const meta = line(
+    seg(`!${r.iid}`, KEY),
+    seg(` · создан ${humanize(r.created_at)} · `, LBL),
+    seg(r.author ?? '—'),
+    r.labels?.length ? seg(` · ${r.labels.join(' · ')}`, { color: 'blue' }) : null,
+  );
+  return { title: `${r.draft ? 'Draft: ' : ''}${cleanTitle(r)}`, badges, meta, metaText: lineText(meta) };
 }
 
-// Строка задачи: статус между номером и названием — по нему и ищут глазами.
-export const issueRow = (r) => `${r.key} · ${r.fields?.status?.name ?? '—'} · ${r.fields?.summary ?? ''}`;
+// Строка задачи: статус между ключом и названием — по нему и ищут глазами.
+export const issueRow = (r) => line(
+  seg(r.key, KEY),
+  seg(' · '),
+  seg(r.fields?.status?.name ?? '—', { color: statusTone(r.fields?.status) }),
+  seg(' · '),
+  seg(r.fields?.summary ?? ''),
+);
 
-export const runRow = (r) => `${r.id} · ${r.action} ${r.mr ? `!${r.mr}` : r.issue ?? ''} · ${r.decision ?? r.state}`;
+export const runRow = (r) => line(
+  seg(r.id, KEY),
+  seg(` · ${r.action} `, LBL),
+  seg(r.mr ? `!${r.mr}` : r.issue ?? ''),
+  seg(' · '),
+  seg(r.decision ?? r.state, { color: r.decision === 'approve' ? 'green' : r.decision ? 'yellow' : undefined }),
+);
 
-const L = (text, style = {}) => ({ text, ...style });
+export const promptRow = (r) => line(
+  seg(r.overridden ? '✏️ ' : '   '),
+  seg(r.name, KEY),
+  seg(`  ${r.overridden ? 'свой' : 'встроенный'}`, LBL),
+);
 
 // Правая панель — плоский список строк: так её можно прокручивать и проверять тестом.
-export function detailLines(tab, item, { full = null, comments = [], expand = false } = {}) {
-  if (!item) return [L('нечего показывать', { dim: true })];
+export function detailLines(tab, item, extra = {}) {
+  const { full = null, comments = [], expand = false, body = '' } = extra;
+  if (!item) return [line(seg('нечего показывать', LBL))];
   if (tab === 'mr') return mrDetails(item);
   if (tab === 'issues') return issueDetails(item, full, comments, expand);
+  if (tab === 'prompts') return promptDetails(item, body, expand);
   return runDetails(item);
 }
 
 function mrDetails(item) {
+  const open = item.comments?.open;
   return [
-    L(`!${item.iid} ${item.draft ? 'Draft: ' : ''}${cleanTitle(item)}`, { bold: true }),
-    L(`${item.source_branch} → ${item.target_branch}`, { dim: true }),
-    L(`${item.author ?? '—'} · создан ${humanize(item.created_at)} · обновлён ${humanize(item.updated_at)}`, { dim: true }),
-    L(`пайплайн ${statusIcon(item.pipeline?.status)} ${item.pipeline?.status ?? 'нет'}${item.pipeline_stale ? ' (устарел)' : ''}`),
-    L(`конфликт ${item.has_conflicts ? '⚠ есть' : '✅ нет'} · треды ${item.comments?.open ? `⚠ открыто ${item.comments.open}` : '✅ все закрыты'} · ревью ${item.approved ? '✅ Approved' : '— не одобрен'}`),
-    ...(item.labels?.length ? [L(`метки: ${item.labels.join(', ')}`, { dim: true })] : []),
-    L(`p — пайплайн и запуск джоб · f — фильтры списка`, { dim: true }),
-    L(item.web_url ?? '', { dim: true }),
-  ];
+    line(seg(`!${item.iid}`, KEY), seg(' '), seg(`${item.draft ? 'Draft: ' : ''}${cleanTitle(item)}`, VAL)),
+    line(seg('ветка   ', LBL), seg(item.source_branch, { color: 'yellow' }), seg(' → ', LBL), seg(item.target_branch, { color: 'yellow' })),
+    line(seg('автор   ', LBL), seg(item.author ?? '—', VAL), seg(` · создан ${humanize(item.created_at)} · обновлён ${humanize(item.updated_at)}`, LBL)),
+    item.labels?.length ? line(seg('метки   ', LBL), seg(item.labels.join(' · '), { color: 'blue' })) : null,
+    GAP,
+    line(
+      seg('пайплайн ', LBL),
+      seg(`${statusIcon(item.pipeline?.status)} ${item.pipeline?.status ?? 'нет'}`, { color: item.pipeline ? pipeTone(item.pipeline.status) : 'gray' }),
+      item.pipeline_stale ? seg(' (устарел)', { color: 'yellow' }) : null,
+    ),
+    line(
+      seg('конфликт ', LBL),
+      seg(item.has_conflicts ? '⚠ есть' : '✅ нет', { color: item.has_conflicts ? 'red' : 'green' }),
+      seg('   треды ', LBL),
+      seg(open ? `⚠ открыто ${open}` : '✅ все закрыты', { color: open ? 'red' : 'green' }),
+    ),
+    line(seg('ревью    ', LBL), seg(item.approved ? '✅ Approved' : '— не одобрен', { color: item.approved ? 'green' : undefined })),
+    GAP,
+    line(seg('p — пайплайн и запуск джоб · f — фильтры · / — поиск по списку', LBL)),
+    line(seg(item.web_url ?? '', LBL)),
+  ].filter(Boolean);
 }
 
 const PEOPLE = ['Ответственный разработчик', 'Ответственный тестировщик', 'Ответственный продакт'];
 
 function issueDetails(item, full, comments, expand) {
   const head = [
-    L(`${item.key} ${item.fields?.summary ?? ''}`, { bold: true }),
-    L(`${item.fields?.issuetype?.name ?? '—'} · ${item.fields?.status?.name ?? '—'} · обновлена ${humanize(item.fields?.updated)}`, { dim: true }),
+    line(seg(item.key, KEY), seg(' '), seg(item.fields?.summary ?? '', VAL)),
+    line(
+      seg(item.fields?.issuetype?.name ?? '—', LBL),
+      seg(' · '),
+      seg(item.fields?.status?.name ?? '—', { color: statusTone(item.fields?.status), bold: true }),
+      seg(` · обновлена ${humanize(item.fields?.updated)}`, LBL),
+    ),
   ];
-  if (!full) return [...head, L('подробности загружаются…', { dim: true })];
+  if (!full) return [...head, GAP, line(seg('подробности загружаются…', { color: 'yellow' }))];
 
   const f = full.fields ?? {};
   const by = (name) => fieldText(fieldByName(full, name)) || '—';
   const sprints = openSprints(fieldByName(full, 'Sprint'));
   const links = (f.issuelinks ?? []).map((l) => {
     const side = l.outwardIssue ?? l.inwardIssue;
-    const rel = l.outwardIssue ? l.type?.outward : l.type?.inward;
-    return `${rel} ${side?.key} ${side?.fields?.summary ?? ''}`;
+    return { rel: l.outwardIssue ? l.type?.outward : l.type?.inward, key: side?.key, summary: side?.fields?.summary ?? '' };
   });
 
   const rows = [
     ...head,
-    L(`Assignee: ${fieldText(f.assignee) || '—'} · Reporter: ${fieldText(f.reporter) || '—'}`),
-    ...PEOPLE.filter((n) => fieldByName(full, n) !== undefined).map((n) => L(`${n}: ${by(n)}`)),
-    L(`Priority: ${fieldText(f.priority) || '—'} · Labels: ${(f.labels ?? []).join(', ') || '—'}`),
-    L(`Sprint: ${sprints.map((s) => `${s.name} (${s.state})`).join(', ') || '—'}`),
-    L(`Parent: ${f.parent ? `${f.parent.key} ${f.parent.fields?.summary ?? ''}` : '—'}`),
-    L(`Linked work items: ${links.length ? '' : '—'}`),
-    ...links.map((l) => L(`  ${l}`, { dim: true })),
+    GAP,
+    line(seg('Assignee  ', LBL), seg(fieldText(f.assignee) || '—', VAL)),
+    line(seg('Reporter  ', LBL), seg(fieldText(f.reporter) || '—')),
+    ...PEOPLE.filter((n) => fieldByName(full, n) !== undefined).map((n) => line(seg(`${n}  `, LBL), seg(by(n), by(n) === '—' ? {} : VAL))),
+    GAP,
+    line(seg('Priority  ', LBL), seg(fieldText(f.priority) || '—'), seg('   Labels  ', LBL), seg((f.labels ?? []).join(', ') || '—', { color: 'blue' })),
+    line(seg('Sprint    ', LBL), seg(sprints.map((s) => `${s.name} (${s.state})`).join(', ') || '—', { color: 'magenta' })),
+    line(seg('Parent    ', LBL), f.parent ? seg(f.parent.key, KEY) : seg('—'), f.parent ? seg(` ${f.parent.fields?.summary ?? ''}`) : null),
+    line(seg('Linked work items', LBL), links.length ? null : seg('  —')),
+    ...links.map((l) => line(seg(`  ${l.rel} `, LBL), seg(l.key, KEY), seg(` ${l.summary}`))),
+    GAP,
   ];
 
   const sections = [
@@ -287,20 +350,41 @@ function issueDetails(item, full, comments, expand) {
   ];
   for (const [title, body] of sections) {
     const lines = String(body ?? '').split('\n').filter((l, i, a) => !(l === '' && a[i - 1] === ''));
-    const size = body ? `${lines.length} стр.` : 'пусто';
-    rows.push(L(`${expand ? '▾' : '▸'} ${title} · ${size}${expand || !body ? '' : ' · e раскрыть'}`, { color: 'cyan' }));
-    if (expand && body) for (const line of lines) rows.push(L(`  ${line}`, { dim: true }));
+    rows.push(line(
+      seg(`${expand ? '▾' : '▸'} ${title}`, { color: 'cyan', bold: true }),
+      seg(` · ${body ? `${lines.length} стр.` : 'пусто'}`, LBL),
+      body && !expand ? seg(' · e раскрыть', LBL) : null,
+    ));
+    if (expand && body) for (const l of lines) rows.push(line(seg(`  ${l}`)));
+    rows.push(GAP);
   }
-  return rows.filter((r) => r.text !== '');
+  return rows.filter(Boolean);
+}
+
+function promptDetails(item, body) {
+  return [
+    line(seg(item.name, KEY)),
+    line(seg('источник  ', LBL), seg(item.overridden ? item.source : 'встроенный', { color: item.overridden ? 'yellow' : undefined })),
+    item.vars?.length ? line(seg('переменные ', LBL), seg(item.vars.join(', '), { color: 'blue' })) : null,
+    GAP,
+    ...String(body ?? '').split('\n').map((l) => line(seg(l))),
+  ].filter(Boolean);
 }
 
 function runDetails(item) {
   return [
-    L('Прошлый запуск действия (conflict, threads, review, analyze): что решил судья и почём.', { dim: true }),
-    L(item.id, { bold: true }),
-    L(`${item.action} ${item.mr ? `!${item.mr}` : item.issue ?? ''} · ${item.state}${item.decision ? ` · ${item.decision}` : ''}${item.cost ? ` · $${item.cost.toFixed(2)}` : ''}`, { dim: true }),
-    L(item.dir, { dim: true }),
-  ];
+    line(seg(item.id, KEY)),
+    line(seg('действие  ', LBL), seg(item.action, VAL), seg('  цель  ', LBL), seg(item.mr ? `!${item.mr}` : item.issue ?? '—')),
+    line(
+      seg('итог      ', LBL),
+      seg(item.state, { color: item.state === 'ok' ? 'green' : item.state === 'error' ? 'red' : undefined }),
+      item.decision ? seg(`  вердикт  ${item.decision}`, { color: item.decision === 'approve' ? 'green' : 'yellow' }) : null,
+      item.cost ? seg(`  $${item.cost.toFixed(2)}`, LBL) : null,
+    ),
+    GAP,
+    line(seg('Прошлый запуск действия: каталог рана со всеми артефактами.', LBL)),
+    line(seg(item.dir, LBL)),
+  ].filter(Boolean);
 }
 
 // Клавиша → намерение. Чистая: в тестах не нужен ни ink, ни терминал.
@@ -320,7 +404,7 @@ export function keyIntent(input, key, state) {
   if (input === 'q') return { type: 'quit' };
   if (input === 'x') return { type: 'abort' };
   if (key.tab) return { type: 'focus', by: key.shift ? -1 : 1 };
-  const byNumber = { 1: 'mr', 2: 'issues', 3: 'runs' }[input];
+  const byNumber = { 1: 'mr', 2: 'issues', 3: 'runs', 4: 'prompts' }[input];
   if (byNumber) return { type: 'tab', tab: byNumber };
   const scroll = state.focus === 'list' ? null : 'scroll';
   if (key.upArrow || input === 'k') return { type: scroll ?? 'move', by: -1 };
@@ -329,6 +413,8 @@ export function keyIntent(input, key, state) {
   if (key.pageDown) return { type: scroll ?? 'move', by: 10 };
   if (input === 'o') return { type: 'open' };
   if (input === 'e' && state.tab === 'issues') return { type: 'expand' };
+  if (input === 'e' && state.tab === 'prompts') return { type: 'promptOverride' };
+  if (input === 'd' && state.tab === 'prompts') return { type: 'promptDrop' };
   if (input === 's' && state.tab === 'issues') return { type: 'transition' };
   if (input === 'S' && state.tab === 'issues') return { type: 'sprint' };
   if (input === 'c' && state.tab === 'issues') return { type: 'comment' };

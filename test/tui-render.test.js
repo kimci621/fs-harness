@@ -86,14 +86,20 @@ test('TUI: рисует MR, переключает вкладку и показ�
     const issues = app.lastFrame();
     assert.match(issues, /FD-1 · В работе · Починить/); // статус между ключом и названием
     assert.match(issues, /n проанализировать задачу/);
-    assert.match(issues, /Assignee: Амир · Reporter: Эмиль/);
-    assert.match(issues, /Ответственный разработчик: Амир/);
-    assert.match(issues, /Sprint: Спринт 18 \(active\)/);
+    assert.match(issues, /Assignee {2}Амир/);
+    assert.match(issues, /Ответственный разработчик {2}Амир/);
+    assert.match(issues, /Sprint {4}Спринт 18 \(active\)/);
     assert.doesNotMatch(issues, /проверить чекаут/); // блок свёрнут
 
     app.stdin.write('e'); // раскрыть длинные поля
     await tick(150);
+    assert.match(app.lastFrame(), /▾ Описание/);
+    app.stdin.write('\t'); // фокус на карточку и прокрутка до нижних блоков
+    for (let i = 0; i < 12; i++) { app.stdin.write('j'); await tick(10); }
+    await tick(100);
     assert.match(app.lastFrame(), /проверить чекаут/);
+    app.stdin.write('\t');
+    await tick(50);
 
     app.stdin.write('c'); // комментарий: поле ввода вместо списка
     await tick(150);
@@ -101,6 +107,12 @@ test('TUI: рисует MR, переключает вкладку и показ�
     assert.match(app.lastFrame(), /Enter — опубликовать в Jira/);
     app.stdin.write('\u001B');
     await tick(150);
+
+    app.stdin.write('4'); // промпты: список встроенных шаблонов и текст выбранного
+    await tick(200);
+    assert.match(app.lastFrame(), /actions\/analyze/);
+    assert.match(app.lastFrame(), /источник {2}встроенный/);
+    assert.match(app.lastFrame(), /e сделать свой/);
 
     app.stdin.write('?');
     await tick(150);
