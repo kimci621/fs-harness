@@ -89,6 +89,16 @@ test('TUI: рисует MR, переключает вкладку и показ�
     app.stdin.write('\u001B');
     await tick(150);
 
+    app.stdin.write('/'); // поиск по списку: с опечаткой и со счётчиком найденного
+    await tick(100);
+    for (const ch of 'банер') { app.stdin.write(ch); await tick(30); }
+    await tick(150);
+    assert.match(app.lastFrame(), /\/ банер/);
+    assert.match(app.lastFrame(), /1 из 1/);
+    assert.match(app.lastFrame(), /fix: баннер/);
+    app.stdin.write('\u001B');
+    await tick(100);
+
     app.stdin.write('2');
     await tick();
     const issues = app.lastFrame();

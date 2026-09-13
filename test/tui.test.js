@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, filterValueText, busyText, lineText, filterOptions } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -283,4 +283,28 @@ test('занятость: каждый запрос снимает только 
   assert.equal(busyText(d.busy, t0 + 4000), 'карточка FD-1 4с');
   d = reduce(d, { type: 'busy', label: 'карточка FD-1', on: false });
   assert.equal(d.busy.length, 1);
+});
+
+test('поиск по списку: терпит опечатку, курсор ходит по найденному', () => {
+  const rows = [
+    { iid: 1, title: 'fix: баннер оплаты', author: 'Амир', source_branch: 'fix/banner', labels: [] },
+    { iid: 2, title: 'feat: промокоды', author: 'Эмиль', source_branch: 'feat/promo', labels: ['review'] },
+    { iid: 3, title: 'chore: бампы', author: 'Амир', source_branch: 'chore/bump', labels: [] },
+  ];
+  assert.deepEqual(searchRows('mr', rows, 'промакод').map((r) => r.iid), [2]); // опечатка не мешает
+  assert.deepEqual(searchRows('mr', rows, 'Эмиль').map((r) => r.iid), [2]); // ищет и по автору
+  assert.deepEqual(searchRows('mr', rows, '').map((r) => r.iid), [1, 2, 3]);
+  assert.deepEqual(searchRows('mr', rows, 'квартальный отчёт'), []);
+
+  let s = reduce(initialState('app'), { type: 'items', tab: 'mr', items: rows });
+  s = reduce(reduce(s, { type: 'move', by: 2 }), { type: 'searchEdit', value: 'банер' });
+  assert.equal(s.cursor.mr, 0); // старый индекс указывал в другой список
+  assert.equal(visibleItems(s).length, 1);
+  assert.equal(selected(s).iid, 1);
+  assert.equal(reduce(s, { type: 'move', by: 5 }).cursor.mr, 0); // за пределы найденного не уедет
+
+  // Пока открыт ввод, обычные клавиши не запускают действия.
+  const typing = reduce(s, { type: 'searchOpen' });
+  assert.equal(keyIntent('a', {}, typing), null);
+  assert.deepEqual(keyIntent('', { escape: true }, typing), { type: 'searchClose' });
 });

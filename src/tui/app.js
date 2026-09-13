@@ -6,7 +6,7 @@ import TextInput from 'ink-text-input';
 import htm from 'htm';
 import {
   TABS, FILTER_FIELDS, promptRow, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
-  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
+  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, visibleItems, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
 import { listTemplates, loadTemplate, userOverride, dropUserOverride } from '../prompts.js';
@@ -396,6 +396,7 @@ export function App({ ctx, opts }) {
       return;
     }
     if (intent.type === 'openFilters') return openFilters();
+    if (intent.type === 'searchOpen' || intent.type === 'searchClose') return void dispatch(intent);
     if (intent.type === 'promptOverride' || intent.type === 'promptDrop') return promptSource(intent.type === 'promptOverride');
     if (intent.type === 'pipeline') return void openPipeline().catch((err) => dispatch({ type: 'error', tab: 'mr', message: err.message }));
     if (intent.type === 'modalApply') {
@@ -459,7 +460,8 @@ export function App({ ctx, opts }) {
         ? html`<${Help} height=${bodyInner} />`
         : state.modal
           ? html`<${Modal} modal=${state.modal} filters=${state.filters} rows=${state.items.mr} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
-          : html`<${Body} state=${state} item=${item} width=${columns} height=${bodyInner} />`}
+          : html`<${Body} state=${state} item=${item} width=${columns} height=${bodyInner}
+              onSearch=${(v) => dispatch({ type: 'searchEdit', value: v })} onSearchDone=${() => dispatch({ type: 'searchClose' })} />`}
       ${cards.map((r) => html`
         <${Text} key=${r.id} wrap="truncate-end">${r.done ? (r.ok ? '✅' : '❌') : '⏳'} ${r.action} ${r.target} · ${r.phase}${r.decision ? ` · ${r.decision}` : ''}${r.cost ? ` · $${r.cost.toFixed(2)}` : ''}<//>
       `)}
@@ -471,7 +473,7 @@ export function App({ ctx, opts }) {
 
 // Где мы в списке — единственное место, где это видно, когда строк больше экрана.
 const position = (state) => {
-  const len = state.items[state.tab].length;
+  const len = visibleItems(state).length;
   return len ? `${state.cursor[state.tab] + 1}/${len}` : '0/0';
 };
 
@@ -482,6 +484,7 @@ const Help = ({ height }) =>
     <${Text}>a — решить конфликт · t — обработать тикеты · r — локальное ревью (вкладка MR)<//>
     <${Text}>p — пайплайн MR: все джобы и их запуск · f — фильтры списка MR<//>
     <${Text}>n — проанализировать задачу · s — статус · S — спринт · c — комментарий · e — раскрыть поля<//>
+    <${Text}>/ — поиск по списку (терпит опечатки, ищет по всем полям) · f — фильтры списка MR<//>
     <${Text}>x — прервать все запуски · R — перечитать список · o — открыть в браузере · q — выход<//>
     <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
   <//>`;
@@ -537,13 +540,22 @@ function Modal({ modal, filters, rows, height, onSubmit, onChange }) {
   <//>`;
 }
 
-function Body({ state, item, width, height }) {
+function Body({ state, item, width, height, onSearch, onSearchDone }) {
   const listWidth = Math.max(30, Math.floor(width * (state.tab === 'mr' ? 0.58 : 0.45)));
   const inner = Math.max(1, height - 2); // рамка сверху и снизу
   return html`
     <${Box} height=${height}>
       <${Box} flexDirection="column" width=${listWidth} flexShrink=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${state.focus === 'list' ? 'cyan' : 'gray'}>
-        <${List} state=${state} height=${inner} width=${listWidth - 2} />
+        ${state.searching || state.search[state.tab]
+          ? html`<${Box} flexShrink=${0}>
+              <${Text} color="cyan">/ <//>
+              ${state.searching
+                ? html`<${TextInput} value=${state.search[state.tab]} onChange=${onSearch} onSubmit=${onSearchDone} />`
+                : html`<${Text} wrap="truncate-end">${state.search[state.tab]}<//>`}
+              <${Text} dimColor> · ${visibleItems(state).length} из ${state.items[state.tab].length}<//>
+            <//>`
+          : null}
+        <${List} state=${state} height=${state.searching || state.search[state.tab] ? inner - 1 : inner} width=${listWidth - 2} />
       <//>
       <${Box} flexDirection="column" flexGrow=${1} minWidth=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${state.focus === 'details' ? 'cyan' : 'gray'}>
         <${Details} state=${state} item=${item} height=${inner} />
@@ -553,10 +565,10 @@ function Body({ state, item, width, height }) {
 }
 
 function List({ state, height, width }) {
-  const rows = state.items[state.tab];
+  const rows = visibleItems(state);
   // Гасим список только пока показывать нечего: на обновлении старые строки полезнее пустоты.
   if (state.loading[state.tab] && !rows.length) return html`<${Text} dimColor>загружаю…<//>`;
-  if (!rows.length) return html`<${Text} dimColor>пусто<//>`;
+  if (!rows.length) return html`<${Text} dimColor>${state.search[state.tab] ? 'ничего не нашлось' : 'пусто'}<//>`;
   const per = state.tab === 'mr' ? 2 : 1; // строка MR двухэтажная, как в GitLab
   const visible = Math.max(1, Math.floor(height / per));
   const cursor = state.cursor[state.tab];
