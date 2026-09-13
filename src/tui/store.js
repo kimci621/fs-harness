@@ -41,17 +41,41 @@ export const deploySlot = (name) => (DEPLOY_JOB.exec(name ?? '') ?? [])[1] || ''
 
 // Фильтры списка MR: те же, что у флагов CLI. type решает, что делает Enter на строке.
 export const FILTER_FIELDS = [
-  { key: 'author', label: 'Автор', type: 'text' },
-  { key: 'assignee', label: 'Assignee', type: 'text' },
-  { key: 'reviewer', label: 'Reviewer', type: 'text' },
-  { key: 'target', label: 'Целевая ветка', type: 'text' },
-  { key: 'label', label: 'Метка', type: 'text' },
+  { key: 'author', label: 'Автор', type: 'option' },
+  { key: 'assignee', label: 'Assignee', type: 'option' },
+  { key: 'reviewer', label: 'Reviewer', type: 'option' },
+  { key: 'target', label: 'Целевая ветка', type: 'option' },
+  { key: 'label', label: 'Метка', type: 'option' },
   { key: 'search', label: 'Поиск по тексту', type: 'text' },
-  { key: 'pipeline', label: 'Статус пайплайна', type: 'text' },
+  { key: 'pipeline', label: 'Статус пайплайна', type: 'option' },
   { key: 'draft', label: 'Draft', type: 'tri' },
   { key: 'conflicts', label: 'Только с конфликтом', type: 'flag' },
   { key: 'threads', label: 'Только с открытыми тредами', type: 'flag' },
 ];
+
+// Значения фильтров собираем из уже загруженных MR: угадывать чужие логины руками неоткуда.
+const OPTION_SOURCES = {
+  author: (r) => [{ value: r.author_username, label: r.author }],
+  assignee: (r) => (r.assignees ?? []).map((u) => ({ value: u.username, label: u.name })),
+  reviewer: (r) => (r.reviewers ?? []).map((u) => ({ value: u.username, label: u.name })),
+  target: (r) => [{ value: r.target_branch, label: r.target_branch }],
+  label: (r) => (r.labels ?? []).map((l) => ({ value: l, label: l })),
+  pipeline: (r) => [{ value: r.pipeline?.status ?? 'none', label: r.pipeline?.status ?? 'без пайплайна' }],
+};
+const ME_FIELDS = ['author', 'assignee', 'reviewer'];
+
+export function filterOptions(key, rows = []) {
+  const src = OPTION_SOURCES[key];
+  if (!src) return [];
+  const found = new Map();
+  for (const r of rows) for (const o of src(r) ?? []) if (o?.value) found.set(o.value, o.label || o.value);
+  const list = [...found].sort((a, b) => String(a[1]).localeCompare(String(b[1]))).map(([value, label]) => ({ value, label }));
+  return [
+    { value: null, label: '— любой' },
+    ...(ME_FIELDS.includes(key) ? [{ value: 'me', label: 'я' }] : []),
+    ...list,
+  ];
+}
 
 const TRI = [null, true, false]; // не важно → да → нет
 
@@ -62,16 +86,17 @@ export function toggleFilter(filters, key) {
   return filters;
 }
 
-export const filterValueText = (field, v) => {
+export const filterValueText = (field, v, rows = []) => {
+  if (field.type === 'option') return v == null || v === '' ? '—' : filterOptions(field.key, rows).find((o) => o.value === v)?.label ?? v;
   if (field.type === 'text') return v || '—';
   if (field.type === 'flag') return v ? 'да' : '—';
   return v === true ? 'да' : v === false ? 'нет' : '—';
 };
 
 // Короткая сводка активных фильтров для шапки: иначе непонятно, почему список поредел.
-export function filterSummary(filters = {}) {
+export function filterSummary(filters = {}, rows = []) {
   const parts = FILTER_FIELDS.filter((f) => filters[f.key] !== null && filters[f.key] !== undefined && filters[f.key] !== '')
-    .map((f) => `${f.label.toLowerCase()}=${filterValueText(f, filters[f.key])}`);
+    .map((f) => `${f.label.toLowerCase()}=${filterValueText(f, filters[f.key], rows)}`);
   return parts.join(', ');
 }
 
@@ -152,7 +177,7 @@ export function reduce(state, ev) {
     case 'help':
       return { ...state, help: !state.help };
     case 'modalOpen':
-      return { ...state, modal: { kind: ev.kind ?? 'transition', title: ev.title, issue: ev.issue, mr: ev.mr, items: ev.items, cursor: 0, note: ev.note ?? '', busy: Boolean(ev.busy), editing: ev.editing ?? null, value: ev.value ?? '' } };
+      return { ...state, modal: { kind: ev.kind ?? 'transition', title: ev.title, issue: ev.issue, mr: ev.mr, field: ev.field, items: ev.items, cursor: ev.cursor ?? 0, note: ev.note ?? '', busy: Boolean(ev.busy), editing: ev.editing ?? null, value: ev.value ?? '' } };
     case 'modalItems': // обновление списка на месте: курсор и признак работы не трогаем
       return state.modal ? { ...state, modal: { ...state.modal, items: ev.items ?? state.modal.items, cursor: clamp(state.modal.cursor, (ev.items ?? state.modal.items).length), busy: ev.busy ?? state.modal.busy, note: ev.note ?? state.modal.note } } : state;
     case 'modalMove':

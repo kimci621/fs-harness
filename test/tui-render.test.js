@@ -26,7 +26,7 @@ const ctx = {
     listOpenMRs: async () => [
       {
         iid: 2547, title: 'fix: баннер', source_branch: 'fix/banner', target_branch: 'dev', has_conflicts: true, sha: 'abc',
-        user_notes_count: 2, author: { name: 'Амир Латипов' }, labels: ['review'],
+        user_notes_count: 2, author: { name: 'Амир Латипов', username: 'amir' }, labels: ['review'], reviewers: [], assignees: [],
         created_at: new Date(Date.now() - 2 * 86400e3).toISOString(), updated_at: new Date().toISOString(),
         web_url: 'https://example.invalid/2547',
       },
@@ -78,6 +78,14 @@ test('TUI: рисует MR, переключает вкладку и показ�
     await tick(150);
     assert.match(app.lastFrame(), /Фильтры списка MR/);
     assert.match(app.lastFrame(), /Только с конфликтом/);
+    app.stdin.write('\r'); // значение автора выбирается из списка, а не печатается
+    await tick(150);
+    assert.match(app.lastFrame(), /Фильтр: Автор/);
+    assert.match(app.lastFrame(), /— любой/);
+    assert.match(app.lastFrame(), /Амир Латипов/);
+    app.stdin.write('\u001B'); // назад к списку полей
+    await tick(150);
+    assert.match(app.lastFrame(), /Фильтры списка MR/);
     app.stdin.write('\u001B');
     await tick(150);
 
