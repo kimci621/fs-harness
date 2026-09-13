@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -127,4 +127,124 @@ test('пайплайн: порядок стадий, слот деплоя, кл
   assert.equal(fresh.modal.cursor, 2);
   assert.equal(fresh.modal.busy, true);
   assert.equal(fresh.modal.kind, 'pipeline');
+});
+
+test('фокус: Tab переносит его по кругу, j/k в списке двигают курсор, в остальных прокручивают', () => {
+  const s = withItems();
+  assert.deepEqual(keyIntent('', { tab: true }, s), { type: 'focus', by: 1 });
+  assert.deepEqual(keyIntent('', { tab: true, shift: true }, s), { type: 'focus', by: -1 });
+  assert.deepEqual(keyIntent('j', {}, s), { type: 'move', by: 1 });
+
+  const onDetails = reduce(s, { type: 'focus', by: 1 });
+  assert.equal(onDetails.focus, 'details');
+  assert.deepEqual(keyIntent('j', {}, onDetails), { type: 'scroll', by: 1 });
+  assert.deepEqual(keyIntent('', { pageDown: true }, onDetails), { type: 'scroll', by: 10 });
+  assert.equal(reduce(onDetails, { type: 'scroll', by: 3 }).scroll.details, 3);
+  assert.equal(reduce(onDetails, { type: 'scroll', by: -3 }).scroll.details, 0); // выше начала не уедет
+
+  const onLog = reduce(onDetails, { type: 'focus', by: 1 });
+  assert.equal(onLog.focus, 'log');
+  // У лога отсчёт от конца: вверх — это «показать более старое».
+  assert.equal(reduce(onLog, { type: 'scroll', by: -5 }).scroll.log, 5);
+  assert.equal(reduce(onLog, { type: 'scroll', by: 5 }).scroll.log, 0);
+  assert.equal(reduce(onLog, { type: 'focus', by: 1 }).focus, 'list');
+
+  // Съехал курсор — правая панель показывает другое, прокрутку сбрасываем.
+  const scrolled = reduce(onDetails, { type: 'scroll', by: 4 });
+  assert.equal(reduce(scrolled, { type: 'move', by: 1 }).scroll.details, 0);
+});
+
+test('строки списка: MR двухэтажный с бейджами, у задачи статус между ключом и названием', () => {
+  const mr = {
+    iid: 2785, title: 'Draft: фрейм оплаты', draft: true, author: 'Амир Латипов', labels: ['review'],
+    created_at: new Date(Date.now() - 2 * 86400e3).toISOString(), has_conflicts: true, approved: true,
+    pipeline: { status: 'success' }, comments: { open: 2, resolved: 2 },
+  };
+  const row = mrRow(mr);
+  assert.equal(row.title, 'Draft: фрейм оплаты');
+  assert.match(row.badges, /✅Approved/);
+  assert.match(row.badges, /💬2 of 4/);
+  assert.match(row.badges, /⚠конфликт/);
+  assert.match(row.meta, /^!2785 · создан 2 дн назад · Амир Латипов · review$/);
+
+  // Ещё не дозагрузились треды и аппрувы — бейджей просто нет, а не «0 of 0».
+  const bare = mrRow({ iid: 1, title: 'x', comments: { open: null, resolved: null } });
+  assert.equal(bare.badges, '');
+
+  assert.equal(issueRow({ key: 'FD-1', fields: { status: { name: 'В работе' }, summary: 'Починить' } }), 'FD-1 · В работе · Починить');
+});
+
+test('карточка задачи: поля по названию, длинные блоки раскрываются по e', () => {
+  const item = { key: 'FD-1', fields: { summary: 'Починить', status: { name: 'В работе' }, issuetype: { name: 'Task' }, updated: new Date().toISOString() } };
+  const full = {
+    names: { customfield_1: 'Ответственный разработчик', customfield_2: 'Technical details for QA', customfield_3: 'Sprint' },
+    fields: {
+      assignee: { displayName: 'Амир' }, reporter: { displayName: 'Эмиль' }, priority: { name: 'Medium' },
+      labels: ['Frontend'], parent: { key: 'FD-0', fields: { summary: 'Эпик' } },
+      issuelinks: [{ type: { outward: 'блокирует' }, outwardIssue: { key: 'FD-9', fields: { summary: 'Другая' } } }],
+      description: 'строка один\nстрока два',
+      customfield_1: [{ displayName: 'Амир' }],
+      customfield_2: 'проверить чекаут',
+      customfield_3: [{ id: 4, name: 'Спринт 18', state: 'active' }],
+    },
+  };
+  const text = (lines) => lines.map((l) => l.text).join('\n');
+
+  assert.match(text(detailLines('issues', item, {})), /подробности загружаются/);
+
+  const closed = text(detailLines('issues', item, { full, comments: [] }));
+  assert.match(closed, /Assignee: Амир · Reporter: Эмиль/);
+  assert.match(closed, /Ответственный разработчик: Амир/);
+  assert.match(closed, /Priority: Medium · Labels: Frontend/);
+  assert.match(closed, /Sprint: Спринт 18 \(active\)/);
+  assert.match(closed, /Parent: FD-0 Эпик/);
+  assert.match(closed, /блокирует FD-9 Другая/);
+  assert.match(closed, /▸ Technical details for QA · 1 стр\. · e раскрыть/);
+  assert.doesNotMatch(closed, /проверить чекаут/); // свёрнуто — текста не видно
+
+  const open = text(detailLines('issues', item, { full, comments: [], expand: true }));
+  assert.match(open, /▾ Описание/);
+  assert.match(open, /строка два/);
+  assert.match(open, /проверить чекаут/);
+  assert.match(open, /▸ Контент · пусто|▾ Контент · пусто/);
+});
+
+test('фильтры MR: переключатели, сводка для шапки и сброс', () => {
+  let f = {};
+  f = toggleFilter(f, 'conflicts');
+  assert.equal(f.conflicts, true);
+  f = toggleFilter(f, 'conflicts');
+  assert.equal(f.conflicts, null);
+
+  f = toggleFilter(f, 'draft'); // не важно → да
+  assert.equal(f.draft, true);
+  f = toggleFilter(f, 'draft'); // да → нет
+  assert.equal(f.draft, false);
+  f = toggleFilter(f, 'draft'); // нет → не важно
+  assert.equal(f.draft, null);
+
+  assert.equal(filterSummary({}), '');
+  assert.equal(filterSummary({ author: 'me', threads: true, draft: false }), 'автор=me, draft=нет, только с открытыми тредами=да');
+  assert.deepEqual(FILTER_FIELDS.map((x) => x.key).slice(0, 3), ['author', 'assignee', 'reviewer']);
+
+  const s = withItems();
+  assert.deepEqual(keyIntent('f', {}, s), { type: 'openFilters' });
+  assert.equal(keyIntent('f', {}, reduce(s, { type: 'tab', tab: 'issues' })), null);
+
+  // Пока набирают текст фильтра, клавиши принадлежат полю ввода.
+  const modal = reduce(reduce(s, { type: 'modalOpen', kind: 'filters', title: 'ф', items: FILTER_FIELDS }), { type: 'modalEdit', editing: 'author', value: '' });
+  assert.equal(keyIntent('j', {}, modal), null);
+  assert.equal(keyIntent('q', {}, modal), null);
+  assert.deepEqual(keyIntent('', { backspace: true }, reduce(modal, { type: 'modalEdit', editing: null })), { type: 'modalClear' });
+});
+
+test('задача: S — спринт, c — комментарий, только на вкладке задач', () => {
+  const s = withItems();
+  assert.equal(keyIntent('S', {}, s), null);
+  assert.equal(keyIntent('c', {}, s), null);
+  const onIssues = reduce(s, { type: 'tab', tab: 'issues' });
+  assert.deepEqual(keyIntent('S', {}, onIssues), { type: 'sprint' });
+  assert.deepEqual(keyIntent('c', {}, onIssues), { type: 'comment' });
+  assert.deepEqual(keyIntent('e', {}, onIssues), { type: 'expand' });
+  assert.equal(reduce(onIssues, { type: 'expand' }).expand, true);
 });

@@ -2,27 +2,47 @@ import { execFile } from 'node:child_process';
 import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
+import TextInput from 'ink-text-input';
 import htm from 'htm';
-import { TABS, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, orderJobs, deploySlot, DEPLOY_JOB } from './store.js';
+import {
+  TABS, FILTER_FIELDS, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
+  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, toggleFilter, filterValueText, filterSummary,
+} from './store.js';
 import { listRuns } from '../agent/journal.js';
 import { findCommand } from '../registry.js';
 import { runAction } from '../engine.js';
-import { cmdMRS } from '../commands/mrs.js';
+import { cmdMRS, toJSON, anyFilter } from '../commands/mrs.js';
+import { boardOf } from '../commands/jira.js';
 import { cmdRun } from '../commands/run.js';
 import { cmdDeploy } from '../commands/deploy.js';
-import { statusIcon, truncate, humanize, cleanTitle } from '../format.js';
+import { statusIcon, commentStats } from '../format.js';
 
 const html = htm.bind(React.createElement);
 
+// Размер окна терминала: экран занимает его целиком и переживает ресайз.
+function useTerminalSize() {
+  const { stdout } = useStdout();
+  const [size, setSize] = useState({ columns: stdout?.columns ?? 100, rows: stdout?.rows ?? 30 });
+  useEffect(() => {
+    if (!stdout?.on) return undefined;
+    const onResize = () => setSize({ columns: stdout.columns ?? 100, rows: stdout.rows ?? 30 });
+    stdout.on('resize', onResize);
+    return () => stdout.off?.('resize', onResize);
+  }, [stdout]);
+  return size;
+}
+
 export function App({ ctx, opts }) {
   const { exit } = useApp();
-  const { stdout } = useStdout();
+  const { columns, rows } = useTerminalSize();
   const [state, dispatch] = useReducer(reduce, initialState(ctx.cfg.activeProject));
-  const [now, setNow] = useState(Date.now());
+  const [, setNow] = useState(Date.now()); // тик перерисовки, значение не нужно
   const runsRef = useRef(new Map()); // id → AgentRun, чтобы было кого прерывать
   const bufferRef = useRef([]);
   const quitArmedRef = useRef(false);
   const pipeRef = useRef({ iid: null, pipelineId: null, busy: false });
+  const jiraRef = useRef(null);
+  const jira = () => (jiraRef.current ??= ctx.jira());
 
   // Буфер + слив по таймеру: на каждую дельту агента перерисовывать бессмысленно.
   useEffect(() => {
@@ -44,21 +64,39 @@ export function App({ ctx, opts }) {
     return () => clearInterval(id);
   }, []);
 
+  // Карточка задачи целиком — отдельным запросом и только для выбранной строки.
+  const issueKey = state.tab === 'issues' ? selected(state)?.key ?? null : null;
+  useEffect(() => {
+    if (!issueKey || state.details[issueKey]) return undefined;
+    let alive = true;
+    (async () => {
+      const j = jira();
+      const [issue, comments] = await Promise.all([j.issue(issueKey), j.comments(issueKey).catch(() => null)]);
+      if (alive) dispatch({ type: 'issueDetails', key: issueKey, issue, comments: comments?.comments ?? [] });
+    })().catch((err) => dispatch({ type: 'error', tab: 'issues', message: err.message }));
+    return () => { alive = false; };
+  }, [issueKey]);
+
   async function load(tab) {
     dispatch({ type: 'loading', tab });
     try {
-      // Список MR приходит быстро, а треды и пайплайны — 20+ запросов. Поэтому в два захода:
-      // сперва показываем что есть, потом дополняем строки маркерами.
       if (tab === 'mr') {
-        const mrs = await ctx.g.listOpenMRs(ctx.repo);
-        dispatch({ type: 'items', tab, items: mrs.map((mr) => ({ ...mr, comments: {}, pipeline: null })) });
-        cmdMRS(ctx.g, ctx.repo, { asObject: true })
-          .then((full) => dispatch({ type: 'items', tab, items: full.mrs }))
-          .catch(() => {}); // не дополнилось — список и так на экране
+        // Под фильтрами короткого пути нет: конфликты и треды считаются только после дозагрузки.
+        if (anyFilter(state.filters)) {
+          dispatch({ type: 'items', tab, items: (await cmdMRS(ctx.g, ctx.repo, { asObject: true, ...state.filters })).mrs });
+        } else {
+          // Список MR приходит быстро, а треды, аппрувы и пайплайны — это запрос на каждый MR.
+          // Поэтому в два захода: сперва показываем что есть, потом дополняем строки маркерами.
+          const mrs = await ctx.g.listOpenMRs(ctx.repo);
+          dispatch({ type: 'items', tab, items: mrs.map((mr) => toJSON({ mr, stats: commentStats(null, mr.user_notes_count) })) });
+          cmdMRS(ctx.g, ctx.repo, { asObject: true })
+            .then((full) => dispatch({ type: 'items', tab, items: full.mrs }))
+            .catch(() => {}); // не дополнилось — список и так на экране
+        }
       }
       if (tab === 'runs') dispatch({ type: 'items', tab, items: listRuns({ limit: 30 }) });
       if (tab === 'issues') {
-        const { issues } = await ctx.jira().searchJql({ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC' });
+        const { issues } = await jira().searchJql({ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC' });
         dispatch({ type: 'items', tab, items: issues });
       }
     } catch (err) {
@@ -123,12 +161,12 @@ export function App({ ctx, opts }) {
     dispatch({ type: 'modalItems', items: orderJobs(await ctx.g.getJobs(ctx.repo, id)), busy: pipeRef.current.busy, note: '' });
   }
 
-  // Смена статуса задачи — единственная запись в Jira: сначала список переходов, потом выбор.
+  // Смена статуса задачи: сначала список переходов, потом выбор.
   async function openTransitions() {
     const item = selected(state);
     if (!item?.key) return;
     try {
-      const { transitions = [] } = (await ctx.jira().transitions(item.key)) ?? {};
+      const { transitions = [] } = (await jira().transitions(item.key)) ?? {};
       if (!transitions.length) return void bufferRef.current.push(`${item.key} ▸ доступных переходов нет`);
       dispatch({ type: 'modalOpen', title: `${item.key}: куда переводим?`, issue: item.key, items: transitions.map((t) => ({ id: t.id, name: t.name, to: t.to?.name ?? t.name })) });
     } catch (err) {
@@ -141,12 +179,75 @@ export function App({ ctx, opts }) {
     const t = items[cursor];
     dispatch({ type: 'modalClose' });
     try {
-      await ctx.jira().transition(issue, t.id);
+      await jira().transition(issue, t.id);
       bufferRef.current.push(`${issue} ▸ статус → ${t.to}`);
       load('issues');
     } catch (err) {
       bufferRef.current.push(`${issue} ▸ ❌ ${err.message}`);
     }
+  }
+
+  // Спринты берём с доски самой задачи: у активного спринта boardId уже указан.
+  async function openSprints() {
+    const item = selected(state);
+    if (!item?.key) return;
+    try {
+      const full = state.details[item.key]?.issue ?? (await jira().issue(item.key));
+      const { values = [] } = (await jira().sprints(await boardOf(jira(), full))) ?? {};
+      if (!values.length) return void bufferRef.current.push(`${item.key} ▸ активных спринтов на доске нет`);
+      dispatch({ type: 'modalOpen', kind: 'sprint', title: `${item.key}: в какой спринт?`, issue: item.key, items: values.map((s) => ({ id: s.id, name: s.name, to: s.state })) });
+    } catch (err) {
+      dispatch({ type: 'error', tab: 'issues', message: err.message });
+    }
+  }
+
+  async function applySprint() {
+    const { issue, items, cursor } = state.modal;
+    const s = items[cursor];
+    dispatch({ type: 'modalClose' });
+    try {
+      await jira().moveToSprint(s.id, [issue]);
+      bufferRef.current.push(`${issue} ▸ спринт → ${s.name}`);
+      await reloadIssue(issue);
+    } catch (err) {
+      bufferRef.current.push(`${issue} ▸ ❌ ${err.message}`);
+    }
+  }
+
+  async function submitComment(text) {
+    const { issue } = state.modal;
+    dispatch({ type: 'modalClose' });
+    if (!text.trim()) return;
+    try {
+      await jira().addComment(issue, text);
+      bufferRef.current.push(`${issue} ▸ комментарий опубликован`);
+      await reloadIssue(issue);
+    } catch (err) {
+      bufferRef.current.push(`${issue} ▸ ❌ ${err.message}`);
+    }
+  }
+
+  async function reloadIssue(key) {
+    const j = jira();
+    const [issue, comments] = await Promise.all([j.issue(key), j.comments(key).catch(() => null)]);
+    dispatch({ type: 'issueDetails', key, issue, comments: comments?.comments ?? [] });
+  }
+
+  // Фильтры списка MR — те же, что у флагов CLI, только выбираются с клавиш.
+  function openFilters() {
+    dispatch({ type: 'modalOpen', kind: 'filters', title: 'Фильтры списка MR', items: FILTER_FIELDS });
+  }
+
+  function applyFilterRow() {
+    const field = FILTER_FIELDS[state.modal.cursor];
+    if (field.type === 'text') return void dispatch({ type: 'modalEdit', editing: field.key, value: state.filters[field.key] ?? '' });
+    dispatch({ type: 'filters', filters: toggleFilter(state.filters, field.key) });
+  }
+
+  function submitFilter(value) {
+    const key = state.modal.editing;
+    dispatch({ type: 'modalEdit', editing: null, value: '' });
+    dispatch({ type: 'filters', filters: { ...state.filters, [key]: value.trim() || null } });
   }
 
   function launch(actionName) {
@@ -176,6 +277,15 @@ export function App({ ctx, opts }) {
     run.result.catch(() => {}); // ошибка уже пришла событием
   }
 
+  const editing = state.modal?.editing ?? null;
+
+  // Пока набирают текст, все клавиши принадлежат полю ввода — кроме Esc, он отменяет ввод.
+  // В окне комментария кроме ввода ничего нет, поэтому Esc закрывает его целиком.
+  useInput((input, key) => {
+    if (!key.escape) return;
+    dispatch(state.modal?.kind === 'comment' ? { type: 'modalClose' } : { type: 'modalEdit', editing: null, value: '' });
+  }, { isActive: Boolean(editing) });
+
   useInput((input, key) => {
     const intent = keyIntent(input, key, state);
     if (!intent) return;
@@ -195,8 +305,31 @@ export function App({ ctx, opts }) {
     }
     if (intent.type === 'launch') return launch(intent.action);
     if (intent.type === 'transition') return void openTransitions();
+    if (intent.type === 'sprint') return void openSprints();
+    if (intent.type === 'comment') {
+      const item = selected(state);
+      if (item?.key) dispatch({ type: 'modalOpen', kind: 'comment', title: `${item.key}: комментарий`, issue: item.key, items: [], editing: 'comment' });
+      return;
+    }
+    if (intent.type === 'openFilters') return openFilters();
     if (intent.type === 'pipeline') return void openPipeline().catch((err) => dispatch({ type: 'error', tab: 'mr', message: err.message }));
-    if (intent.type === 'modalApply') return void (state.modal.kind === 'pipeline' ? runJob() : applyTransition());
+    if (intent.type === 'modalApply') {
+      const kind = state.modal.kind;
+      if (kind === 'pipeline') return void runJob();
+      if (kind === 'sprint') return void applySprint();
+      if (kind === 'filters') return applyFilterRow();
+      return void applyTransition();
+    }
+    if (intent.type === 'modalClear') {
+      if (state.modal.kind !== 'filters') return;
+      return void dispatch({ type: 'filters', filters: { ...state.filters, [FILTER_FIELDS[state.modal.cursor].key]: null } });
+    }
+    if (intent.type === 'modalClose') {
+      const wasFilters = state.modal.kind === 'filters';
+      dispatch(intent);
+      if (wasFilters) load('mr');
+      return;
+    }
     if (intent.type === 'open') {
       const url = selected(state)?.web_url;
       if (url) execFile('open', [url], () => {});
@@ -205,120 +338,160 @@ export function App({ ctx, opts }) {
     if (intent.type === 'reload') return load(state.tab);
     if (intent.type === 'tab') { dispatch(intent); if (!state.items[intent.tab].length) load(intent.tab); return; }
     dispatch(intent);
-  });
+  }, { isActive: !editing });
 
-  const width = stdout?.columns ?? 100;
+  // Раскладка по высоте окна: шапка, вкладки с подсказкой, тело, карточки ранов, лог, низ.
+  const height = Math.max(16, rows - 1);
+  const cards = Object.values(state.runs).slice(-3);
+  const logInner = Math.min(12, Math.max(3, Math.floor((height - 8) * 0.3)));
+  const bodyInner = Math.max(4, height - 8 - logInner - cards.length);
   const item = selected(state);
   const running = activeRuns(state);
+  const hint = TABS.find((t) => t.key === state.tab).hint;
+  const filters = state.tab === 'mr' ? filterSummary(state.filters) : '';
 
   return html`
-    <${Box} flexDirection="column" width=${width}>
-      <${Box} justifyContent="space-between">
+    <${Box} flexDirection="column" width=${columns} height=${height}>
+      <${Box} justifyContent="space-between" flexShrink=${0}>
         <${Text} bold color="cyan">fs-harness · ${state.project || ctx.repo}<//>
         <${Text} dimColor>запусков: ${running.length}${running.length ? ' ' : ''}${running.length ? html`<${Spinner} type="dots" />` : ''} · $${totalCost(state).toFixed(2)}<//>
       <//>
-      <${Box} flexDirection="column">
-        <${Box} flexShrink=${0}>
-          ${TABS.map((t, i) => html`<${Text} key=${t.key} color=${state.tab === t.key ? 'cyan' : undefined} inverse=${state.tab === t.key}> [${i + 1}] ${t.title} <//>`)}
-        <//>
-        <${Text} dimColor wrap="truncate-end">${TABS.find((t) => t.key === state.tab).hint} · ? помощь<//>
+      <${Box} flexShrink=${0}>
+        ${TABS.map((t, i) => html`<${Text} key=${t.key} color=${state.tab === t.key ? 'cyan' : undefined} inverse=${state.tab === t.key}> [${i + 1}] ${t.title} <//>`)}
       <//>
-      ${state.help ? html`<${Help} />` : state.modal ? html`<${Modal} modal=${state.modal} />` : html`<${Body} state=${state} item=${item} width=${width} now=${now} />`}
-      <${Log} lines=${state.log} />
-      <${Text} dimColor>q выход · x прервать · R обновить · o открыть в браузере${state.error ? ` · ❌ ${state.error}` : ''}<//>
+      <${Text} dimColor wrap="truncate-end">${hint} · ? помощь${filters ? ` · фильтры: ${filters}` : ''}<//>
+      ${state.help
+        ? html`<${Help} height=${bodyInner} />`
+        : state.modal
+          ? html`<${Modal} modal=${state.modal} filters=${state.filters} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
+          : html`<${Body} state=${state} item=${item} width=${columns} height=${bodyInner} />`}
+      ${cards.map((r) => html`
+        <${Text} key=${r.id} wrap="truncate-end">${r.done ? (r.ok ? '✅' : '❌') : '⏳'} ${r.action} ${r.target} · ${r.phase}${r.decision ? ` · ${r.decision}` : ''}${r.cost ? ` · $${r.cost.toFixed(2)}` : ''}<//>
+      `)}
+      <${Log} lines=${state.log} height=${logInner} offset=${state.scroll.log} focused=${state.focus === 'log'} />
+      <${Text} dimColor wrap="truncate-end">q выход · x прервать · R обновить · o в браузере · Tab блок: ${state.focus === 'list' ? 'список' : state.focus === 'details' ? 'детали' : 'лог'} · ${position(state)}${state.error ? ` · ❌ ${state.error}` : ''}<//>
     <//>
   `;
 }
 
-const Help = () =>
-  html`<${Box} flexDirection="column" paddingY=${1}>
+// Где мы в списке — единственное место, где это видно, когда строк больше экрана.
+const position = (state) => {
+  const len = state.items[state.tab].length;
+  return len ? `${state.cursor[state.tab] + 1}/${len}` : '0/0';
+};
+
+const Help = ({ height }) =>
+  html`<${Box} flexDirection="column" height=${height} borderStyle="round" borderColor="gray" paddingX=${1}>
     <${Text} bold>Клавиши<//>
-    <${Text}>1/2/3, Tab — вкладки · ↑↓ или j/k — курсор · PgUp/PgDn — на 10<//>
-    <${Text}>a — конфликт · t — треды · r — ревью (вкладка MR) · n — разбор задачи (вкладка Задачи)<//>
-    <${Text}>s — сменить статус задачи (вкладка Задачи) · p — пайплайн MR: все джобы и их запуск<//>
+    <${Text}>1/2/3 — вкладки · Tab — перенести фокус (список → детали → лог) · ↑↓ или j/k — курсор и прокрутка<//>
+    <${Text}>a — решить конфликт · t — обработать тикеты · r — локальное ревью (вкладка MR)<//>
+    <${Text}>p — пайплайн MR: все джобы и их запуск · f — фильтры списка MR<//>
+    <${Text}>n — проанализировать задачу · s — статус · S — спринт · c — комментарий · e — раскрыть поля<//>
     <${Text}>x — прервать все запуски · R — перечитать список · o — открыть в браузере · q — выход<//>
     <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
   <//>`;
 
-const Modal = ({ modal }) =>
-  modal.kind === 'pipeline'
-    ? html`<${Box} flexDirection="column" height=${12} borderStyle="round" borderColor="cyan" paddingX=${1}>
-        <${Text} bold>${modal.title}${modal.busy ? ' · работает…' : ''}<//>
+function Modal({ modal, filters, height, onSubmit, onChange }) {
+  const body = () => {
+    if (modal.kind === 'comment') {
+      return html`<${Box} flexDirection="column">
+        <${Box}><${Text}>› <//><${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} /><//>
+        <${Text} dimColor>Enter — опубликовать в Jira · Esc — отмена<//>
+      <//>`;
+    }
+    if (modal.kind === 'filters') {
+      return html`<${Box} flexDirection="column">
+        ${FILTER_FIELDS.map((f, i) => html`
+          <${Text} key=${f.key} inverse=${i === modal.cursor && !modal.editing} wrap="truncate-end">${f.label.padEnd(28)} ${
+            modal.editing === f.key ? html`<${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} />` : filterValueText(f, filters[f.key])
+          }<//>
+        `)}
+        <${Text} dimColor>Enter — задать или переключить · Backspace — сбросить · Esc — применить и закрыть<//>
+      <//>`;
+    }
+    if (modal.kind === 'pipeline') {
+      return html`<${Box} flexDirection="column">
         ${modal.note ? html`<${Text} dimColor>${modal.note}<//>` : null}
-        ${modal.items.slice(0, 8).map((j, i) => html`
+        ${modal.items.slice(0, Math.max(1, height - 4)).map((j, i) => html`
           <${Text} key=${j.id} inverse=${i === modal.cursor} wrap="truncate-end">${(j.stage ?? '—').padEnd(16)} ${j.name.padEnd(24)} ${statusIcon(j.status)} ${j.status}<//>
         `)}
         ${!modal.items.length ? html`<${Text} dimColor>джоб нет<//>` : null}
         <${Text} dimColor>Enter — запустить (deploy_dev* сам собирает build_image и ждёт его) · Esc — закрыть<//>
-      <//>`
-    : html`<${Box} flexDirection="column" height=${12} borderStyle="round" borderColor="cyan" paddingX=${1}>
-        <${Text} bold>${modal.title}<//>
-        ${modal.items.map((t, i) => html`<${Text} key=${t.id} inverse=${i === modal.cursor}>${t.name}${t.to !== t.name ? ` → ${t.to}` : ''}<//>`)}
-        <${Text} dimColor>Enter — перевести · Esc — отмена<//>
       <//>`;
+    }
+    return html`<${Box} flexDirection="column">
+      ${modal.items.slice(0, Math.max(1, height - 3)).map((t, i) => html`
+        <${Text} key=${t.id} inverse=${i === modal.cursor} wrap="truncate-end">${t.name}${t.to && t.to !== t.name ? ` → ${t.to}` : ''}<//>
+      `)}
+      <${Text} dimColor>Enter — применить · Esc — отмена<//>
+    <//>`;
+  };
+  return html`<${Box} flexDirection="column" height=${height} borderStyle="round" borderColor="cyan" paddingX=${1}>
+    <${Text} bold>${modal.title}${modal.busy ? ' · работает…' : ''}<//>
+    ${body()}
+  <//>`;
+}
 
-function Body({ state, item, width, now }) {
-  const listWidth = Math.max(28, Math.floor(width * 0.42));
-  const rows = state.items[state.tab];
-  const cursor = state.cursor[state.tab];
+function Body({ state, item, width, height }) {
+  const listWidth = Math.max(30, Math.floor(width * (state.tab === 'mr' ? 0.58 : 0.45)));
+  const inner = Math.max(1, height - 2); // рамка сверху и снизу
   return html`
-    <${Box} height=${12}>
-      <${Box} flexDirection="column" width=${listWidth} borderStyle="round" borderColor="gray">
-        ${state.loading[state.tab] ? html`<${Text} dimColor>загружаю…<//>` : rows.slice(Math.max(0, cursor - 8), Math.max(0, cursor - 8) + 10).map((r, i, arr) => {
-          const idx = Math.max(0, cursor - 8) + i;
-          // wrap обязателен: эмодзи шире символа, и без него строка переносится, а список уезжает.
-          return html`<${Text} key=${rowKey(r, idx)} inverse=${idx === cursor} wrap="truncate-end">${truncate(rowLabel(state.tab, r), listWidth - 3)}<//>`;
-        })}
-        ${!state.loading[state.tab] && !rows.length ? html`<${Text} dimColor>пусто<//>` : null}
+    <${Box} height=${height}>
+      <${Box} flexDirection="column" width=${listWidth} flexShrink=${0} overflow="hidden" borderStyle="round" borderColor=${state.focus === 'list' ? 'cyan' : 'gray'}>
+        <${List} state=${state} height=${inner} width=${listWidth - 2} />
       <//>
-      <${Box} flexDirection="column" flexGrow=${1} borderStyle="round" borderColor="gray">
-        ${item ? html`<${Details} tab=${state.tab} item=${item} />` : html`<${Text} dimColor>нечего показывать<//>`}
-        ${Object.values(state.runs).slice(-4).map((r) => html`
-          <${Text} key=${r.id}>${r.done ? (r.ok ? '✅' : '❌') : '⏳'} ${r.action} ${r.target} · ${r.phase}${r.decision ? ` · ${r.decision}` : ''}${r.cost ? ` · $${r.cost.toFixed(2)}` : ''}<//>
-        `)}
+      <${Box} flexDirection="column" flexGrow=${1} minWidth=${0} overflow="hidden" borderStyle="round" borderColor=${state.focus === 'details' ? 'cyan' : 'gray'}>
+        <${Details} state=${state} item=${item} height=${inner} />
       <//>
     <//>
   `;
 }
 
-const rowKey = (r, i) => String(r.iid ?? r.key ?? r.id ?? i);
-
-function rowLabel(tab, r) {
-  // Конфликт и незакрытые треды видно в самой строке: за ними чаще всего и приходят.
-  if (tab === 'mr') {
-    const marks = [r.has_conflicts ? '⚠' : '', r.comments?.open ? `💬${r.comments.open}` : '', statusIcon(r.pipeline?.status)].filter(Boolean).join(' ');
-    return `!${r.iid} ${marks} ${cleanTitle(r)}`;
-  }
-  if (tab === 'issues') return `${r.key} ${r.fields?.summary ?? ''}`;
-  return `${r.id} ${r.decision ?? r.state}`;
+function List({ state, height, width }) {
+  const rows = state.items[state.tab];
+  if (state.loading[state.tab]) return html`<${Text} dimColor>загружаю…<//>`;
+  if (!rows.length) return html`<${Text} dimColor>пусто<//>`;
+  const per = state.tab === 'mr' ? 2 : 1; // строка MR двухэтажная, как в GitLab
+  const visible = Math.max(1, Math.floor(height / per));
+  const cursor = state.cursor[state.tab];
+  const start = Math.max(0, Math.min(cursor - Math.floor(visible / 2), rows.length - visible));
+  return rows.slice(start, start + visible).map((r, i) => {
+    const active = start + i === cursor;
+    if (state.tab === 'mr') return html`<${MRRow} key=${r.iid} r=${r} active=${active} width=${width} />`;
+    // wrap обязателен: эмодзи шире символа, и без него строка переносится, а список уезжает.
+    return html`<${Text} key=${r.key ?? r.id ?? i} inverse=${active} wrap="truncate-end">${state.tab === 'issues' ? issueRow(r) : runRow(r)}<//>`;
+  });
 }
 
-function Details({ tab, item }) {
-  if (tab === 'mr') {
-    return html`<${Box} flexDirection="column">
-      <${Text} bold>!${item.iid} ${cleanTitle(item)}<//>
-      <${Text} dimColor>${item.source_branch} → ${item.target_branch}<//>
-      <${Text}>пайплайн ${statusIcon(item.pipeline?.status)} ${item.pipeline?.status ?? 'нет'}${item.pipeline_stale ? ' (устарел)' : ''} · конфликт ${item.has_conflicts ? '⚠ есть' : '✅ нет'} · треды ${item.comments?.open ? `⚠ открыто ${item.comments.open}` : '✅ все закрыты'}<//>
-      <${Text} dimColor>обновлён ${humanize(item.updated_at)} · p — пайплайн и запуск джоб<//>
-      <${Text} dimColor>${item.web_url}<//>
-    <//>`;
-  }
-  if (tab === 'issues') {
-    return html`<${Box} flexDirection="column">
-      <${Text} bold>${item.key} ${item.fields?.summary ?? ''}<//>
-      <${Text} dimColor>${item.fields?.status?.name ?? '—'} · ${humanize(item.fields?.updated)}<//>
-    <//>`;
-  }
-  return html`<${Box} flexDirection="column">
-    <${Text} dimColor>Прошлый запуск действия (conflict, threads, review, analyze): что решил судья и почём.<//>
-    <${Text} bold>${item.id}<//>
-    <${Text} dimColor>${item.action} ${item.mr ? `!${item.mr}` : item.issue ?? ''} · ${item.state}${item.decision ? ` · ${item.decision}` : ''}${item.cost ? ` · $${item.cost.toFixed(2)}` : ''}<//>
-    <${Text} dimColor>${item.dir}<//>
+// Две строки на MR: заголовок с бейджами справа и метаданные снизу — как в списке GitLab.
+function MRRow({ r, active, width = 40 }) {
+  const { title, badges, meta } = mrRow(r);
+  // Бейджи не жмутся и не переносятся: перенос ломает высоту строки и весь список уезжает.
+  const room = width - 4 - badges.length;
+  return html`<${Box} flexDirection="column" flexShrink=${0}>
+    <${Box}>
+      <${Text} color="cyan">${active ? '▌' : ' '}<//>
+      <${Box} flexGrow=${1} minWidth=${0}><${Text} bold color=${active ? 'cyan' : undefined} wrap="truncate-end">${title}<//><//>
+      ${badges && room > 8 ? html`<${Box} flexShrink=${0}><${Text} wrap="truncate-end"> ${badges}<//><//>` : null}
+    <//>
+    <${Text} dimColor wrap="truncate-end">${active ? '▌' : ' '}${meta}<//>
   <//>`;
 }
 
-const Log = ({ lines }) =>
-  html`<${Box} flexDirection="column" height=${8} borderStyle="round" borderColor="gray">
-    ${lines.slice(-6).map((l, i) => html`<${Text} key=${i} wrap="truncate-end">${l}<//>`)}
+function Details({ state, item, height }) {
+  const full = item?.key ? state.details[item.key] : null;
+  const lines = detailLines(state.tab, item, { full: full?.issue ?? null, comments: full?.comments ?? [], expand: state.expand });
+  const off = Math.min(state.scroll.details, Math.max(0, lines.length - height));
+  return lines.slice(off, off + height).map((l, i) => html`
+    <${Text} key=${i} bold=${l.bold} dimColor=${l.dim} color=${l.color} wrap="truncate-end">${l.text}<//>
+  `);
+}
+
+function Log({ lines, height, offset, focused }) {
+  const inner = Math.max(1, height - 2);
+  const end = Math.max(inner, lines.length - offset);
+  return html`<${Box} flexDirection="column" height=${height} borderStyle="round" borderColor=${focused ? 'cyan' : 'gray'}>
+    ${lines.slice(Math.max(0, end - inner), end).map((l, i) => html`<${Text} key=${i} wrap="truncate-end">${l}<//>`)}
     ${!lines.length ? html`<${Text} dimColor>лог пуст — запусти действие клавишей<//>` : null}
   <//>`;
+}
