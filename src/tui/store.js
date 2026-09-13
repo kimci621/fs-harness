@@ -1,3 +1,4 @@
+import Fuse from 'fuse.js';
 // Состояние TUI — чистые функции: их можно гонять тестами без терминала.
 // Ink-компоненты только рисуют то, что здесь посчитано.
 import { statusIcon, humanize, cleanTitle } from '../format.js';
@@ -109,6 +110,8 @@ export const initialState = (project = '') => ({
   loading: { mr: true, issues: false, runs: true, prompts: false },
   scroll: { details: 0, log: 0 }, // details — строк вниз от начала, log — строк вверх от конца
   expand: false,
+  search: { mr: '', issues: '', runs: '', prompts: '' }, // запрос на вкладку
+  searching: false, // открыто поле ввода поиска
   filters: {},
   details: {}, // ключ задачи → {issue, comments}: подробности догружаются по выбору
   prompts: {}, // имя шаблона → текст: читается с диска при выборе строки
@@ -125,7 +128,7 @@ const clamp = (i, len) => (len === 0 ? 0 : Math.max(0, Math.min(i, len - 1)));
 export function reduce(state, ev) {
   switch (ev.type) {
     case 'tab':
-      return { ...state, tab: ev.tab, help: false, focus: 'list', scroll: { details: 0, log: state.scroll.log } };
+      return { ...state, tab: ev.tab, help: false, searching: false, focus: 'list', scroll: { details: 0, log: state.scroll.log } };
     case 'nextTab': {
       const i = TABS.findIndex((t) => t.key === state.tab);
       return reduce(state, { type: 'tab', tab: TABS[(i + 1 + TABS.length) % TABS.length].key });
@@ -135,7 +138,7 @@ export function reduce(state, ev) {
       return { ...state, focus: PANES[(i + ev.by + PANES.length) % PANES.length] };
     }
     case 'move': {
-      const len = state.items[state.tab].length;
+      const len = visibleItems(state).length;
       // Курсор уехал на другую строку — правая панель показывает уже другое, прокрутку сбрасываем.
       return {
         ...state,
@@ -186,6 +189,12 @@ export function reduce(state, ev) {
       return state.modal ? { ...state, modal: { ...state.modal, editing: ev.editing, value: ev.value ?? '' } } : state;
     case 'modalClose':
       return { ...state, modal: null };
+    case 'searchOpen':
+      return { ...state, searching: true, help: false };
+    case 'searchEdit': // курсор на первую строку: старый индекс указывает в другой список
+      return { ...state, search: { ...state.search, [state.tab]: ev.value }, cursor: { ...state.cursor, [state.tab]: 0 }, scroll: { ...state.scroll, details: 0 } };
+    case 'searchClose':
+      return { ...state, searching: false };
     case 'runStarted':
       return { ...state, runs: { ...state.runs, [ev.id]: { id: ev.id, action: ev.action, target: ev.target, phase: 'старт', cost: 0, done: false } } };
     case 'runEvent':
@@ -236,7 +245,29 @@ export function busyText(busy = [], now = Date.now()) {
 }
 
 export const activeRuns = (state) => Object.values(state.runs).filter((r) => !r.done);
-export const selected = (state) => state.items[state.tab][state.cursor[state.tab]] ?? null;
+// Поиск по всей сущности сразу: склеиваем её поля в одну строку и отдаём Fuse.
+// threshold 0.4 — опечатка в паре букв ещё находит, случайное совпадение уже нет.
+const HAY = {
+  mr: (r) => [`!${r.iid}`, r.title, r.author, r.source_branch, r.target_branch, r.pipeline?.status, r.draft ? 'draft' : '', ...(r.labels ?? [])],
+  issues: (r) => [r.key, r.fields?.summary, r.fields?.status?.name, r.fields?.issuetype?.name, r.fields?.assignee?.displayName, ...(r.fields?.labels ?? [])],
+  runs: (r) => [r.id, r.action, r.mr ? `!${r.mr}` : '', r.issue, r.state, r.decision],
+  prompts: (r) => [r.name, r.overridden ? 'свой' : 'встроенный', ...(r.vars ?? [])],
+};
+
+let cache = {}; // индекс переживает перерисовку: список меняется реже, чем кадр
+
+export function searchRows(tab, items, query) {
+  const q = (query ?? '').trim();
+  if (!q || !HAY[tab]) return items;
+  if (cache.tab !== tab || cache.items !== items) {
+    const docs = items.map((item, i) => ({ i, hay: HAY[tab](item).filter(Boolean).join(' ') }));
+    cache = { tab, items, fuse: new Fuse(docs, { keys: ['hay'], threshold: 0.4, ignoreLocation: true, minMatchCharLength: 2 }) };
+  }
+  return cache.fuse.search(q).map((r) => items[r.item.i]);
+}
+
+export const visibleItems = (state) => searchRows(state.tab, state.items[state.tab], state.search[state.tab]);
+export const selected = (state) => visibleItems(state)[state.cursor[state.tab]] ?? null;
 export const totalCost = (state) => Object.values(state.runs).reduce((s, r) => s + (r.cost ?? 0), 0);
 
 // Куски строки со своим цветом: важное — номер, исполнитель, статус, ветка — должно
@@ -415,6 +446,8 @@ function runDetails(item) {
 // Клавиша → намерение. Чистая: в тестах не нужен ни ink, ни терминал.
 export function keyIntent(input, key, state) {
   // Пока открыта модалка, клавиши действий молчат: случайный запуск тут дороже удобства.
+  // Пока набирают запрос, клавиши действий молчат: поле ввода забирает их себе.
+  if (state.searching) return key.escape || key.return ? { type: 'searchClose' } : null;
   if (state.modal) {
     if (state.modal.editing) return null; // ввод текста забирает поле ввода
     if (key.escape || input === 'q') return { type: 'modalClose' };
@@ -436,6 +469,7 @@ export function keyIntent(input, key, state) {
   if (key.downArrow || input === 'j') return { type: scroll ?? 'move', by: 1 };
   if (key.pageUp) return { type: scroll ?? 'move', by: -10 };
   if (key.pageDown) return { type: scroll ?? 'move', by: 10 };
+  if (input === '/') return { type: 'searchOpen' };
   if (input === 'o') return { type: 'open' };
   if (input === 'e' && state.tab === 'issues') return { type: 'expand' };
   if (input === 'e' && state.tab === 'prompts') return { type: 'promptOverride' };
