@@ -2,9 +2,9 @@
 // Ink-компоненты только рисуют то, что здесь посчитано.
 
 export const TABS = [
-  { key: 'mr', title: 'MR', hint: 'a конфликт · t треды · r ревью' },
+  { key: 'mr', title: 'MR', hint: 'a решить конфликт · t обработать тикеты · r локальное ревью · p пайплайн' },
   { key: 'issues', title: 'Задачи', hint: 'n разбор · s статус' },
-  { key: 'runs', title: 'Запуски', hint: 'R обновить · путь к журналу справа' },
+  { key: 'runs', title: 'История', hint: 'прошлые запуски действий: вердикт, цена, каталог' },
 ];
 
 // Действия по клавишам: одно действие — одна клавиша, как в плане.
@@ -16,6 +16,22 @@ export const LAUNCH = {
 };
 
 export const LOG_LIMIT = 2000;
+
+// Джобы пайплайна по стадиям, как показывает GitLab. Порядок стадий API не отдаёт,
+// поэтому берём его по младшему id джобы в стадии: джобы ранних стадий создаются первыми.
+// ponytail: ретрай создаёт новый id, и стадия из одних ретраев уедет вниз списка.
+export function orderJobs(jobs = []) {
+  const first = new Map();
+  for (const j of jobs) {
+    const stage = j.stage ?? '';
+    if (!first.has(stage) || j.id < first.get(stage)) first.set(stage, j.id);
+  }
+  return [...jobs].sort((a, b) => first.get(a.stage ?? '') - first.get(b.stage ?? '') || a.id - b.id);
+}
+
+// Джоба деплоя тянет за собой сборку: запускать её надо цепочкой deploy, а не в одиночку.
+export const DEPLOY_JOB = /^deploy_dev(\d*)$/;
+export const deploySlot = (name) => (DEPLOY_JOB.exec(name ?? '') ?? [])[1] || '';
 
 export const initialState = (project = '') => ({
   project,
@@ -58,7 +74,9 @@ export function reduce(state, ev) {
     case 'help':
       return { ...state, help: !state.help };
     case 'modalOpen':
-      return { ...state, modal: { title: ev.title, issue: ev.issue, items: ev.items, cursor: 0 } };
+      return { ...state, modal: { kind: ev.kind ?? 'transition', title: ev.title, issue: ev.issue, mr: ev.mr, items: ev.items, cursor: 0, note: ev.note ?? '', busy: false } };
+    case 'modalItems': // обновление списка джоб на месте: курсор и признак работы не трогаем
+      return state.modal ? { ...state, modal: { ...state.modal, items: ev.items, cursor: clamp(state.modal.cursor, ev.items.length), busy: ev.busy ?? state.modal.busy, note: ev.note ?? state.modal.note } } : state;
     case 'modalMove':
       return state.modal ? { ...state, modal: { ...state.modal, cursor: clamp(state.modal.cursor + ev.by, state.modal.items.length) } } : state;
     case 'modalClose':
@@ -126,6 +144,7 @@ export function keyIntent(input, key, state) {
   if (key.pageDown) return { type: 'move', by: 10 };
   if (input === 'o') return { type: 'open' };
   if (input === 's' && state.tab === 'issues') return { type: 'transition' };
+  if (input === 'p' && state.tab === 'mr') return { type: 'pipeline' };
   if (input === 'R') return { type: 'reload' };
   const launch = LAUNCH[input];
   if (launch && launch.tab === state.tab) return { type: 'launch', action: launch.action };

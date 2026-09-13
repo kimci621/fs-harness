@@ -3,10 +3,13 @@ import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import htm from 'htm';
-import { TABS, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost } from './store.js';
+import { TABS, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, orderJobs, deploySlot, DEPLOY_JOB } from './store.js';
 import { listRuns } from '../agent/journal.js';
 import { findCommand } from '../registry.js';
 import { runAction } from '../engine.js';
+import { cmdMRS } from '../commands/mrs.js';
+import { cmdRun } from '../commands/run.js';
+import { cmdDeploy } from '../commands/deploy.js';
 import { statusIcon, truncate, humanize, cleanTitle } from '../format.js';
 
 const html = htm.bind(React.createElement);
@@ -19,6 +22,7 @@ export function App({ ctx, opts }) {
   const runsRef = useRef(new Map()); // id → AgentRun, чтобы было кого прерывать
   const bufferRef = useRef([]);
   const quitArmedRef = useRef(false);
+  const pipeRef = useRef({ iid: null, pipelineId: null, busy: false });
 
   // Буфер + слив по таймеру: на каждую дельту агента перерисовывать бессмысленно.
   useEffect(() => {
@@ -34,10 +38,24 @@ export function App({ ctx, opts }) {
 
   useEffect(() => { load('mr'); load('runs'); }, []);
 
+  // Пока джоба крутится, панель обновляется сама: без этого статусы врут.
+  useEffect(() => {
+    const id = setInterval(() => { if (pipeRef.current.busy) refreshPipeline().catch(() => {}); }, 5000);
+    return () => clearInterval(id);
+  }, []);
+
   async function load(tab) {
     dispatch({ type: 'loading', tab });
     try {
-      if (tab === 'mr') dispatch({ type: 'items', tab, items: await ctx.g.listOpenMRs(ctx.repo) });
+      // Список MR приходит быстро, а треды и пайплайны — 20+ запросов. Поэтому в два захода:
+      // сперва показываем что есть, потом дополняем строки маркерами.
+      if (tab === 'mr') {
+        const mrs = await ctx.g.listOpenMRs(ctx.repo);
+        dispatch({ type: 'items', tab, items: mrs.map((mr) => ({ ...mr, comments: {}, pipeline: null })) });
+        cmdMRS(ctx.g, ctx.repo, { asObject: true })
+          .then((full) => dispatch({ type: 'items', tab, items: full.mrs }))
+          .catch(() => {}); // не дополнилось — список и так на экране
+      }
       if (tab === 'runs') dispatch({ type: 'items', tab, items: listRuns({ limit: 30 }) });
       if (tab === 'issues') {
         const { issues } = await ctx.jira().searchJql({ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC' });
@@ -46,6 +64,63 @@ export function App({ ctx, opts }) {
     } catch (err) {
       dispatch({ type: 'error', tab, message: err.message });
     }
+  }
+
+  // Пайплайн выбранного MR: показываем то же, что GitLab, и запускаем джобы отсюда.
+  async function openPipeline() {
+    const item = selected(state);
+    if (!item?.iid) return;
+    const id = item.pipeline_stale ? null : item.pipeline?.id;
+    const jobs = id ? orderJobs(await ctx.g.getJobs(ctx.repo, id)) : [];
+    pipeRef.current = { iid: item.iid, pipelineId: id, busy: false };
+    dispatch({
+      type: 'modalOpen',
+      kind: 'pipeline',
+      title: `!${item.iid} · пайплайн${id ? ` #${id}` : ''}`,
+      mr: item.iid,
+      items: jobs,
+      note: id ? '' : 'Пайплайна нет или он устарел — запуск джобы создаст новый.',
+    });
+    if (!id) dispatch({ type: 'modalItems', items: [{ id: 0, name: 'build_image', stage: 'build', status: 'нет пайплайна' }] });
+  }
+
+  // Запуск джобы из панели. deploy_dev* идёт цепочкой через deploy: сборка,
+  // ожидание её успеха и только потом сам деплой — как это делает GitLab по кнопке.
+  async function runJob() {
+    const { items, cursor, mr } = state.modal;
+    const job = items[cursor];
+    if (!job || pipeRef.current.busy) return;
+    pipeRef.current.busy = true;
+    dispatch({ type: 'modalItems', items, busy: true });
+    const tag = `!${mr} ${job.name}`;
+    const onTick = (line) => bufferRef.current.push(`${tag} ▸ ${line}`);
+    const chain = DEPLOY_JOB.test(job.name);
+    bufferRef.current.push(`${tag} ▸ ${chain ? 'сборка → ожидание → деплой' : 'запуск'}…`);
+    try {
+      if (chain) await cmdDeploy(ctx.g, ctx.repo, [String(mr), deploySlot(job.name)], { asObject: true, quiet: true, onTick, buildJob: ctx.cfg.buildJob || undefined });
+      else await cmdRun(ctx.g, ctx.repo, [job.name, String(mr)], { asObject: true, quiet: true, watch: true, onTick });
+      bufferRef.current.push(`${tag} ▸ ✅ готово`);
+    } catch (err) {
+      bufferRef.current.push(`${tag} ▸ ❌ ${err.message.split('\n')[0]}`);
+    } finally {
+      pipeRef.current.busy = false;
+      await refreshPipeline();
+      load('mr');
+    }
+  }
+
+  // Перечитать джобы панели: и по таймеру во время работы, и сразу после неё.
+  async function refreshPipeline() {
+    const { iid, pipelineId } = pipeRef.current;
+    if (!iid) return;
+    let id = pipelineId;
+    if (!id) {
+      const mr = await ctx.g.getMR(ctx.repo, iid);
+      id = mr?.head_pipeline?.id ?? null;
+      pipeRef.current.pipelineId = id;
+    }
+    if (!id) return;
+    dispatch({ type: 'modalItems', items: orderJobs(await ctx.g.getJobs(ctx.repo, id)), busy: pipeRef.current.busy, note: '' });
   }
 
   // Смена статуса задачи — единственная запись в Jira: сначала список переходов, потом выбор.
@@ -120,7 +195,8 @@ export function App({ ctx, opts }) {
     }
     if (intent.type === 'launch') return launch(intent.action);
     if (intent.type === 'transition') return void openTransitions();
-    if (intent.type === 'modalApply') return void applyTransition();
+    if (intent.type === 'pipeline') return void openPipeline().catch((err) => dispatch({ type: 'error', tab: 'mr', message: err.message }));
+    if (intent.type === 'modalApply') return void (state.modal.kind === 'pipeline' ? runJob() : applyTransition());
     if (intent.type === 'open') {
       const url = selected(state)?.web_url;
       if (url) execFile('open', [url], () => {});
@@ -141,9 +217,11 @@ export function App({ ctx, opts }) {
         <${Text} bold color="cyan">fs-harness · ${state.project || ctx.repo}<//>
         <${Text} dimColor>запусков: ${running.length}${running.length ? ' ' : ''}${running.length ? html`<${Spinner} type="dots" />` : ''} · $${totalCost(state).toFixed(2)}<//>
       <//>
-      <${Box}>
-        ${TABS.map((t, i) => html`<${Text} key=${t.key} color=${state.tab === t.key ? 'cyan' : undefined} inverse=${state.tab === t.key}> [${i + 1}] ${t.title} <//>`)}
-        <${Text} dimColor>  ${TABS.find((t) => t.key === state.tab).hint} · ? помощь<//>
+      <${Box} flexDirection="column">
+        <${Box} flexShrink=${0}>
+          ${TABS.map((t, i) => html`<${Text} key=${t.key} color=${state.tab === t.key ? 'cyan' : undefined} inverse=${state.tab === t.key}> [${i + 1}] ${t.title} <//>`)}
+        <//>
+        <${Text} dimColor wrap="truncate-end">${TABS.find((t) => t.key === state.tab).hint} · ? помощь<//>
       <//>
       ${state.help ? html`<${Help} />` : state.modal ? html`<${Modal} modal=${state.modal} />` : html`<${Body} state=${state} item=${item} width=${width} now=${now} />`}
       <${Log} lines=${state.log} />
@@ -157,17 +235,27 @@ const Help = () =>
     <${Text} bold>Клавиши<//>
     <${Text}>1/2/3, Tab — вкладки · ↑↓ или j/k — курсор · PgUp/PgDn — на 10<//>
     <${Text}>a — конфликт · t — треды · r — ревью (вкладка MR) · n — разбор задачи (вкладка Задачи)<//>
-    <${Text}>s — сменить статус задачи (вкладка Задачи, единственная запись в Jira)<//>
+    <${Text}>s — сменить статус задачи (вкладка Задачи) · p — пайплайн MR: все джобы и их запуск<//>
     <${Text}>x — прервать все запуски · R — перечитать список · o — открыть в браузере · q — выход<//>
     <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
   <//>`;
 
 const Modal = ({ modal }) =>
-  html`<${Box} flexDirection="column" height=${12} borderStyle="round" borderColor="cyan" paddingX=${1}>
-    <${Text} bold>${modal.title}<//>
-    ${modal.items.map((t, i) => html`<${Text} key=${t.id} inverse=${i === modal.cursor}>${t.name}${t.to !== t.name ? ` → ${t.to}` : ''}<//>`)}
-    <${Text} dimColor>Enter — перевести · Esc — отмена<//>
-  <//>`;
+  modal.kind === 'pipeline'
+    ? html`<${Box} flexDirection="column" height=${12} borderStyle="round" borderColor="cyan" paddingX=${1}>
+        <${Text} bold>${modal.title}${modal.busy ? ' · работает…' : ''}<//>
+        ${modal.note ? html`<${Text} dimColor>${modal.note}<//>` : null}
+        ${modal.items.slice(0, 8).map((j, i) => html`
+          <${Text} key=${j.id} inverse=${i === modal.cursor} wrap="truncate-end">${(j.stage ?? '—').padEnd(16)} ${j.name.padEnd(24)} ${statusIcon(j.status)} ${j.status}<//>
+        `)}
+        ${!modal.items.length ? html`<${Text} dimColor>джоб нет<//>` : null}
+        <${Text} dimColor>Enter — запустить (deploy_dev* сам собирает build_image и ждёт его) · Esc — закрыть<//>
+      <//>`
+    : html`<${Box} flexDirection="column" height=${12} borderStyle="round" borderColor="cyan" paddingX=${1}>
+        <${Text} bold>${modal.title}<//>
+        ${modal.items.map((t, i) => html`<${Text} key=${t.id} inverse=${i === modal.cursor}>${t.name}${t.to !== t.name ? ` → ${t.to}` : ''}<//>`)}
+        <${Text} dimColor>Enter — перевести · Esc — отмена<//>
+      <//>`;
 
 function Body({ state, item, width, now }) {
   const listWidth = Math.max(28, Math.floor(width * 0.42));
@@ -178,7 +266,8 @@ function Body({ state, item, width, now }) {
       <${Box} flexDirection="column" width=${listWidth} borderStyle="round" borderColor="gray">
         ${state.loading[state.tab] ? html`<${Text} dimColor>загружаю…<//>` : rows.slice(Math.max(0, cursor - 8), Math.max(0, cursor - 8) + 10).map((r, i, arr) => {
           const idx = Math.max(0, cursor - 8) + i;
-          return html`<${Text} key=${rowKey(r, idx)} inverse=${idx === cursor}>${truncate(rowLabel(state.tab, r), listWidth - 3)}<//>`;
+          // wrap обязателен: эмодзи шире символа, и без него строка переносится, а список уезжает.
+          return html`<${Text} key=${rowKey(r, idx)} inverse=${idx === cursor} wrap="truncate-end">${truncate(rowLabel(state.tab, r), listWidth - 3)}<//>`;
         })}
         ${!state.loading[state.tab] && !rows.length ? html`<${Text} dimColor>пусто<//>` : null}
       <//>
@@ -195,7 +284,11 @@ function Body({ state, item, width, now }) {
 const rowKey = (r, i) => String(r.iid ?? r.key ?? r.id ?? i);
 
 function rowLabel(tab, r) {
-  if (tab === 'mr') return `!${r.iid} ${cleanTitle(r)} ${r.has_conflicts ? '⚠' : ''}`;
+  // Конфликт и незакрытые треды видно в самой строке: за ними чаще всего и приходят.
+  if (tab === 'mr') {
+    const marks = [r.has_conflicts ? '⚠' : '', r.comments?.open ? `💬${r.comments.open}` : '', statusIcon(r.pipeline?.status)].filter(Boolean).join(' ');
+    return `!${r.iid} ${marks} ${cleanTitle(r)}`;
+  }
   if (tab === 'issues') return `${r.key} ${r.fields?.summary ?? ''}`;
   return `${r.id} ${r.decision ?? r.state}`;
 }
@@ -205,7 +298,8 @@ function Details({ tab, item }) {
     return html`<${Box} flexDirection="column">
       <${Text} bold>!${item.iid} ${cleanTitle(item)}<//>
       <${Text} dimColor>${item.source_branch} → ${item.target_branch}<//>
-      <${Text}>пайплайн ${statusIcon(item.pipeline?.status)} · конфликт ${item.has_conflicts ? '⚠' : '✅ нет'} · обновлён ${humanize(item.updated_at)}<//>
+      <${Text}>пайплайн ${statusIcon(item.pipeline?.status)} ${item.pipeline?.status ?? 'нет'}${item.pipeline_stale ? ' (устарел)' : ''} · конфликт ${item.has_conflicts ? '⚠ есть' : '✅ нет'} · треды ${item.comments?.open ? `⚠ открыто ${item.comments.open}` : '✅ все закрыты'}<//>
+      <${Text} dimColor>обновлён ${humanize(item.updated_at)} · p — пайплайн и запуск джоб<//>
       <${Text} dimColor>${item.web_url}<//>
     <//>`;
   }
@@ -216,6 +310,7 @@ function Details({ tab, item }) {
     <//>`;
   }
   return html`<${Box} flexDirection="column">
+    <${Text} dimColor>Прошлый запуск действия (conflict, threads, review, analyze): что решил судья и почём.<//>
     <${Text} bold>${item.id}<//>
     <${Text} dimColor>${item.action} ${item.mr ? `!${item.mr}` : item.issue ?? ''} · ${item.state}${item.decision ? ` · ${item.decision}` : ''}${item.cost ? ` · $${item.cost.toFixed(2)}` : ''}<//>
     <${Text} dimColor>${item.dir}<//>

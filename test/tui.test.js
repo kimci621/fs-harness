@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -98,4 +98,33 @@ test('переходы задачи: s только на вкладке зада
   const moved = reduce(reduce(modal, { type: 'modalMove', by: 1 }), { type: 'modalMove', by: 1 });
   assert.equal(moved.modal.cursor, 1); // дальше списка курсор не уезжает
   assert.equal(reduce(moved, { type: 'modalClose' }).modal, null);
+});
+
+test('пайплайн: порядок стадий, слот деплоя, клавиша p только на вкладке MR', () => {
+  const jobs = [
+    { id: 22, stage: 'deploy_dev', name: 'deploy_dev2' },
+    { id: 11, stage: 'build', name: 'build_image' },
+    { id: 21, stage: 'deploy_dev', name: 'deploy_dev' },
+    { id: 12, stage: 'build', name: 'lint' },
+  ];
+  assert.deepEqual(orderJobs(jobs).map((j) => j.name), ['build_image', 'lint', 'deploy_dev', 'deploy_dev2']);
+  assert.deepEqual(orderJobs([]), []);
+
+  assert.equal(deploySlot('deploy_dev'), '');
+  assert.equal(deploySlot('deploy_dev3'), '3');
+  assert.equal(deploySlot('build_image'), '');
+  assert.equal(DEPLOY_JOB.test('deploy_dev10'), true);
+  assert.equal(DEPLOY_JOB.test('deploy_prod'), false);
+
+  const s = withItems();
+  assert.deepEqual(keyIntent('p', {}, s), { type: 'pipeline' });
+  assert.equal(keyIntent('p', {}, reduce(s, { type: 'tab', tab: 'issues' })), null);
+
+  // Панель джоб обновляется на месте: курсор остаётся там, где стоял.
+  const open = reduce(s, { type: 'modalOpen', kind: 'pipeline', title: 'п', mr: 1, items: jobs });
+  const moved = reduce(open, { type: 'modalMove', by: 2 });
+  const fresh = reduce(moved, { type: 'modalItems', items: jobs.slice(0, 3), busy: true });
+  assert.equal(fresh.modal.cursor, 2);
+  assert.equal(fresh.modal.busy, true);
+  assert.equal(fresh.modal.kind, 'pipeline');
 });
