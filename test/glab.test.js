@@ -63,12 +63,23 @@ test('api: input прокидывается в run — тело запроса �
   assert.equal(calls[0].opts.input, '{"body":"многострочный\nmarkdown"}');
 });
 
-test('defaultRun: input доезжает до stdin процесса', () => {
-  assert.equal(defaultRun('cat', [], { input: 'первая\nвторая\n' }), 'первая\nвторая\n');
+test('defaultRun: input доезжает до stdin процесса', async () => {
+  assert.equal(await defaultRun('cat', [], { input: 'первая\nвторая\n' }), 'первая\nвторая\n');
 });
 
-test('defaultRun: без input stdin закрыт и процесс не виснет', () => {
-  assert.equal(defaultRun('cat', []), '');
+test('defaultRun: без input stdin закрыт и процесс не виснет', async () => {
+  assert.equal(await defaultRun('cat', []), '');
+});
+
+// Запуск асинхронный: пока glab работает, event loop свободен — иначе TUI стоит колом.
+test('defaultRun: не держит event loop и отдаёт stderr в ошибке', async () => {
+  let tickedWhileRunning = false;
+  const timer = setTimeout(() => { tickedWhileRunning = true; }, 20);
+  await defaultRun('sh', ['-c', 'sleep 0.2']);
+  clearTimeout(timer);
+  assert.equal(tickedWhileRunning, true);
+
+  await assert.rejects(() => defaultRun('sh', ['-c', 'echo беда >&2; exit 3']), (e) => /беда/.test(e.stderr));
 });
 
 test('api: input добавляет --input - в аргументы glab', async () => {

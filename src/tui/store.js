@@ -86,6 +86,7 @@ export const initialState = (project = '') => ({
   filters: {},
   details: {}, // ключ задачи → {issue, comments}: подробности догружаются по выбору
   error: null,
+  busy: [], // {label, at} по каждому идущему запросу: пока список не пуст, в шапке спиннер
   runs: {}, // id → {id, action, target, phase, done, ok, cost, decision, error}
   log: [],
   help: false,
@@ -130,6 +131,12 @@ export function reduce(state, ev) {
         loading: { ...state.loading, [ev.tab]: false },
         cursor: { ...state.cursor, [ev.tab]: clamp(state.cursor[ev.tab] ?? 0, ev.items.length) },
       };
+    case 'busy': {
+      // Массив, а не флаг: параллельных запросов бывает несколько, и каждый снимает только себя.
+      if (ev.on) return { ...state, busy: [...state.busy, { label: ev.label, at: ev.at }] };
+      const i = state.busy.findIndex((b) => b.label === ev.label);
+      return i === -1 ? state : { ...state, busy: [...state.busy.slice(0, i), ...state.busy.slice(i + 1)] };
+    }
     case 'issueDetails':
       return { ...state, details: { ...state.details, [ev.key]: { issue: ev.issue, comments: ev.comments ?? [] } } };
     case 'filters':
@@ -141,9 +148,9 @@ export function reduce(state, ev) {
     case 'help':
       return { ...state, help: !state.help };
     case 'modalOpen':
-      return { ...state, modal: { kind: ev.kind ?? 'transition', title: ev.title, issue: ev.issue, mr: ev.mr, items: ev.items, cursor: 0, note: ev.note ?? '', busy: false, editing: ev.editing ?? null, value: ev.value ?? '' } };
+      return { ...state, modal: { kind: ev.kind ?? 'transition', title: ev.title, issue: ev.issue, mr: ev.mr, items: ev.items, cursor: 0, note: ev.note ?? '', busy: Boolean(ev.busy), editing: ev.editing ?? null, value: ev.value ?? '' } };
     case 'modalItems': // обновление списка на месте: курсор и признак работы не трогаем
-      return state.modal ? { ...state, modal: { ...state.modal, items: ev.items, cursor: clamp(state.modal.cursor, ev.items.length), busy: ev.busy ?? state.modal.busy, note: ev.note ?? state.modal.note } } : state;
+      return state.modal ? { ...state, modal: { ...state.modal, items: ev.items ?? state.modal.items, cursor: clamp(state.modal.cursor, (ev.items ?? state.modal.items).length), busy: ev.busy ?? state.modal.busy, note: ev.note ?? state.modal.note } } : state;
     case 'modalMove':
       return state.modal ? { ...state, modal: { ...state.modal, cursor: clamp(state.modal.cursor + ev.by, state.modal.items.length) } } : state;
     case 'modalEdit':
@@ -184,6 +191,19 @@ export function logLine(runId, e) {
   if (e.t === 'error') return `${tag} ▸ ❌ ${e.message}`;
   if (e.t === 'phase' && e.status === 'start') return `${tag} ▸ ${e.phase}…`;
   return null;
+}
+
+// Что сейчас грузится — в шапку. После трёх секунд дописываем счётчик: без него
+// долгий запрос неотличим от зависшего экрана.
+export function busyText(busy = [], now = Date.now()) {
+  const started = new Map();
+  for (const b of busy) if (!started.has(b.label) || b.at < started.get(b.label)) started.set(b.label, b.at);
+  return [...started]
+    .map(([label, at]) => {
+      const sec = Math.round((now - at) / 1000);
+      return sec >= 3 ? `${label} ${sec}с` : label;
+    })
+    .join(' · ');
 }
 
 export const activeRuns = (state) => Object.values(state.runs).filter((r) => !r.done);

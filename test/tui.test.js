@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, busyText } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -247,4 +247,28 @@ test('задача: S — спринт, c — комментарий, тольк
   assert.deepEqual(keyIntent('c', {}, onIssues), { type: 'comment' });
   assert.deepEqual(keyIntent('e', {}, onIssues), { type: 'expand' });
   assert.equal(reduce(onIssues, { type: 'expand' }).expand, true);
+});
+
+test('занятость: каждый запрос снимает только себя, после трёх секунд видно сколько идёт', () => {
+  const t0 = 1_000_000;
+  let s = initialState('app');
+  assert.equal(busyText(s.busy, t0), '');
+
+  s = reduce(s, { type: 'busy', label: 'список MR', on: true, at: t0 });
+  s = reduce(s, { type: 'busy', label: 'задачи Jira', on: true, at: t0 + 1000 });
+  assert.equal(busyText(s.busy, t0 + 1500), 'список MR · задачи Jira'); // меньше трёх секунд — без счётчика
+  assert.equal(busyText(s.busy, t0 + 5000), 'список MR 5с · задачи Jira 4с');
+
+  s = reduce(s, { type: 'busy', label: 'задачи Jira', on: false });
+  assert.equal(busyText(s.busy, t0 + 5000), 'список MR 5с');
+
+  // Снятие того, чего нет, ничего не ломает и не плодит состояний.
+  assert.equal(reduce(s, { type: 'busy', label: 'нет такого', on: false }), s);
+  assert.equal(reduce(s, { type: 'busy', label: 'список MR', on: false }).busy.length, 0);
+
+  // Два одинаковых запроса разом: в шапке одна подпись, снимаются по одному.
+  let d = reduce(reduce(initialState('app'), { type: 'busy', label: 'карточка FD-1', on: true, at: t0 }), { type: 'busy', label: 'карточка FD-1', on: true, at: t0 + 200 });
+  assert.equal(busyText(d.busy, t0 + 4000), 'карточка FD-1 4с');
+  d = reduce(d, { type: 'busy', label: 'карточка FD-1', on: false });
+  assert.equal(d.busy.length, 1);
 });
