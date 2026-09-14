@@ -3,20 +3,18 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { CliError } from '../errors.js';
 import { expandHome } from '../config.js';
+import { resolveAgent } from '../agents.js';
 import { commitPrompt } from '../prompts.js';
 import { confirm } from '../ui.js';
 import { makeLogger, finish } from '../output.js';
 import { makeGit } from '../workspace.js';
 
-// fsh commit [--agent claude|pi] [--project-dir <dir>] [-y] [--dry-run]
+// fsh commit [--agent <профиль>] [--project-dir <dir>] [-y] [--dry-run]
 // Агент формирует сообщение коммита по паттерну (.llm-commit-pattern или встроенный)
 // и коммитит все изменения. Push НЕ делает.
 export async function cmdCommit(args, opts = {}) {
   const log = opts.asObject ? () => {} : makeLogger(opts.json);
-  const agent = opts.agent;
-  if (!['claude', 'pi'].includes(agent)) {
-    throw new CliError(`Неизвестный агент "${agent}". Допустимо: claude, pi.`, 1, 'usage');
-  }
+  const agent = resolveAgent(opts.cfg, opts.agent);
 
   const dir = expandHome(opts.projectDir || process.cwd());
   if (!existsSync(path.join(dir, '.git'))) {
@@ -34,7 +32,7 @@ export async function cmdCommit(args, opts = {}) {
       dry_run: true,
       dir,
       branch,
-      agent,
+      agent: agent.name,
       prompt_source: source,
       action: 'агент изучит изменения и выполнит: git add <явные пути> && git commit -m "<сообщение по паттерну>" (без push)',
     };
@@ -45,7 +43,7 @@ export async function cmdCommit(args, opts = {}) {
       log(`🔍 План коммита (dry-run)`);
       log(`   директория: ${dir}`);
       log(`   ветка: ${branch}`);
-      log(`   агент: ${agent}`);
+      log(`   агент: ${agent.name}`);
       log(`   промпт: ${source}`);
       log(`   действие: ${plan.action}`);
     }
@@ -53,21 +51,23 @@ export async function cmdCommit(args, opts = {}) {
   }
 
   log(`📝 Коммит: ${dir}`);
-  log(`   Ветка: ${branch} · агент: ${agent} · промпт: ${source}`);
+  log(`   Ветка: ${branch} · агент: ${agent.name} · промпт: ${source}`);
 
-  if (!opts.yes && !opts.asObject && !confirm(`Запускаю агента ${agent}. Продолжить? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Запускаю агента ${agent.name}. Продолжить? [y/N] `)) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
 
   const before = git(['rev-parse', 'HEAD']);
-  log(`🤖 Запускаю ${agent}…`);
-  const res = spawnSync(agent, [...(opts.agentArgs ?? []), '-p', prompt], {
+  log(`🤖 Запускаю ${agent.name}…`);
+  // Промпт в stdin, вывод агента остаётся на терминале.
+  const res = spawnSync(agent.bin, [...agent.args, '-p'], {
     cwd: dir,
-    stdio: 'inherit',
-    env: { ...process.env, GL_HELPER_COMMIT: '1' },
+    input: prompt,
+    stdio: ['pipe', 'inherit', 'inherit'],
+    env: { ...process.env, ...agent.env, GL_HELPER_COMMIT: '1' },
   });
-  if (res.error) throw new CliError(`Не удалось запустить ${agent}: ${res.error.message}`, 1, 'agent_failed');
-  if (res.status !== 0) throw new CliError(`Агент ${agent} завершился с кодом ${res.status}.`, 1, 'agent_failed');
+  if (res.error) throw new CliError(`Не удалось запустить ${agent.name}: ${res.error.message}`, 1, 'agent_failed');
+  if (res.status !== 0) throw new CliError(`Агент ${agent.name} завершился с кодом ${res.status}.`, 1, 'agent_failed');
 
   const after = git(['rev-parse', 'HEAD']);
   if (after === before) {

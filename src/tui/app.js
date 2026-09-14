@@ -651,7 +651,6 @@ export function App({ ctx, opts }) {
     const run = runAction(spec, ctx, { query }, {
       ...opts,
       agent: opts.agent || ctx.cfg.agent || spec.action.agent.default,
-      agentArgs: ctx.agentArgs(opts.agent || ctx.cfg.agent || spec.action.agent.default),
       projectDir: ctx.cfg.projectDir,
       cfg: ctx.cfg,
       yes: true, // подтверждение здесь — сама клавиша

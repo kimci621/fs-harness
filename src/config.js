@@ -13,7 +13,7 @@ export const CONFIG_PATH = CONFIG_PATHS[1];
 
 export const configPath = () => CONFIG_PATHS.find(existsSync) ?? CONFIG_PATH;
 
-const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'claude', buildJob: '', targetBranch: '', branchPattern: 'feature/{key}', jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' }, growthbook: { baseUrl: '', project: '', env: 'production' } };
+const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'cc', buildJob: '', targetBranch: '', branchPattern: 'feature/{key}', jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' }, growthbook: { baseUrl: '', project: '', env: 'production' } };
 
 export const DEFAULTS = {
   version: 2,
@@ -24,6 +24,53 @@ export const DEFAULTS = {
   agentArgs: {
     claude: ['--dangerously-skip-permissions'],
     pi: [],
+  },
+  // Агент — это программа плюс провайдер в env. Claude Code один и тот же, меняются
+  // baseUrl, модели и ключ; keyFile читается в момент запуска, в конфиге ключей нет.
+  agents: {
+    cc: { bin: 'claude', args: ['--dangerously-skip-permissions'] },
+    claude: { bin: 'claude', args: ['--dangerously-skip-permissions'] }, // прежнее имя cc
+    ccq: {
+      bin: 'claude',
+      args: ['--dangerously-skip-permissions'],
+      keyFile: '~/.alibaba_key',
+      env: {
+        ANTHROPIC_BASE_URL: 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic',
+        ANTHROPIC_MODEL: 'qwen3.8-max',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'qwen3.6-flash',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'qwen3.8-max',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'qwen3.8-max',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'qwen3.7-max',
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS: '983616',
+      },
+    },
+    cco: {
+      bin: 'claude',
+      args: ['--dangerously-skip-permissions'],
+      keyFile: '~/.openrouter_key',
+      env: {
+        ANTHROPIC_BASE_URL: 'https://openrouter.ai/api/v1',
+        ANTHROPIC_MODEL: 'z-ai/glm-5.3-flash',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'z-ai/glm-5.3-flash',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'z-ai/glm-5.3-flash',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'z-ai/glm-5.3-flash',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'z-ai/glm-5.3-flash',
+      },
+    },
+    ccd: {
+      bin: 'claude',
+      args: ['--dangerously-skip-permissions'],
+      keyFile: '~/.deepseek_key',
+      env: {
+        ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
+        ANTHROPIC_MODEL: 'deepseek-v4-pro',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-flash',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek-v4-pro',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'deepseek-v4-pro',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-flash',
+      },
+    },
+    pi: { bin: 'pi', family: 'pi', args: [] },
   },
   workspace: {
     root: '~/.local/state/fs-harness/worktrees',
@@ -126,6 +173,7 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
     jira: p.jira,
     growthbook: { ...PROJECT_DEFAULT.growthbook, ...(p.growthbook || {}) },
     agentArgs: { ...DEFAULTS.agentArgs, ...(v2.agentArgs || {}) },
+    agents: { ...DEFAULTS.agents, ...(v2.agents || {}) },
     workspace: {
       ...DEFAULTS.workspace,
       ...(v2.workspace || {}),

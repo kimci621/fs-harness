@@ -38,7 +38,7 @@ export async function judge({ role, payload, cfg, signal, onDelta, profile: over
       throw new CliError(`Профиль судьи "${name}" не описан в judge.profiles.`, 1, 'config_invalid');
     }
     try {
-      return await askOnce({ role, name, profile, rubric, payload, signal, onDelta, makeProvider });
+      return await askOnce({ role, name, profile, rubric, payload, signal, onDelta, makeProvider, cfg });
     } catch (err) {
       lastErr = err;
       // Невалидная схема — беда модели, а не бэкенда: другой профиль тут ни при чём.
@@ -48,8 +48,8 @@ export async function judge({ role, payload, cfg, signal, onDelta, profile: over
   throw lastErr;
 }
 
-async function askOnce({ role, name, profile, rubric, payload, signal, onDelta, makeProvider }) {
-  const provider = await makeProvider(profile);
+async function askOnce({ role, name, profile, rubric, payload, signal, onDelta, makeProvider, cfg }) {
+  const provider = await makeProvider(profile, cfg);
   const system = `${rubric}\n\n## Схема ответа\n\n${VERDICT_SHAPE}`;
   const started = Date.now();
 

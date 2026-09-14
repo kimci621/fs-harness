@@ -1,4 +1,5 @@
 import { loadConfig, configInit, configPath, expandHome, migrateConfig, readRawConfig, writeMigrated } from './config.js';
+import { agentNames } from './agents.js';
 import { confirm } from './ui.js';
 import { CliError } from './errors.js';
 
@@ -28,7 +29,7 @@ function show({ project }) {
     `  repo:       ${cfg.repo}`,
     `  host:       ${cfg.host}`,
     `  dir:        ${cfg.projectDir}${cfg.projectDir ? ` (${expandHome(cfg.projectDir)})` : ''}`,
-    `  agent:      ${cfg.agent}`,
+    `  agent:      ${cfg.agent} (профили: ${agentNames(cfg).join(', ')})`,
     `  jira:       ${cfg.jira.baseUrl || '—'}`,
     `  agentArgs:  ${JSON.stringify(cfg.agentArgs)}`,
   ].join('\n');

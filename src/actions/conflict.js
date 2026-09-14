@@ -48,14 +48,14 @@ export const conflictAction = {
     writes: true,
     isolation: 'ephemeral-worktree',
     prompt: 'actions/conflict',
-    agent: { default: 'claude', allow: ['claude', 'pi'], pickByJudge: false },
+    agent: { default: 'cc', pickByJudge: false },
     judge: { gate: 'pre-push', role: 'acceptance' },
-    mcpDescription: 'Решить конфликт MR силами AI-агента (claude или pi, headless) во временном git worktree проекта, отдать результат судье и при approve запушить в ветку MR и запустить build. Ждёт завершения. Меняет код и GitLab; ветка target не трогается, force-push запрещён.',
+    mcpDescription: 'Решить конфликт MR силами AI-агента (headless) во временном git worktree проекта, отдать результат судье и при approve запушить в ветку MR и запустить build. Ждёт завершения. Меняет код и GitLab; ветка target не трогается, force-push запрещён.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'номер MR или часть имени ветки' },
-        agent: { type: 'string', enum: ['claude', 'pi'], description: 'какой агент решает конфликт' },
+        agent: { type: 'string', description: 'какой агент решает конфликт (имя профиля из конфига: cc, ccq, cco, ccd, pi)' },
       },
       required: ['query'],
     },

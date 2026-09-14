@@ -11,6 +11,7 @@ import { resolveMR } from './resolve.js';
 import { ISSUE_KEY } from './jira.js';
 import { expandHome } from './config.js';
 import { acquireWorkspace, MODES as ISOLATION_MODES } from './workspace.js';
+import { resolveAgent } from './agents.js';
 import { confirm } from './ui.js';
 import { makeLogger, finish } from './output.js';
 import { postMattermost, runMessage } from './notify.js';
@@ -21,6 +22,8 @@ export const JUDGE_GATES = ['pre-push', 'advisory', 'none'];
 
 // Как агент продолжает свою же сессию: claude резюмит по --resume, pi — тем же --session-id.
 // Агента вне списка на доделку не зовём: без сессии он начал бы с нуля и затёр бы сделанное.
+// Сессия нужна, чтобы доделка после revise шла в тот же диалог, а не с чистого листа.
+// Ключ — семейство агента: cc, ccq, cco, ccd это один и тот же Claude Code.
 export const SESSION_ARGS = {
   claude: { start: (id) => ['--session-id', id], resume: (id) => ['--resume', id] },
   pi: { start: (id) => ['--session-id', id], resume: (id) => ['--session-id', id] },
@@ -199,7 +202,7 @@ export function runAction(spec, ctx, input, opts = {}) {
   // Приёмка: вердикт revise возвращает работу агенту в ту же сессию, не дальше maxRevise раз.
   // Любой другой исход кроме approve на гейте pre-push закрывает push.
   async function accept(x) {
-    const limit = SESSION_ARGS[opts.agent] ? (opts.cfg?.judge?.maxRevise ?? 1) : 0;
+    const limit = SESSION_ARGS[resolveAgent(opts.cfg, opts.agent).family] ? (opts.cfg?.judge?.maxRevise ?? 1) : 0;
     let verdict = await gate(x);
     for (let round = 1; verdict?.decision === 'revise' && round <= limit; round++) {
       x.say(`↻ Судья просит доделать (${round}/${limit}) — возвращаю задачу агенту.`);
@@ -252,17 +255,18 @@ export function runAction(spec, ctx, input, opts = {}) {
 
   // resume — текст доделки: тот же агент продолжает свою сессию, а не начинает заново.
   async function runAgent(x, resume = null) {
-    const agent = opts.agent;
-    const session = SESSION_ARGS[agent];
+    const agent = resolveAgent(opts.cfg, opts.agent);
+    const session = SESSION_ARGS[agent.family];
     if (session && !x.sessionId) x.sessionId = randomUUID();
     const sessionArgs = session ? (resume ? session.resume(x.sessionId) : session.start(x.sessionId)) : [];
-    x.phase('agent', 'start', agent);
-    x.say(`🤖 ${resume ? 'Возвращаю задачу' : 'Запускаю'} ${agent}…`);
+    x.phase('agent', 'start', agent.name);
+    x.say(`🤖 ${resume ? 'Возвращаю задачу' : 'Запускаю'} ${agent.name}…`);
     const proc = spawnAgent({
-      bin: agent,
-      args: [...(opts.agentArgs ?? []), ...sessionArgs, '-p', resume ?? x.prompt],
+      bin: agent.bin,
+      args: [...agent.args, ...sessionArgs, '-p'],
+      input: resume ?? x.prompt, // промпт в stdin: в argv он упирается в ARG_MAX
       cwd: ws.dir,
-      env: { ...process.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo },
+      env: { ...process.env, ...agent.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo },
       signal: ac.signal,
     });
     const out = [];
@@ -315,9 +319,7 @@ export async function runActionCLI(spec, ctx, args, opts = {}) {
   if (a.target !== 'none' && !query) {
     throw new CliError(`Использование: fsh ${spec.usage}`, 1, 'usage');
   }
-  if (!a.agent.allow.includes(opts.agent)) {
-    throw new CliError(`Неизвестный агент "${opts.agent}". Допустимо: ${a.agent.allow.join(', ')}.`, 1, 'usage');
-  }
+  resolveAgent(opts.cfg, opts.agent); // список агентов открытый: проверка — есть ли профиль в конфиге
 
   const log = opts.asObject ? () => {} : makeLogger(opts.json);
   const run = runAction(spec, ctx, { query }, opts);

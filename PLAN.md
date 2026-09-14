@@ -280,7 +280,7 @@ export const conflictAction = {
     writes: true,
     isolation: 'ephemeral-worktree',     // 'checkout' | 'ephemeral-worktree' | 'task-worktree'
     prompt: 'actions/conflict',
-    agent: { default: 'claude', allow: ['claude', 'pi'], pickByJudge: false },
+    agent: { default: 'cc', pickByJudge: false },   // имя профиля из agents в конфиге
     judge: { gate: 'pre-push', role: 'acceptance' },  // 'pre-push' | 'advisory' | 'none'
     inputSchema: { /* JSON Schema, одна на CLI, MCP, TUI-форму и HTTP-валидацию */ },
     async precheck(x) {},   // до изоляции → {skip, reason, result, facts, workspace, meta}
@@ -346,6 +346,10 @@ resolve target → precheck → (skip?) → context → render prompt → acquir
 --include-partial-messages --verbose`; адаптер pi - `--mode json`; не-JSON строка уходит как `log`.
 `AbortSignal` → SIGTERM, через 5 секунд SIGKILL: это `x` в TUI и таймаут в MCP. `stdio:'inherit'`
 больше нигде.
+
+**Промпт уходит агенту в stdin, а не аргументом** (*добавлено 2026-09-14*). `claude -p` без текста
+читает задание со входа. Аргументом нельзя: `ARG_MAX` на macOS - мегабайт на весь вызов, а дифф в
+задании судьи бывает в сотни килобайт. То же в `commit` (`spawnSync` с `input`) и в судье `cli`.
 
 **`waitJob` не трогаем.** `publish` зовёт его как сегодня с `quiet: true, onTick: text =>
 emit({t:'tick'})` - этот шов уже есть в `ui.js:105`. CLI-рендерер воспроизводит нынешний вывод, так
@@ -832,6 +836,29 @@ buffer (2000 строк на ран), и **в стейт ink он сливает
 косметики значит ломать рабочий судейский слой. `judge.enabled` и `maxRevise` введены в фазе 6 вместе с retry на
 `revise` (доделка в той же сессии агента, дефолт 1 повтор). Ленивый кэш `g` на проект отложен до TUI - сейчас
 его некому звать.
+
+**Профили агента** (*добавлено 2026-09-14*). `agent` в проекте - не имя программы, а имя профиля из
+`agents` в конфиге. Профиль - это программа плюс провайдер в env:
+
+```json
+"agents": {
+  "cc":  {"bin": "claude", "args": ["--dangerously-skip-permissions"]},
+  "ccq": {"bin": "claude", "args": ["--dangerously-skip-permissions"], "keyFile": "~/.alibaba_key",
+          "env": {"ANTHROPIC_BASE_URL": "…/apps/anthropic", "ANTHROPIC_MODEL": "qwen3.8-max"}},
+  "pi":  {"bin": "pi", "family": "pi"}
+}
+```
+
+Зачем: у владельца те же провайдеры живут в `~/.zshrc` алиасом `cc` и функциями `ccq`/`cco`/`ccd`,
+а `spawn` шелл не поднимает и их не видит. Дублировать их в конфиге - единственный способ, не трогая
+глобальные настройки (ограничение «глобальные конфиги не трогаем»). Ключ читается из `keyFile` в
+момент запуска и кладётся в `ANTHROPIC_AUTH_TOKEN`; в конфиге и в репозитории ключей нет.
+
+Дефолты `cc`, `ccq`, `cco`, `ccd`, `pi` живут в `DEFAULTS.agents` и подмешиваются к пользовательским.
+Имя `claude` оставлено алиасом `cc` - старые конфиги не переписываются. Выбор: `agents` в конфиге >
+`projects.<имя>.agent` > `--agent <имя>` (и `--agent=<имя>`) > `action.agent.default`. Список
+открытый: незнакомое имя даёт ошибку с перечислением того, что есть. Профиль судьи тоже умеет
+`"agent": "ccd"` - судить можно другим провайдером, чем работать.
 
 **Миграция в памяти, а не на диске.** `loadConfig()` видит отсутствие `version` и верхнеуровневый
 `repo` → мигрирует в памяти, имя проекта = `basename(dir)` либо второй сегмент `repo`. На диск

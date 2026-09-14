@@ -59,6 +59,13 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
   const dir = expandHome(projectDir || cfg?.projectDir || '~');
   add('projectDir', existsSync(path.join(dir, '.git')), `${dir}${existsSync(path.join(dir, '.git')) ? '' : ' — нет .git (conflict не заработает)'}`);
 
+  // Профили агентов: смотрим только те, которым нужен ключ на диске — остальные идут по подписке.
+  for (const [name, a] of Object.entries(cfg?.agents ?? {})) {
+    if (!a?.keyFile) continue;
+    const file = expandHome(a.keyFile);
+    add(`агент ${name}`, existsSync(file), existsSync(file) ? file : `нет ключа в ${file} — профиль недоступен`);
+  }
+
   // Скилл в проекте проверяем, только если он уже поставлен: молчаливое требование
   // ставить его в каждый проект — не наше дело.
   if (commands && existsSync(path.join(dir, '.claude', 'skills', 'fsh', 'SKILL.md'))) {

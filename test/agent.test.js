@@ -93,3 +93,12 @@ test('spawnAgent: abort через AbortSignal валит процесс', async
   assert.equal(done.ok, false);
   assert.equal(done.signal, 'SIGTERM');
 });
+
+test('spawnAgent: input уезжает агенту в stdin, а не в argv', async () => {
+  const script = 'let s=""; process.stdin.on("data",(c)=>s+=c).on("end",()=>process.stdout.write("прочитал "+s.length));';
+  const big = 'я'.repeat(300000); // больше ARG_MAX, аргументом такое не передать
+  const run = spawnAgent({ bin: process.execPath, args: ['-e', script], input: big });
+  const events = await drain(run.events);
+  assert.equal((await run.result).ok, true);
+  assert.equal(events.find((e) => e.t === 'log')?.text, `прочитал ${big.length}`);
+});

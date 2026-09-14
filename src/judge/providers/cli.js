@@ -1,10 +1,13 @@
 import { spawnAgent } from '../../agent/spawn.js';
+import { resolveAgent } from '../../agents.js';
 import { CliError } from '../../errors.js';
 
-// Судья через claude CLI: процесс, а не HTTP. Ключ не нужен — идёт по подписке.
+// Судья через claude CLI: процесс, а не HTTP. По подписке ключ не нужен, но profile.agent
+// уводит судью на другой профиль провайдера (cc, ccq, cco, ccd) вместе с его env и ключом.
 // Схему гарантировать не может, поэтому выпрашивает её текстом; проверяет всё равно judge().
-export function createCliProvider(profile) {
-  const bin = profile.bin ?? 'claude';
+export function createCliProvider(profile, cfg) {
+  const agent = profile.agent ? resolveAgent(cfg, profile.agent) : null;
+  const bin = agent?.bin ?? profile.bin ?? 'claude';
 
   return {
     name: 'cli',
@@ -16,9 +19,11 @@ export function createCliProvider(profile) {
       if (profile.model) args.push('--model', profile.model);
       if (effort) args.push('--effort', effort);
       if (system) args.push('--append-system-prompt', system);
-      args.push('-p', user);
+      args.push('-p');
 
-      const run = spawnAgent({ bin, args, cwd: profile.cwd, signal });
+      // Задание уходит в stdin: дифф в приёмке бывает в сотни килобайт, argv столько не держит.
+      // Флаги профиля агента не берём: у судьи свой набор, и --restricted с ними конфликтует.
+      const run = spawnAgent({ bin, args, input: user, cwd: profile.cwd, env: agent ? { ...process.env, ...agent.env } : undefined, signal });
       const chunks = [];
       run.events.on((ev) => {
         if (ev.t !== 'log') return;

@@ -61,7 +61,7 @@ function spec(published) {
 const opts = (over) => ({
   agent: 'echo', yes: true, asObject: true, projectDir: project,
   runsDir: path.join(root, 'runs'),
-  cfg: { workspace: { root: path.join(root, 'worktrees') }, judge: { profiles: { fake: { provider: 'fake' } }, roles: { acceptance: ['fake'] } } },
+  cfg: { agents: { echo: { bin: 'echo' }, claude: { bin: 'claude' } }, workspace: { root: path.join(root, 'worktrees') }, judge: { profiles: { fake: { provider: 'fake' } }, roles: { acceptance: ['fake'] } } },
   ...over,
 });
 
@@ -118,10 +118,15 @@ const judgeQueue = (decisions) => {
 function fakeClaude(dir) {
   const bin = path.join(dir, 'bin');
   const calls = path.join(dir, 'calls.txt');
+  const inputs = path.join(dir, 'stdin.txt');
   mkdirSync(bin, { recursive: true });
-  writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${calls}\necho готово\n`, { mode: 0o755 });
+  // Промпт теперь приходит в stdin, поэтому фейк пишет и аргументы, и вход.
+  writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${calls}\n{ cat; printf '\\n%s\\n' '<<КОНЕЦ>>'; } >> ${inputs}\necho готово\n`, { mode: 0o755 });
   process.env.PATH = `${bin}:${process.env.PATH}`;
-  return () => readFileSync(calls, 'utf8').trim().split('\n');
+  return {
+    args: () => readFileSync(calls, 'utf8').trim().split('\n'),
+    inputs: () => readFileSync(inputs, 'utf8').split('<<КОНЕЦ>>\n').slice(0, -1),
+  };
 }
 
 test('revise: агент доделывает в той же сессии, второй вердикт пускает push', async () => {
@@ -133,11 +138,11 @@ test('revise: агент доделывает в той же сессии, вт�
     makeProvider: judgeQueue(['revise', 'approve']),
   })).result;
 
-  const [first, second] = calls();
+  const [first, second] = calls.args();
   const id = first.match(/--session-id (\S+)/)?.[1];
   assert.ok(id, `сессия не задана: ${first}`);
   assert.match(second, new RegExp(`--resume ${id}`));
-  assert.match(second, /вернула работу на доделку/);
+  assert.match(calls.inputs()[1], /вернула работу на доделку/);
   assert.deepEqual(published, ['push']);
   assert.equal(res.decision, 'approve');
 });
@@ -149,7 +154,7 @@ test('revise: лимит 0 — доделки нет, гейт закрыт', as
   const o = opts({ agent: 'claude', makeProvider: judgeQueue(['revise', 'approve']) });
   o.cfg.judge.maxRevise = 0;
   await assert.rejects(() => runAction(spec(published), {}, {}, o).result, (e) => e.code === 'judge_rejected');
-  assert.equal(calls().length, 1);
+  assert.equal(calls.args().length, 1);
   assert.deepEqual(published, []);
 });
 
