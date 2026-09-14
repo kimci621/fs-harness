@@ -6,7 +6,7 @@ import TextInput from 'ink-text-input';
 import htm from 'htm';
 import {
   TABS, fieldsFor, promptRow, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
-  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, flowLines, visibleItems, onBoard, boardLanes, cardRows, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
+  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueCard, shiftLine, runRow, detailLines, flowLines, visibleItems, onBoard, boardLanes, cardRows, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
 import { fieldText, editValueFor } from '../jira.js';
@@ -133,7 +133,7 @@ export function App({ ctx, opts }) {
       if (tab === 'issues') {
         const jql = buildJql({ ...state.filters.issues, componentField: ctx.cfg.jira?.componentField });
         const { issues } = await withBusy('задачи Jira', () =>
-          jira().searchJql({ jql, fields: ['summary', 'status', 'updated', 'issuetype', 'priority', 'assignee'] }));
+          jira().searchJql({ jql, fields: ['summary', 'status', 'updated', 'issuetype', 'priority', 'assignee', 'labels', 'parent'] }));
         dispatch({ type: 'items', tab, items: issues });
       }
     } catch (err) {
@@ -286,6 +286,34 @@ export function App({ ctx, opts }) {
     } catch (err) {
       dispatch({ type: 'modalClose' });
       bufferRef.current.push(`${issue} ▸ ❌ ${err.message}`);
+    }
+  }
+
+  // Родитель с подзадачами: в списке от него виден один ключ, а контекст задачи обычно там.
+  async function openParent() {
+    const item = selected(state);
+    const p = item?.fields?.parent;
+    if (!p?.key) return void bufferRef.current.push(`${item?.key ?? '—'} ▸ родителя нет`);
+    dispatch({ type: 'modalOpen', kind: 'parent', title: `${p.key} ${p.fields?.summary ?? ''}`, issue: p.key, items: [], busy: true, note: 'читаю родителя…' });
+    try {
+      const j = jira();
+      const [parent, found] = await withBusy(`родитель ${p.key}`, () => Promise.all([
+        j.issue(p.key),
+        j.searchJql({ jql: `parent = ${p.key} ORDER BY status`, fields: ['summary', 'status', 'assignee'], max: 100 }),
+      ]));
+      const f = parent?.fields ?? {};
+      const kids = found?.issues ?? [];
+      dispatch({
+        type: 'modalItems',
+        busy: false,
+        note: `${f.status?.name ?? '—'} · ${fieldText(f.assignee) || 'нету'} · подзадач: ${kids.length}`,
+        items: kids.map((s) => ({
+          id: s.key,
+          label: `${s.key.padEnd(9)} ${(s.fields?.status?.name ?? '—').padEnd(14)} ${fieldText(s.fields?.assignee) || 'нету'} · ${s.fields?.summary ?? ''}`,
+        })),
+      });
+    } catch (err) {
+      dispatch({ type: 'modalItems', items: [], busy: false, note: `❌ ${err.message}` });
     }
   }
 
@@ -547,6 +575,7 @@ export function App({ ctx, opts }) {
     if (intent.type === 'openFilters') return openFilters();
     if (intent.type === 'searchOpen' || intent.type === 'searchClose') return void dispatch(intent);
     if (intent.type === 'editField') return void openEditFields();
+    if (intent.type === 'parent') return void openParent();
     if (intent.type === 'boardToggle') {
       dispatch(intent);
       if (!state.board) loadColumns();
@@ -565,6 +594,7 @@ export function App({ ctx, opts }) {
       if (kind === 'filterValue') return applyFilterValue();
       if (kind === 'editField') return void openEditValue();
       if (kind === 'editValue') return void applyEditValue();
+      if (kind === 'parent') return void dispatch({ type: 'modalClose' }); // окно только читают
       return void applyTransition();
     }
     if (intent.type === 'modalClear') {
@@ -653,6 +683,7 @@ const Help = ({ height }) =>
     <${Text}>p — пайплайн MR: все джобы и их запуск · f — фильтры списка MR<//>
     <${Text}>n — проанализировать задачу · s — статус · S — спринт · c — комментарий · e — раскрыть поля<//>
     <${Text}>E — изменить поле задачи: Assignee, Ответственный разработчик, Priority и всё, что даёт Jira<//>
+    <${Text}>p — родитель задачи со всеми подзадачами в отдельном окне<//>
     <${Text}>v — доска вместо списка задач: h/l — колонки, j/k — карточки, H/L — перенести карточку<//>
     <${Text}>/ — поиск по списку (терпит опечатки, ищет по всем полям) · f — фильтры списка MR<//>
     <${Text}>x — прервать все запуски · R — перечитать список · o — открыть в браузере · q — выход<//>
@@ -690,6 +721,15 @@ function Modal({ modal, filters, fields, optionsFor, height, onSubmit, onChange 
         `)}
         ${modal.items.length > Math.max(1, height - 4) ? html`<${Text} dimColor>…ещё ${modal.items.length - Math.max(1, height - 4)}<//>` : null}
         <${Text} dimColor>Enter — выбрать · Esc — назад к фильтрам<//>
+      <//>`;
+    }
+    if (modal.kind === 'parent') {
+      const room = Math.max(1, height - 4);
+      return html`<${Box} flexDirection="column">
+        ${modal.note ? html`<${Text} color="yellow">${modal.busy ? html`<${Spinner} type="dots" /> ` : ''}${modal.note}<//>` : null}
+        ${modal.items.slice(0, room).map((t) => html`<${Text} key=${t.id} wrap="truncate-end">${t.label}<//>`)}
+        ${!modal.items.length && !modal.busy ? html`<${Text} dimColor>подзадач нет<//>` : null}
+        <${Text} dimColor>${modal.items.length > room ? `…ещё ${modal.items.length - room} · ` : ''}Esc — закрыть<//>
       <//>`;
     }
     if (modal.kind === 'pipeline') {
@@ -763,25 +803,34 @@ function List({ state, height, width }) {
         : `${EMPTY[state.tab]} · R — перечитать`;
     return html`<${Text} dimColor wrap="truncate-end">${hint}<//>`;
   }
-  const per = (state.tab === 'mr' ? 2 : 1) + 1; // строка MR двухэтажная + разделитель под каждой
-  const visible = Math.max(1, Math.floor(height / per));
   const cursor = state.cursor[state.tab];
-  const start = Math.max(0, Math.min(cursor - Math.floor(visible / 2), rows.length - visible));
-  return rows.slice(start, start + visible).flatMap((r, i) => {
+  // Высота строк разная (карточка задачи до пяти строк), поэтому окно набираем от курсора, а не делим height.
+  const heights = rows.map((r) => (state.tab === 'mr' ? 2 : rowLines(state.tab, r, width).length) + 1);
+  let start = cursor;
+  let end = cursor + 1;
+  let used = heights[cursor] ?? 1;
+  while (start > 0 || end < rows.length) {
+    if (start > 0 && used + heights[start - 1] <= height) { used += heights[--start]; continue; }
+    if (end < rows.length && used + heights[end] <= height) { used += heights[end++]; continue; }
+    break;
+  }
+  return rows.slice(start, end).flatMap((r, i) => {
     const active = start + i === cursor;
     const key = r.iid ?? r.key ?? r.name ?? r.id ?? i;
     const body = state.tab === 'mr'
-      ? html`<${MRRow} key=${key} r=${r} active=${active} width=${width} />`
-      : html`<${Box} key=${key} flexShrink=${0}>
-          <${Marker} active=${active} />
-          <${Text} wrap="truncate-end">${row(state.tab, r).parts.map((pt, j) => html`<${Text} key=${j} bold=${pt.bold || active} dimColor=${pt.dim} color=${pt.color}>${pt.text}<//>`)}<//>
-        <//>`;
+      ? [html`<${MRRow} key=${key} r=${r} active=${active} width=${width} />`]
+      : rowLines(state.tab, r, width).map((l, j) => html`<${Box} key=${`${key}-${j}`} flexShrink=${0}>
+          <${Marker} active=${active && j === 0} />
+          <${Line} line=${shiftLine(l, state.scroll.x)} bold=${active} />
+        <//>`);
     // Тонкая бледная линия между строками: без неё список читается как сплошной абзац.
-    return [body, html`<${Text} key=${`${key}-sep`} dimColor wrap="truncate-end">${'─'.repeat(Math.max(1, width))}<//>`];
+    return [...body, html`<${Text} key=${`${key}-sep`} dimColor wrap="truncate-end">${'─'.repeat(Math.max(1, width))}<//>`];
   });
 }
 
-const row = (tab, r) => (tab === 'issues' ? issueRow(r) : tab === 'prompts' ? promptRow(r) : runRow(r));
+// Задача рисуется карточкой: ключ со статусом, название до трёх строк, тэги и родитель.
+const rowLines = (tab, r, width) => (tab === 'issues' ? issueCard(r, width - 1) : [tab === 'prompts' ? promptRow(r) : runRow(r)]);
+
 
 const COL_MIN = 26; // уже этого карточка нечитаема
 
@@ -857,15 +906,15 @@ function Details({ state, item, height, width }) {
   });
   const flowed = flowLines(lines, width);
   const off = Math.min(state.scroll.details, Math.max(0, flowed.length - height));
-  return flowed.slice(off, off + height).map((l, i) => html`<${Line} key=${i} line=${l} />`);
+  return flowed.slice(off, off + height).map((l, i) => html`<${Line} key=${i} line=${shiftLine(l, state.scroll.x)} />`);
 }
 
 // Строка из кусков: у каждого свой цвет. Пустая строка-разделитель рисуется пробелом,
 // иначе ink схлопывает её и группы слипаются.
-const Line = ({ line }) =>
+const Line = ({ line, bold = false }) =>
   line.gap
     ? html`<${Text}> <//>`
-    : html`<${Text} wrap="truncate-end">${line.parts.map((p, i) => html`<${Text} key=${i} bold=${p.bold} dimColor=${p.dim} color=${p.color}>${p.text}<//>`)}<//>`;
+    : html`<${Text} wrap="truncate-end">${line.parts.map((p, i) => html`<${Text} key=${i} bold=${p.bold || bold} dimColor=${p.dim} color=${p.color}>${p.text}<//>`)}<//>`;
 
 function Log({ lines, height, offset, focused }) {
   const inner = Math.max(1, height - 2);

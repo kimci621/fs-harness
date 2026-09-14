@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, fieldsFor, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems, flowLines, boardColumns, boardLanes, onBoard } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueCard, wrapText, shiftLine, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, fieldsFor, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems, flowLines, boardColumns, boardLanes, onBoard } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -108,7 +108,7 @@ test('переходы задачи: s только на вкладке зада
   assert.equal(reduce(moved, { type: 'modalClose' }).modal, null);
 });
 
-test('пайплайн: порядок стадий, слот деплоя, клавиша p только на вкладке MR', () => {
+test('пайплайн: порядок стадий, слот деплоя, клавиша p по вкладкам', () => {
   const jobs = [
     { id: 22, stage: 'deploy_dev', name: 'deploy_dev2' },
     { id: 11, stage: 'build', name: 'build_image' },
@@ -126,7 +126,7 @@ test('пайплайн: порядок стадий, слот деплоя, кл
 
   const s = withItems();
   assert.deepEqual(keyIntent('p', {}, s), { type: 'pipeline' });
-  assert.equal(keyIntent('p', {}, reduce(s, { type: 'tab', tab: 'issues' })), null);
+  assert.deepEqual(keyIntent('p', {}, reduce(s, { type: 'tab', tab: 'issues' })), { type: 'parent' }); // на задачах p — родитель
 
   // Панель джоб обновляется на месте: курсор остаётся там, где стоял.
   const open = reduce(s, { type: 'modalOpen', kind: 'pipeline', title: 'п', mr: 1, items: jobs });
@@ -179,7 +179,29 @@ test('строки списка: MR двухэтажный с бейджами, 
   const bare = mrRow({ iid: 1, title: 'x', comments: { open: null, resolved: null } });
   assert.equal(bare.badges, '');
 
-  assert.equal(lineText(issueRow({ key: 'FD-1', fields: { status: { name: 'В работе' }, summary: 'Починить' } })), 'FD-1 · В работе · Починить');
+  // Задача в списке — карточка: кто делает, название до трёх строк, метки и родитель.
+  const card = issueCard({
+    key: 'FD-1',
+    fields: {
+      status: { name: 'В работе' }, summary: 'Починить оплату картой и заодно переписать обработку ошибок формы целиком',
+      assignee: { displayName: 'Амир' }, labels: ['review', 'frontend'], parent: { key: 'FD-0', fields: { summary: 'Эпик оплаты' } },
+    },
+  }, 30).map(lineText);
+  assert.equal(card[0], 'FD-1 · В работе · Амир');
+  assert.equal(card.at(-1), 'review, frontend · ↑ FD-0 Эпик оплаты');
+  assert.ok(card.slice(1, -1).length <= 3, 'название не длиннее трёх строк');
+  assert.deepEqual(wrapText('раз два три четыре пять шесть семь', 12, 2), ['раз два три', 'четыре пять…']); // хвост обрезан
+
+  // Без исполнителя пишем «нету», а не пустоту: пустая колонка читается как «не загрузилось».
+  assert.match(issueCard({ key: 'FD-2', fields: { status: { name: 'Hold' }, summary: 'x' } }, 30).map(lineText)[0], /· нету$/);
+
+  // Боковой сдвиг режет строку слева по кускам, чтобы читался обрезанный справа хвост.
+  const long = { parts: [{ text: 'FD-1 ' }, { text: 'длинное название' }] };
+  assert.equal(lineText(shiftLine(long, 5)), 'длинное название');
+  assert.equal(lineText(shiftLine(long, 8)), 'нное название');
+  assert.equal(shiftLine(long, 0), long);
+  const scrolled = reduce(reduce(initialState(), { type: 'scrollX', by: 8 }), { type: 'scrollX', by: -16 });
+  assert.equal(scrolled.scroll.x, 0); // влево дальше начала не уезжаем
 });
 
 test('карточка задачи: поля по названию, длинные блоки раскрываются по e', () => {

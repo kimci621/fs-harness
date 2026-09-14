@@ -102,7 +102,8 @@ test('TUI: рисует MR, переключает вкладку и показ�
     app.stdin.write('2');
     await tick();
     const issues = app.lastFrame();
-    assert.match(issues, /FD-1 · В работе · Починить/); // статус между ключом и названием
+    assert.match(issues, /FD-1 · В работе · нету/); // ключ, статус и исполнитель первой строкой
+    assert.match(issues, /│\s+Починить/); // название отдельной строкой под ключом
     assert.match(issues, /─{10}/); // бледная линия между строками списка
     assert.match(issues, /n проанализировать · s статус/);
     assert.match(issues, /Assignee {2}Амир/);
@@ -258,6 +259,39 @@ test('TUI: E правит поле задачи — выбор поля, выб�
   }
 });
 
+// Родитель: в строке списка от него виден только ключ, p открывает его окном со всеми подзадачами.
+test('TUI: p открывает родителя задачи со всеми подзадачами', async () => {
+  const kid = { key: 'FD-1', fields: { summary: 'Починить', status: { name: 'В работе' }, updated: new Date().toISOString(), parent: { key: 'FD-0', fields: { summary: 'Эпик' } } } };
+  const ctxParent = {
+    ...ctx,
+    jira: () => ({
+      ...ctx.jira(),
+      searchJql: async ({ jql }) => (/parent = FD-0/.test(jql)
+        ? { issues: [kid, { key: 'FD-9', fields: { summary: 'Промокоды', status: { name: 'К выполнению' } } }] }
+        : { issues: [kid] }),
+      issue: async () => ({ key: 'FD-0', names: {}, fields: { summary: 'Эпик', status: { name: 'В работе' }, assignee: { displayName: 'Эмиль' }, issuelinks: [] } }),
+    }),
+  };
+  const app = render(React.createElement(App, { ctx: ctxParent, opts: {} }));
+  try {
+    await tick(300);
+    app.stdin.write('2');
+    await tick(300);
+    assert.match(app.lastFrame(), /↑ FD-0/); // родитель приглушённо в строке списка
+
+    app.stdin.write('p');
+    await tick(400);
+    assert.match(app.lastFrame(), /подзадач: 2/);
+    assert.match(app.lastFrame(), /FD-9 +К выполнению +нету · Промокоды/); // без исполнителя — «нету»
+
+    app.stdin.write('\u001B');
+    await tick(150);
+    assert.doesNotMatch(app.lastFrame(), /подзадач: 2/); // Esc закрывает окно
+  } finally {
+    app.unmount();
+  }
+});
+
 // Задачи по умолчанию мои, но фильтруются как в самом Jira — значения приходят оттуда же.
 test('TUI: f на задачах — assignee «все» перезапрашивает список другим JQL', async () => {
   const jqls = [];
@@ -339,7 +373,7 @@ test('TUI: v рисует доску, H/L переносит карточку, v
 
     app.stdin.write('v');
     await tick(300);
-    assert.match(app.lastFrame(), /FD-1 · К выполнению · чекаут/); // снова список
+    assert.match(app.lastFrame(), /FD-1 · К выполнению/); // снова список
   } finally {
     app.unmount();
   }
