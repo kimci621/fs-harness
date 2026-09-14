@@ -6,11 +6,12 @@ import { createJira } from '../jira.js';
 import { createGrowthBook } from '../growthbook.js';
 import { loadConfig, CONFIG_PATH, expandHome } from '../config.js';
 import { readSecret, addCommand } from '../secrets.js';
+import { cmdInit } from './init.js';
 
 // fsh doctor — самодиагностика окружения: программы, конфиг, API, git, судья.
 // Критично то, без чего fsh не работает вообще. Опциональное пишет, что из-за него недоступно.
 // asObject — вернуть {ok, checks} без печати (MCP-режим).
-export async function cmdDoctor({ repo, host, projectDir, json, asObject } = {}) {
+export async function cmdDoctor({ repo, host, projectDir, json, asObject, commands } = {}) {
   const checks = [];
   const add = (name, ok, detail, critical = false) => checks.push({ name, ok: Boolean(ok), critical, detail: detail ?? (ok ? 'ok' : '') });
 
@@ -57,6 +58,13 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject } = {})
 
   const dir = expandHome(projectDir || cfg?.projectDir || '~');
   add('projectDir', existsSync(path.join(dir, '.git')), `${dir}${existsSync(path.join(dir, '.git')) ? '' : ' — нет .git (conflict не заработает)'}`);
+
+  // Скилл в проекте проверяем, только если он уже поставлен: молчаливое требование
+  // ставить его в каждый проект — не наше дело.
+  if (commands && existsSync(path.join(dir, '.claude', 'skills', 'fsh', 'SKILL.md'))) {
+    const { state } = cmdInit(commands, { cfg }, { projectDir: dir, check: true, asObject: true });
+    add('скилл fsh', state === 'current', state === 'current' ? `${dir}/.claude/skills/fsh` : 'устарел (реестр изменился) — обнови: fsh init');
+  }
 
   // Jira опциональна: пока не настроена, молчим — про неё спросит только analyze.
   if (cfg?.jira?.baseUrl) {

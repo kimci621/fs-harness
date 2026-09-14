@@ -18,7 +18,7 @@ src/config.js           ~/.config/gl-helper/config.json
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, agent-guide, mr-comments, prompts, jira, task, growthbook, flow
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init
 src/jira.js             Jira REST: чтение и записи (статус, спринт, комментарий, поле), fetch инжектируется (тесты)
 src/commands/task.js    ветка задачи и push с открытием MR: гарды защищённых веток и грязного дерева
 src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/toggle), fetch инжектируется (тесты)
