@@ -5,7 +5,7 @@ import { statusIcon, humanize, cleanTitle } from '../format.js';
 import { fieldByName, fieldText, openSprints } from '../jira.js';
 
 export const TABS = [
-  { key: 'mr', title: 'MR', hint: 'a решить конфликт · t обработать тикеты · r локальное ревью · p пайплайн · f фильтры' },
+  { key: 'mr', title: 'MR', hint: 'a решить конфликт · t обработать тикеты · r локальное ревью · p пайплайн · E поле · f фильтры' },
   { key: 'issues', title: 'Задачи', hint: 'v доска · n проанализировать · s статус · S спринт · E поле · p родитель · c коммент · f фильтры' },
   { key: 'runs', title: 'История', hint: 'прошлые запуски действий: вердикт, цена, каталог' },
   { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
@@ -41,6 +41,22 @@ export const DEPLOY_JOB = /^deploy_dev(\d*)$/;
 export const deploySlot = (name) => (DEPLOY_JOB.exec(name ?? '') ?? [])[1] || '';
 
 // Фильтры списка MR: те же, что у флагов CLI. type решает, что делает Enter на строке.
+// Что правится у MR. Схему «что тут можно менять» GitLab не отдаёт, в отличие от Jira editmeta,
+// поэтому список наш, а текущее значение читается из самого MR.
+export const MR_FIELDS = [
+  { id: 'title', name: 'Title', kind: 'text', read: (m) => m.title ?? '' },
+  { id: 'description', name: 'Description', kind: 'editor', read: (m) => m.description ?? '' },
+  { id: 'assignee_ids', name: 'Assignee', kind: 'pick', from: 'members', read: (m) => (m.assignees ?? []).map((u) => u.username).join(', ') },
+  { id: 'reviewer_ids', name: 'Reviewers', kind: 'users', read: (m) => (m.reviewers ?? []).map((u) => u.username).join(', ') },
+  { id: 'labels', name: 'Labels', kind: 'list', read: (m) => (m.labels ?? []).join(', ') },
+  { id: 'target_branch', name: 'Target branch', kind: 'pick', from: 'branches', read: (m) => m.target_branch ?? '' },
+  { id: 'squash', name: 'Squash при мерже', kind: 'flag', read: (m) => Boolean(m.squash) },
+  { id: 'remove_source_branch', name: 'Удалить ветку после мержа', kind: 'flag', read: (m) => Boolean(m.force_remove_source_branch) },
+];
+
+// Строка поля в списке: видно, что стоит сейчас, иначе правишь вслепую.
+export const mrFieldRow = (f, mr) => `${f.name.padEnd(26)}${f.kind === 'flag' ? (f.read(mr) ? 'да' : 'нет') : f.read(mr).split('\n')[0].slice(0, 40) || '—'}`;
+
 export const FILTER_FIELDS = [
   { key: 'author', label: 'Автор', type: 'option' },
   { key: 'assignee', label: 'Assignee', type: 'option' },
@@ -622,7 +638,7 @@ export function keyIntent(input, key, state) {
   if (input === 's' && state.tab === 'issues') return { type: 'transition' };
   if (input === 'S' && state.tab === 'issues') return { type: 'sprint' };
   if (input === 'c' && state.tab === 'issues') return { type: 'comment' };
-  if (input === 'E' && state.tab === 'issues') return { type: 'editField' };
+  if (input === 'E' && (state.tab === 'issues' || state.tab === 'mr')) return { type: 'editField' };
   if (input === 'p' && state.tab === 'issues') return { type: 'parent' };
   if (input === 'p' && state.tab === 'mr') return { type: 'pipeline' };
   if (input === 'f' && (state.tab === 'mr' || state.tab === 'issues')) return { type: 'openFilters' };
