@@ -76,6 +76,9 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
 
     createMRPipeline: (repo, iid) => api(repo, `/merge_requests/${iid}/pipelines`, { method: 'POST' }),
 
+    // Создание MR. Ответ — сам MR: iid и web_url нужны сразу после создания.
+    createMR: (repo, fields) => api(repo, '/merge_requests', { method: 'POST', input: JSON.stringify(fields) }),
+
     // Правка полей MR одним PUT. Тело только через stdin: description многострочный.
     updateMR: (repo, iid, fields) => api(repo, `/merge_requests/${iid}`, { method: 'PUT', input: JSON.stringify(fields) }),
 

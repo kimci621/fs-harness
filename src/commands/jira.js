@@ -1,4 +1,5 @@
-import { ISSUE_KEY, fieldByName, openSprints } from '../jira.js';
+import { readFileSync } from 'node:fs';
+import { ISSUE_KEY, editKind, editValueFor, fieldByName, fieldText, openSprints } from '../jira.js';
 import { humanize, table, truncate } from '../format.js';
 import { finish } from '../output.js';
 import { confirm } from '../ui.js';
@@ -84,6 +85,8 @@ export async function cmdJira(ctx, args, opts = {}) {
         ? await sprint(j, rest, ctx, opts)
         : query === 'comment'
           ? await comment(j, rest, ctx, opts)
+          : query === 'field'
+            ? await field(j, rest, ctx, opts)
           : !query || query === 'mine'
             ? await mine(j, { ...opts, componentField: ctx.cfg.jira?.componentField })
             : await one(j, query, ctx);
@@ -155,6 +158,54 @@ async function comment(j, [key, ...words], ctx, { yes, asObject, dryRun } = {}) 
   return { ok: true, key, comment: text, comment_id: created?.id ?? null, url: issueUrl(ctx, key) };
 }
 
+// Запись в Jira: любое поле по человеческому имени. id берётся из editmeta (customfield_*
+// у каждого проекта свой), форма значения — из схемы поля, как в TUI.
+async function field(j, [key, name, ...words], ctx, { yes, asObject, dryRun, file } = {}) {
+  if (!key || !ISSUE_KEY.test(key) || !name) {
+    throw new CliError('Использование: fsh jira field <KEY> "<имя поля>" <значение> или --file <путь|->.', 1, 'usage');
+  }
+  const meta = await j.editMeta(key);
+  const entries = Object.entries(meta?.fields ?? {});
+  const hit = entries.find(([, f]) => (f.name ?? '') === name) ?? entries.find(([, f]) => (f.name ?? '').toLowerCase() === name.toLowerCase());
+  if (!hit) {
+    const names = entries.filter(([, f]) => editKind(f)).map(([, f]) => f.name).sort().join(', ');
+    throw new CliError(`У ${key} нет правимого поля "${name}". Есть: ${names}.`, 1, 'usage');
+  }
+  const [id, meta1] = hit;
+  const kind = editKind(meta1);
+  if (!kind) throw new CliError(`Поле "${meta1.name}" fsh заполнить нечем: тип ${meta1.schema?.type}.`, 1, 'usage');
+  // Текст поля приходит файлом или stdin: результат скилла проекта многострочный,
+  // в argv он не влезает и теряет переводы строк.
+  const text = file ? String(readFileSync(file === '-' ? 0 : file, 'utf8')) : words.join(' ');
+  if (!text.trim()) throw new CliError(`Нечего писать в "${meta1.name}": значение пустое.`, 1, 'usage');
+  const value = shapeValue(meta1, kind, text);
+
+  if (dryRun) return { ok: true, dry_run: true, key, field: meta1.name, field_id: id, value };
+  if (!yes && !asObject && !confirm(`${key}: записать в «${meta1.name}» ${truncate(text.replace(/\n/g, ' '), 60)}? [y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  await j.updateIssue(key, { [id]: value });
+  const after = await j.issue(key);
+  const written = fieldText(after.fields?.[id]);
+  if (!written) throw new CliError(`Jira приняла запись в "${meta1.name}", но при перечитывании поле пустое.`, 1, 'api_failed');
+  return { ok: true, key, field: meta1.name, field_id: id, written, url: issueUrl(ctx, key) };
+}
+
+// Форма значения по типу поля: списки строк через запятую, число числом,
+// выбор — сопоставлением с allowedValues, остальное текстом как есть.
+function shapeValue(meta, kind, text) {
+  if (kind === 'list') return text.split(',').map((v) => v.trim()).filter(Boolean);
+  if (kind === 'number') return Number(text);
+  if (kind !== 'pick') return text;
+  const opts = meta.allowedValues ?? [];
+  const opt = opts.find((v) => [v.value, v.name, v.displayName].some((n) => n && String(n).toLowerCase() === text.trim().toLowerCase()));
+  if (!opt) {
+    const list = opts.map((v) => fieldText(v)).filter(Boolean).join(', ') || 'варианты отдаёт только Jira';
+    throw new CliError(`"${text.trim()}" не подходит полю "${meta.name}". Доступно: ${list}.`, 1, 'usage');
+  }
+  return editValueFor(meta, { id: opt.id, value: opt.value ?? opt.name, accountId: opt.accountId });
+}
+
 async function one(j, key, ctx) {
   if (!ISSUE_KEY.test(key)) {
     throw new CliError(`"${key}" не похоже на ключ задачи (FD-7647). Использование: fsh jira [mine|<KEY>].`, 1, 'usage');
@@ -187,6 +238,11 @@ function render(r, ctx) {
   }
   if (r.comment) {
     console.log(`${r.key}: комментарий ${r.dry_run ? 'не опубликован (dry-run)' : `опубликован (#${r.comment_id})`}`);
+    return;
+  }
+  if (r.field_id) {
+    console.log(`${r.key}: «${r.field}» ${r.dry_run ? 'не записано (dry-run)' : 'записано'}`);
+    if (r.written) console.log(truncate(r.written.replace(/\n/g, ' '), 100));
     return;
   }
   if (r.issues) {

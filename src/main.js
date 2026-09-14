@@ -23,7 +23,7 @@ const FLAGS_USAGE = `Флаги:
   --for <mr|ветка>        В prompts show: отрендерить промпт на реальных данных MR
   --author me|<ник>       В mrs: чьи MR
   --reviewer me|<ник>     В mrs: где ты (или кто-то) ревьюер
-  --target <ветка>        В mrs: только MR в эту целевую ветку
+  --target <ветка>        В mrs: только MR в эту целевую ветку; в task push: куда открыть MR
   --label <метка>         В mrs: только с этой меткой
   --search <текст>        В mrs: поиск по названию и описанию
   --draft / --no-draft    В mrs: только черновики / только готовые
@@ -35,6 +35,7 @@ const FLAGS_USAGE = `Флаги:
   --component <значение>  В jira: фильтр по checkbox-полю «Компонент»
   --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые)
   --jql "<запрос>"        В jira: свой JQL вместо собранного из флагов
+  --file <путь|->         В jira field: значение поля из файла или stdin
   --resolved / --open     В mr-comments: только решённые / нерешённые треды
 
 Режим агента (env):
@@ -123,7 +124,7 @@ function parseArgs(argv) {
     json: false, repo: null, host: null, project: null, agent: null, projectDir: null, buildJob: null,
     watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
-    noJudge: false, judgeProfile: null, judgeOnly: null, for: null,
+    noJudge: false, judgeProfile: null, judgeOnly: null, for: null, file: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
     author: null, reviewer: null, target: null, label: null, search: null,
     draft: null, conflicts: false, threads: false, pipeline: null,
@@ -147,6 +148,7 @@ function parseArgs(argv) {
     else if (a === '--judge') opts.judgeProfile = argv[++i];
     else if (a === '--judge-only') opts.judgeOnly = argv[++i];
     else if (a === '--for') opts.for = argv[++i];
+    else if (a === '--file') opts.file = argv[++i];
     else if (a === '--assignee') opts.assignee = argv[++i];
     else if (a === '--sprint') opts.sprint = argv[++i];
     else if (a === '--component') opts.component = argv[++i];

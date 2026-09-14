@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createJira, ISSUE_KEY, fieldByName, fieldIdByName, fieldText, editKind, editValueFor, openSprints } from '../src/jira.js';
 import { CliError } from '../src/errors.js';
 import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition, pickSprint, boardOf } from '../src/commands/jira.js';
@@ -288,4 +291,73 @@ test('jira: updateIssue — один PUT с полями, editmeta и люди �
   assert.equal(calls[2].method, 'PUT');
   assert.match(calls[2].url, /\/rest\/api\/2\/issue\/FD-1$/);
   assert.deepEqual(calls[2].body, { fields: { assignee: { accountId: 'a1' } } });
+});
+
+// --- запись поля по имени ----------------------------------------------------
+
+// Поддельная Jira с editmeta: поле хранится в переменной, PUT его меняет.
+function fakeFields(over = {}) {
+  const stored = {};
+  return {
+    stored,
+    editMeta: async () => ({
+      fields: {
+        customfield_10242: { name: 'Technical details for QA', schema: { type: 'string', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:textarea' } },
+        customfield_10275: { name: 'Контент', schema: { type: 'string', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:textarea' } },
+        labels: { name: 'Labels', schema: { type: 'array', items: 'string' } },
+        priority: { name: 'Priority', schema: { type: 'priority' }, allowedValues: [{ id: '3', name: 'High' }] },
+        attachment: { name: 'Attachment', schema: { type: 'array', items: 'attachment' } },
+        ...over,
+      },
+    }),
+    updateIssue: async (key, fields) => void Object.assign(stored, fields),
+    // В PUT уходит только id варианта, а на чтение Jira отдаёт вариант целиком.
+    issue: async () => ({ fields: { ...stored, ...(stored.priority ? { priority: { ...stored.priority, name: 'High' } } : {}) } }),
+  };
+}
+
+test('jira field: имя поля → id из editmeta, многострочный текст из файла', async () => {
+  const j = fakeFields();
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'fsh-f-')), 'qa.md');
+  writeFileSync(file, 'Шаг 1\nШаг 2\n');
+  const res = await cmdJira(ctxWith(j), ['field', 'FD-1', 'Technical details for QA'], { asObject: true, yes: true, file });
+  assert.equal(res.field_id, 'customfield_10242');
+  assert.equal(j.stored.customfield_10242, 'Шаг 1\nШаг 2\n');
+  assert.equal(res.url, 'https://j.example/browse/FD-1');
+});
+
+test('jira field: форма значения по схеме — список, выбор из allowedValues', async () => {
+  const j = fakeFields();
+  await cmdJira(ctxWith(j), ['field', 'FD-1', 'Labels', 'a, b'], { asObject: true, yes: true });
+  assert.deepEqual(j.stored.labels, ['a', 'b']);
+  await cmdJira(ctxWith(j), ['field', 'FD-1', 'Priority', 'high'], { asObject: true, yes: true });
+  assert.deepEqual(j.stored.priority, { id: '3' });
+});
+
+test('jira field: неизвестное имя, незаполняемое поле и чужой вариант — ошибка со списком', async () => {
+  const j = fakeFields();
+  await assert.rejects(
+    () => cmdJira(ctxWith(j), ['field', 'FD-1', 'Эпик', 'x'], { asObject: true, yes: true }),
+    (e) => e.code === 'usage' && /Есть: .*Контент/.test(e.message) && !/Attachment/.test(e.message),
+  );
+  await assert.rejects(
+    () => cmdJira(ctxWith(j), ['field', 'FD-1', 'Attachment', 'x'], { asObject: true, yes: true }),
+    (e) => e.code === 'usage' && /заполнить нечем/.test(e.message),
+  );
+  await assert.rejects(
+    () => cmdJira(ctxWith(j), ['field', 'FD-1', 'Priority', 'Срочно'], { asObject: true, yes: true }),
+    (e) => e.code === 'usage' && /Доступно: High/.test(e.message),
+  );
+  await assert.rejects(
+    () => cmdJira(ctxWith(j), ['field', 'FD-1', 'Labels'], { asObject: true, yes: true }),
+    (e) => e.code === 'usage' && /значение пустое/.test(e.message),
+  );
+  assert.deepEqual(j.stored, {});
+});
+
+test('jira field: dry-run показывает значение и ничего не пишет', async () => {
+  const j = fakeFields();
+  const dry = await cmdJira(ctxWith(j), ['field', 'FD-1', 'Контент', 'слово,перевод'], { asObject: true, dryRun: true });
+  assert.deepEqual([dry.dry_run, dry.field_id, dry.value], [true, 'customfield_10275', 'слово,перевод']);
+  assert.deepEqual(j.stored, {});
 });
