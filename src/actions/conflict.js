@@ -6,8 +6,38 @@ import { ensureMRPipeline, findJob, startJob } from '../pipeline.js';
 import { waitJob } from '../ui.js';
 import { jobJSON } from '../output.js';
 import { ACCEPTANCE_PATHSPECS } from '../judge/payload.js';
+import { runChecks, checksFact } from '../checks.js';
 import { makeGit, WORKTREE_ROOT, GIT_MAX_BUFFER } from '../workspace.js';
 import { CliError } from '../errors.js';
+
+// Что показать судье: дифф решения, а не мержа. base..HEAD на мерж-коммите — это все
+// коммиты target (живой случай: 188 коммитов, 13 тысяч строк), решение в них тонет и
+// обрезается. merge-tree по тем же двум родителям даёт дерево механического слияния с
+// маркерами, и разница с HEAD — ровно то, что сделал агент, и ничего больше.
+export function resolutionScope(git, dir, base, conflictFiles) {
+  const merge = git(['rev-list', '--merges', '-1', `${base}..HEAD`], dir, { allowFail: true }).split('\n')[0];
+  const parents = merge ? git(['rev-list', '--parents', '-n', '1', merge], dir, { allowFail: true }).split(/\s+/).slice(1) : [];
+  if (parents.length === 2) {
+    const tree = git(['merge-tree', '--write-tree', '--no-messages', parents[0], parents[1]], dir, { allowFail: true }).split('\n')[0];
+    if (/^[0-9a-f]{40,}$/.test(tree)) {
+      return {
+        title: 'Дифф решения (механическое слияние тех же двух родителей → HEAD)',
+        diff: git(['diff', tree, 'HEAD'], dir),
+        files: git(['diff', '--name-only', tree, 'HEAD'], dir).split('\n').filter(Boolean),
+      };
+    }
+  }
+  // Мерж-коммита нет (агент ребейзнул) — показываем что есть.
+  return {
+    title: 'Дифф base..HEAD',
+    diff: git(['diff', `${base}..HEAD`, '--', ...pathspecs(conflictFiles)], dir),
+    files: git(['diff', '--name-only', `${base}..HEAD`], dir).split('\n').filter(Boolean),
+  };
+}
+
+// Заметки агента из диффа режем, но только пока конфликт не в них самих: иначе судить не на чем.
+const pathspecs = (conflictFiles) =>
+  conflictFiles.some((f) => f.startsWith('.claude/')) ? ['.'] : ACCEPTANCE_PATHSPECS;
 
 // Первая строка вывода merge-tree — OID результирующего дерева, а не имя файла.
 // Не отбросить её — хэш уедет в промпт и агент пойдёт искать несуществующий файл.
@@ -144,23 +174,26 @@ export const conflictAction = {
       'Функциональность обеих сторон должна остаться рабочей, приоритет веток равный.',
 
     // Механические факты после агента. Ни одного «по словам агента».
-    verify({ ws, pre }) {
+    verify({ ws, pre, opts, say }) {
       const { git, dir, base } = ws;
       const commitsAhead = Number(git(['rev-list', '--count', `${base}..HEAD`], dir));
       if (commitsAhead === 0) {
         throw new CliError(`Агент не создал коммитов в worktree (${dir}). Проверь вручную: git -C ${dir} status.`, 1, 'agent_failed');
       }
+      const scope = resolutionScope(git, dir, base, pre.conflictFiles);
       return {
         commits_ahead: commitsAhead,
         deps_available: ws.deps.available,
         head_sha: git(['rev-parse', 'HEAD'], dir),
-        changed_files: git(['diff', '--name-only', `${base}..HEAD`], dir).split('\n').filter(Boolean),
+        changed_files: scope.files,
         conflict_files: pre.conflictFiles,
         leftover_markers: git(['grep', '-l', '-E', '^(<{7}|={7}|>{7})', 'HEAD', '--', ...pre.conflictFiles], dir, { allowFail: true })
           .split('\n')
           .filter(Boolean)
           .map((l) => l.replace(/^HEAD:/, '')),
-        diff: git(['diff', `${base}..HEAD`, '--', ...ACCEPTANCE_PATHSPECS], dir),
+        diff: scope.diff,
+        diff_title: scope.title,
+        checks: checksFact(opts.cfg?.checks ?? [], ws.deps.available) ?? runChecks(opts.cfg.checks, dir, { say }),
       };
     },
 

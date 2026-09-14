@@ -4,9 +4,11 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { conflictAction, parseMergeTree } from '../src/actions/conflict.js';
+import { conflictAction, parseMergeTree, resolutionScope } from '../src/actions/conflict.js';
 import { runActionCLI } from '../src/engine.js';
 import { hasMergeTree } from '../src/commands/doctor.js';
+import { makeGit } from '../src/workspace.js';
+import { runChecks, checksFact } from '../src/checks.js';
 import { CliError } from '../src/errors.js';
 
 let root;
@@ -116,4 +118,79 @@ test('hasMergeTree: --write-tree есть с 2.38', () => {
   assert.equal(hasMergeTree('git version 2.37.9'), false);
   assert.equal(hasMergeTree('git version 3.0.0'), true);
   assert.equal(hasMergeTree(null), false);
+});
+
+// Живой случай: мерж привёл 188 коммитов target, дифф base..HEAD оказался в 13 тысяч строк,
+// судью обрезало, и конфликтующий файл в него не попал вовсе.
+test('resolutionScope: судье уходит решение конфликта, а не весь мерж target', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-resolution-'));
+  const g = (...args) =>
+    execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=t@e.st', ...args], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+
+  g('init', '-b', 'target');
+  writeFileSync(path.join(dir, 'f.txt'), 'база\n');
+  g('add', '.');
+  g('commit', '-m', 'база');
+
+  g('checkout', '-b', 'feature');
+  writeFileSync(path.join(dir, 'f.txt'), 'сторона A\n');
+  g('commit', '-am', 'A');
+  const start = g('rev-parse', 'HEAD').trim();
+
+  g('checkout', 'target');
+  writeFileSync(path.join(dir, 'f.txt'), 'сторона B\n');
+  g('commit', '-am', 'B');
+  writeFileSync(path.join(dir, 'noise.txt'), 'посторонний файл из target\n'.repeat(50));
+  g('add', '.');
+  g('commit', '-m', 'шум из target');
+
+  g('checkout', 'feature');
+  try {
+    g('merge', 'target');
+  } catch {
+    // конфликт — это и есть сценарий
+  }
+  writeFileSync(path.join(dir, 'f.txt'), 'сторона A + сторона B\n');
+  g('add', 'f.txt');
+  g('commit', '--no-edit');
+
+  const scope = resolutionScope(makeGit(dir), dir, start, ['f.txt']);
+  assert.deepEqual(scope.files, ['f.txt'], 'в дифф попал мерж target, а не решение');
+  assert.match(scope.diff, /сторона A \+ сторона B/);
+  assert.doesNotMatch(scope.diff, /посторонний файл из target/);
+  assert.match(scope.title, /решени/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('resolutionScope: без мерж-коммита откатываемся на base..HEAD', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-resolution-'));
+  const g = (...args) =>
+    execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=t@e.st', ...args], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  g('init', '-b', 'main');
+  writeFileSync(path.join(dir, 'f.txt'), 'база\n');
+  g('add', '.');
+  g('commit', '-m', 'база');
+  const start = g('rev-parse', 'HEAD').trim();
+  writeFileSync(path.join(dir, 'f.txt'), 'правка\n');
+  g('commit', '-am', 'правка');
+
+  const scope = resolutionScope(makeGit(dir), dir, start, ['f.txt']);
+  assert.equal(scope.title, 'Дифф base..HEAD');
+  assert.deepEqual(scope.files, ['f.txt']);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('runChecks: код выхода и хвост вывода снимаются механически', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-checks-'));
+  const got = runChecks(['echo зелено', 'sh -c "echo падает >&2; exit 3"'], dir, { tailLines: 2 });
+  assert.deepEqual(got.map((c) => c.exit_code), [0, 3]);
+  assert.match(got[0].tail, /зелено/);
+  assert.match(got[1].tail, /падает/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('checksFact: без настроенных команд и без зависимостей судье уходит причина, а не пустота', () => {
+  assert.match(checksFact([], true), /не настроены/);
+  assert.match(checksFact(['npm test'], false), /node_modules/);
+  assert.equal(checksFact(['npm test'], true), null); // есть что запускать — запускаем
 });

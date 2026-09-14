@@ -22,7 +22,7 @@ const block = (title, body) => (body ? `## ${title}\n\n${body}\n` : '');
 const fact = (v) =>
   Array.isArray(v) ? v.map(fact).join(', ') || '—' : v && typeof v === 'object' ? JSON.stringify(v) : v;
 
-export function buildAcceptancePayload({ goal, facts = {}, extra = '', diff = '', agentText = '', maxDiffLines = 4000, maxAgentLines = 200 }) {
+export function buildAcceptancePayload({ goal, facts = {}, extra = '', diff = '', diffTitle = 'Дифф base..HEAD', agentText = '', maxDiffLines = 4000, maxAgentLines = 200 }) {
   const factLines = Object.entries(facts)
     .filter(([, v]) => v !== undefined) // diff вырезан из фактов и не должен светиться как «- diff: undefined»
     .map(([k, v]) => `- ${k}: ${fact(v)}`)
@@ -32,7 +32,7 @@ export function buildAcceptancePayload({ goal, facts = {}, extra = '', diff = ''
     block('Задача, которую решал агент', goal),
     block('Факты, снятые механически (не словами агента)', factLines),
     block('Материал действия', extra),
-    block('Дифф base..HEAD', diff ? '```diff\n' + truncate(diff, maxDiffLines) + '\n```' : '_пусто_'),
+    block(diffTitle, diff ? '```diff\n' + truncate(diff, maxDiffLines) + '\n```' : '_пусто_'),
     block('Финальный отчёт агента (его слова, проверять по диффу)', truncate(agentText, maxAgentLines)),
   ]
     .filter(Boolean)

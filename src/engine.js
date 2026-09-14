@@ -240,9 +240,10 @@ export function runAction(spec, ctx, input, opts = {}) {
         ? a.judgePayload(x)
         : buildAcceptancePayload({
             goal: x.goal,
-            facts: { ...x.facts, diff: undefined },
+            facts: { ...x.facts, diff: undefined, diff_title: undefined },
             extra: x.extra,
             diff: x.facts.diff,
+            diffTitle: x.facts.diff_title,
             agentText: x.agentText,
           }),
     });
@@ -359,9 +360,10 @@ export async function judgeRun(runId, opts = {}) {
     profile: opts.judgeProfile,
     payload: buildAcceptancePayload({
       goal: meta.goal,
-      facts: meta.facts ?? {},
+      facts: { ...(meta.facts ?? {}), diff_title: undefined },
       extra: meta.extra ?? '',
       diff,
+      diffTitle: meta.facts?.diff_title,
       agentText: saved.read('agent.txt') ?? '',
     }),
   });
