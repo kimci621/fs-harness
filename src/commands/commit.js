@@ -1,4 +1,4 @@
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { CliError } from '../errors.js';
@@ -6,6 +6,7 @@ import { expandHome } from '../config.js';
 import { commitPrompt } from '../prompts.js';
 import { confirm } from '../ui.js';
 import { makeLogger, finish } from '../output.js';
+import { makeGit } from '../workspace.js';
 
 // fsh commit [--agent claude|pi] [--project-dir <dir>] [-y] [--dry-run]
 // Агент формирует сообщение коммита по паттерну (.llm-commit-pattern или встроенный)
@@ -22,13 +23,7 @@ export async function cmdCommit(args, opts = {}) {
     throw new CliError(`"${dir}" не git-репозиторий. Укажи --project-dir.`, 1, 'usage');
   }
 
-  const git = (a) => {
-    try {
-      return execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-    } catch (err) {
-      throw new CliError(`git ${a.join(' ')} не удался: ${String(err.stderr || err.message).trim()}`, 1, 'git_failed');
-    }
-  };
+  const git = makeGit(dir);
 
   const branch = git(['branch', '--show-current']) || '(detached HEAD)';
   const { source, prompt } = commitPrompt(dir);

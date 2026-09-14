@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { acquireWorkspace, MODES, WORKTREE_ROOT } from '../src/workspace.js';
+import { acquireWorkspace, makeGit, MODES, WORKTREE_ROOT } from '../src/workspace.js';
 
 let root;
 let project;
@@ -113,4 +113,17 @@ test('task-worktree: уборка не удаляет каталог', async () 
   assert.equal(existsSync(ws.dir), true);
   git(['worktree', 'remove', '--force', ws.dir], project);
   git(['branch', '-D', ws.branch], project);
+});
+
+// Ран падал с ENOBUFS уже после работы агента: дефолтный буфер execFileSync — мегабайт,
+// а дифф ветки после мержа target больше. Проверка держит буфер на месте.
+test('makeGit: вывод больше мегабайта не роняет команду', () => {
+  const big = path.join(root, 'big');
+  git(['init', '-b', 'main', big], root);
+  writeFileSync(path.join(big, 'f.txt'), 'строка с текстом подлиннее\n'.repeat(60000)); // ~2.8 МБ
+  git(['add', 'f.txt'], big);
+  git(['commit', '-m', 'большой файл'], big);
+
+  const out = makeGit(big)(['show', 'HEAD']);
+  assert.ok(out.length > 1024 * 1024, `вывод всего ${out.length} байт — тест ничего не проверяет`);
 });
