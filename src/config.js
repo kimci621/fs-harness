@@ -13,7 +13,7 @@ export const CONFIG_PATH = CONFIG_PATHS[1];
 
 export const configPath = () => CONFIG_PATHS.find(existsSync) ?? CONFIG_PATH;
 
-const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'claude', buildJob: '', targetBranch: '', jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' } };
+const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'claude', buildJob: '', targetBranch: '', branchPattern: 'feature/{key}', jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' } };
 
 export const DEFAULTS = {
   version: 2,
@@ -120,6 +120,7 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
     agent: p.agent,
     buildJob: p.buildJob,
     targetBranch: p.targetBranch,
+    branchPattern: p.branchPattern || PROJECT_DEFAULT.branchPattern,
     jira: p.jira,
     agentArgs: { ...DEFAULTS.agentArgs, ...(v2.agentArgs || {}) },
     workspace: {

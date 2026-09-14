@@ -13,6 +13,7 @@ import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
 import { cmdPrompts } from './commands/prompts.js';
 import { cmdJira } from './commands/jira.js';
+import { cmdTask } from './commands/task.js';
 import { cmdWatch } from './commands/watch.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
@@ -183,8 +184,8 @@ export const COMMANDS = [
   fromAction(analyzeAction),
   {
     name: 'jira',
-    usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>]',
-    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса и спринта, комментарий',
+    usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|field <KEY> "<поле>" <значение>]',
+    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля',
     example: 'fsh jira mine --sprint current --component Frontend',
     run: (ctx, args, opts) => cmdJira(ctx, args, opts),
     mcp: {
@@ -194,6 +195,29 @@ export const COMMANDS = [
         properties: { key: { type: 'string', description: 'ключ задачи (FD-7647) или mine' } },
       },
       call: (ctx, a) => cmdJira(ctx, [a.key], { json: true, asObject: true }),
+    },
+  },
+  {
+    name: 'task',
+    usage: 'task start <KEY> | task push [KEY] [--target <ветка>]',
+    description: 'Взять задачу в работу (ветка feature/<KEY> от целевой) и запушить её с открытием MR',
+    example: 'fsh task start FD-7719',
+    run: (ctx, args, opts) => cmdTask(ctx, args, opts),
+    mcp: {
+      description: 'start: читает задачу Jira и ставит рабочее дерево на ветку по шаблону проекта (по умолчанию feature/<KEY>), создавая её от целевой ветки. push: пушит текущую ветку в origin и открывает MR в целевую ветку (по умолчанию dev), либо возвращает уже открытый. Меняет git-репозиторий и GitLab.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sub: { type: 'string', enum: ['start', 'push'] },
+          key: { type: 'string', description: 'ключ задачи (FD-7719); для push необязателен, берётся из имени ветки' },
+          target: { type: 'string', description: 'целевая ветка MR, по умолчанию dev' },
+          dir: { type: 'string', description: 'каталог репозитория' },
+        },
+        required: ['sub'],
+      },
+      call: (ctx, a) => cmdTask(ctx, [a.sub, a.key].filter(Boolean), {
+        json: true, asObject: true, yes: true, target: a.target, projectDir: a.dir,
+      }),
     },
   },
   {
