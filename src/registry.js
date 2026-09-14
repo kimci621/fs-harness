@@ -16,6 +16,7 @@ import { cmdJira } from './commands/jira.js';
 import { cmdTask } from './commands/task.js';
 import { cmdGrowthBook } from './commands/growthbook.js';
 import { cmdFlow } from './commands/flow.js';
+import { cmdInit } from './commands/init.js';
 import { cmdWatch } from './commands/watch.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
@@ -299,6 +300,13 @@ export const COMMANDS = [
     },
   },
   {
+    name: 'init',
+    usage: 'init [--check] [--project-dir <dir>]',
+    description: 'Поставить в проект скилл fsh (.claude/skills/fsh) и разрешение на запуск; --check сверяет с реестром',
+    example: 'fsh init --project-dir ~/Projects/fitstars-frontend',
+    run: (ctx, args, opts) => cmdInit(COMMANDS, ctx, opts),
+  },
+  {
     name: 'doctor',
     usage: 'doctor',
     description: 'Самодиагностика: glab, конфиг, API, git, агенты',
@@ -308,11 +316,12 @@ export const COMMANDS = [
       host: opts.host || ctx.cfg.host,
       projectDir: opts.projectDir || ctx.cfg.projectDir,
       json: opts.json,
+      commands: COMMANDS,
     }),
     mcp: {
       description: 'Самодиагностика: glab, конфиг, доступ к API, git-репозиторий, наличие агентов. Только чтение.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      call: (ctx) => cmdDoctor({ repo: ctx.cfg.repo, host: ctx.cfg.host, projectDir: ctx.cfg.projectDir, json: true, asObject: true }),
+      call: (ctx) => cmdDoctor({ repo: ctx.cfg.repo, host: ctx.cfg.host, projectDir: ctx.cfg.projectDir, json: true, asObject: true, commands: COMMANDS }),
     },
   },
   {
