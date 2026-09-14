@@ -1,3 +1,5 @@
+import { listFlows } from './flow.js';
+
 // fsh agent-guide — самодостаточная инструкция для AI-агента.
 // Список команд генерируется из реестра (src/registry.js), чтобы не рассинхронизироваться.
 // Агент запускает эту команду первой и получает всё, что нужно для работы.
@@ -13,6 +15,13 @@ const GUIDE_TEMPLATE = `fsh — CLI для работы с GitLab (MR, пайп�
 -B/--build-job <имя> (дефолт build_image), -w/--watch, -y/--yes, --keep-worktree, --rebuild, --dry-run,
 --resolved/--open (mr-comments), --no-judge / --judge <профиль> / --judge-only <runId> (conflict),
 --for <mr> (prompts show).
+
+## Сценарии
+
+Готовые протоколы работы: пошагово, с точными командами. Разворачивать через fsh flow show <имя>,
+не пересказывать по памяти.
+
+{{FLOWS}}
 
 ## Режим агента (env)
 
@@ -83,16 +92,20 @@ judge_rubric_missing, secret_missing, run_not_found, run_incomplete.
 - git-операции конфликта делаются только в ветке MR (source), target не трогается, force-push запрещён.
 - Side-effect команды без -y/GL_HELPER_YES спрашивают подтверждение и при неинтерактивном stdin откажутся.`;
 
-// Генерирует гайд со списком команд из реестра.
-export function buildAgentGuide(commands) {
+// Генерирует гайд со списком команд из реестра и сценариев из src/prompts/flows.
+export function buildAgentGuide(commands, { projectDir } = {}) {
   const lines = commands
     .filter((c) => c.name !== 'mcp')
     .map((c) => `  fsh ${c.usage.padEnd(24)} ${c.description}`)
     .join('\n');
-  return GUIDE_TEMPLATE.replace('{{COMMANDS}}', lines);
+  const flows = listFlows({ projectDir });
+  const flowLines = flows.length
+    ? flows.map((f) => `  fsh flow show ${f.name.padEnd(12)} ${f.description}`).join('\n')
+    : '  (сценариев нет)';
+  return GUIDE_TEMPLATE.replace('{{COMMANDS}}', lines).replace('{{FLOWS}}', flowLines);
 }
 
-export function cmdAgentGuide(commands) {
-  console.log(buildAgentGuide(commands));
+export function cmdAgentGuide(commands, opts = {}) {
+  console.log(buildAgentGuide(commands, opts));
   return 0;
 }

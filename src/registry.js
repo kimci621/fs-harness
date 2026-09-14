@@ -15,6 +15,7 @@ import { cmdPrompts } from './commands/prompts.js';
 import { cmdJira } from './commands/jira.js';
 import { cmdTask } from './commands/task.js';
 import { cmdGrowthBook } from './commands/growthbook.js';
+import { cmdFlow } from './commands/flow.js';
 import { cmdWatch } from './commands/watch.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
@@ -280,6 +281,24 @@ export const COMMANDS = [
     },
   },
   {
+    name: 'flow',
+    usage: 'flow [list|show <имя>]',
+    description: 'Сценарии работы: пошаговые протоколы для агента (взять задачу, запушить, заполнить поля Jira)',
+    example: 'fsh flow show take-task',
+    run: (ctx, args, opts) => cmdFlow(args, opts, ctx),
+    mcp: {
+      description: 'Сценарии работы: list — список протоколов с описаниями, show <имя> — полный текст протокола (пошаговая инструкция с командами fsh). Только чтение.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sub: { type: 'string', enum: ['list', 'show'] },
+          name: { type: 'string', description: 'имя сценария, например take-task' },
+        },
+      },
+      call: (ctx, a) => cmdFlow([a.sub ?? 'list', a.name].filter(Boolean), { json: true, asObject: true }, ctx),
+    },
+  },
+  {
     name: 'doctor',
     usage: 'doctor',
     description: 'Самодиагностика: glab, конфиг, API, git, агенты',
@@ -301,11 +320,11 @@ export const COMMANDS = [
     usage: 'agent-guide',
     description: 'Полная инструкция для AI-агентов (что читать первой)',
     example: 'fsh agent-guide',
-    run: () => cmdAgentGuide(COMMANDS),
+    run: (ctx) => cmdAgentGuide(COMMANDS, { projectDir: ctx.cfg?.projectDir }),
     mcp: {
       description: 'Полная инструкция по работе с fsh: команды, флаги, JSON-схемы, коды ошибок. Вызови первой, если не знаешь, как работать с инструментами.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      call: () => ({ ok: true, guide: buildAgentGuide(COMMANDS) }),
+      call: (ctx) => ({ ok: true, guide: buildAgentGuide(COMMANDS, { projectDir: ctx.cfg?.projectDir }) }),
     },
   },
   {
