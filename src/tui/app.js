@@ -833,6 +833,7 @@ const rowLines = (tab, r, width) => (tab === 'issues' ? issueCard(r, width - 1) 
 
 
 const COL_MIN = 26; // уже этого карточка нечитаема
+const GUTTER = 3; // между колонками: линия и воздух с обеих сторон
 
 // Доска: те же колонки, что человек видит в Jira. Пустых нет, видимые листаются h/l.
 function Board({ state, height, width }) {
@@ -840,38 +841,34 @@ function Board({ state, height, width }) {
   if (state.loading.issues && !cols.length) return html`<${Text} dimColor>загружаю…<//>`;
   if (!cols.length) return html`<${Text} dimColor>${state.columns.length ? 'ни одна задача не попала на доску' : 'колонки доски ещё не прочитаны'}<//>`;
 
-  const fit = Math.max(1, Math.min(cols.length, Math.floor(width / COL_MIN)));
+  const fit = Math.max(1, Math.min(cols.length, Math.floor((width + GUTTER) / (COL_MIN + GUTTER))));
   const from = Math.max(0, Math.min(state.boardCursor.col - Math.floor(fit / 2), cols.length - fit));
-  const colWidth = Math.floor(width / fit);
+  const colWidth = Math.floor((width - GUTTER * (fit - 1)) / fit);
   const perCard = 3; // две строки карточки и отбивка
   const rows = Math.max(1, Math.floor((height - 1) / perCard));
 
-  return html`<${Box} flexDirection="column">
-    <${Box}>
-      ${cols.slice(from, from + fit).map((c, i) => html`
-        <${Box} key=${c.name} width=${colWidth} flexShrink=${0}>
-          <${Text} bold color=${from + i === state.boardCursor.col ? 'cyan' : undefined} wrap="truncate-end">${c.name} ${c.items.length}<//>
-        <//>
-      `)}
-    <//>
-    <${Box}>
-      ${cols.slice(from, from + fit).map((c, ci) => {
-        const active = from + ci === state.boardCursor.col;
-        const start = active ? Math.max(0, Math.min(state.boardCursor.row - Math.floor(rows / 2), c.items.length - rows)) : 0;
-        return html`<${Box} key=${c.name} width=${colWidth} flexShrink=${0} flexDirection="column">
-          ${c.items.slice(start, start + rows).flatMap((it, i) => {
-            const here = active && start + i === state.boardCursor.row;
-            return [
-              ...cardRows(it).map((l, k) => html`<${Box} key=${`${it.key}-${k}`}>
-                <${Marker} active=${here && k === 0} />
-                <${Text} wrap="truncate-end">${l.parts.map((pt, j) => html`<${Text} key=${j} bold=${pt.bold || here} dimColor=${pt.dim} color=${pt.color}>${pt.text}<//>`)}<//>
-              <//>`),
-              html`<${Text} key=${`${it.key}-sep`} dimColor wrap="truncate-end">${'─'.repeat(Math.max(1, colWidth - 1))}<//>`,
-            ];
-          })}
-        <//>`;
-      })}
-    <//>
+  return html`<${Box}>
+    ${cols.slice(from, from + fit).flatMap((c, ci) => {
+      const active = from + ci === state.boardCursor.col;
+      const start = active ? Math.max(0, Math.min(state.boardCursor.row - Math.floor(rows / 2), c.items.length - rows)) : 0;
+      const col = html`<${Box} key=${c.name} width=${colWidth} flexShrink=${0} flexDirection="column">
+        <${Text} bold color=${active ? 'cyan' : undefined} wrap="truncate-end">${c.name} ${c.items.length}<//>
+        ${c.items.slice(start, start + rows).flatMap((it, i) => {
+          const here = active && start + i === state.boardCursor.row;
+          return [
+            ...cardRows(it).map((l, k) => html`<${Box} key=${`${it.key}-${k}`}>
+              <${Marker} active=${here && k === 0} />
+              <${Text} wrap="truncate-end">${l.parts.map((pt, j) => html`<${Text} key=${j} bold=${pt.bold || here} dimColor=${pt.dim} color=${pt.color}>${pt.text}<//>`)}<//>
+            <//>`),
+            html`<${Text} key=${`${it.key}-sep`} dimColor wrap="truncate-end">${'─'.repeat(Math.max(1, colWidth - 1))}<//>`,
+          ];
+        })}
+      <//>`;
+      // Колонки разделены бледной линией во всю высоту доски: без неё карточки соседних колонок слипаются.
+      return ci ? [html`<${Box} key=${`${c.name}-gut`} width=${1} flexShrink=${0} marginX=${1} flexDirection="column">
+        ${Array.from({ length: height }, (_, i) => html`<${Text} key=${i} dimColor>│<//>`)}
+      <//>`, col] : [col];
+    })}
   <//>`;
 }
 
