@@ -6,7 +6,7 @@ import { fieldByName, fieldText, openSprints } from '../jira.js';
 
 export const TABS = [
   { key: 'mr', title: 'MR', hint: 'a решить конфликт · t обработать тикеты · r локальное ревью · p пайплайн · f фильтры' },
-  { key: 'issues', title: 'Задачи', hint: 'v доска · n проанализировать · s статус · S спринт · E поле · c коммент · f фильтры' },
+  { key: 'issues', title: 'Задачи', hint: 'v доска · n проанализировать · s статус · S спринт · E поле · p родитель · c коммент · f фильтры' },
   { key: 'runs', title: 'История', hint: 'прошлые запуски действий: вердикт, цена, каталог' },
   { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
 ];
@@ -123,7 +123,7 @@ export const initialState = (project = '') => ({
   cursor: { mr: 0, issues: 0, runs: 0, prompts: 0 },
   items: { mr: [], issues: [], runs: [], prompts: [] },
   loading: { mr: true, issues: false, runs: true, prompts: false },
-  scroll: { details: 0, log: 0 }, // details — строк вниз от начала, log — строк вверх от конца
+  scroll: { details: 0, log: 0, x: 0 }, // details — строк вниз от начала, log — строк вверх от конца
   expand: false,
   board: false, // вкладка задач: доска вместо списка
   boardCursor: { col: 0, row: 0 },
@@ -147,7 +147,7 @@ const clamp = (i, len) => (len === 0 ? 0 : Math.max(0, Math.min(i, len - 1)));
 export function reduce(state, ev) {
   switch (ev.type) {
     case 'tab':
-      return { ...state, tab: ev.tab, help: false, searching: false, focus: 'list', scroll: { details: 0, log: state.scroll.log } };
+      return { ...state, tab: ev.tab, help: false, searching: false, focus: 'list', scroll: { details: 0, log: state.scroll.log, x: 0 } };
     case 'nextTab': {
       const i = TABS.findIndex((t) => t.key === state.tab);
       return reduce(state, { type: 'tab', tab: TABS[(i + 1 + TABS.length) % TABS.length].key });
@@ -162,7 +162,7 @@ export function reduce(state, ev) {
       return {
         ...state,
         cursor: { ...state.cursor, [state.tab]: clamp(state.cursor[state.tab] + ev.by, len) },
-        scroll: { ...state.scroll, details: 0 },
+        scroll: { ...state.scroll, details: 0, x: 0 },
       };
     }
     case 'boardToggle':
@@ -176,6 +176,8 @@ export function reduce(state, ev) {
       const row = clamp(state.boardCursor.row + (ev.row ?? 0), cols[col].items.length);
       return { ...state, boardCursor: { col, row }, scroll: { ...state.scroll, details: 0 } };
     }
+    case 'scrollX': // вбок двигаются обе панели разом: иначе непонятно, что именно ты сдвинул
+      return { ...state, scroll: { ...state.scroll, x: Math.max(0, state.scroll.x + ev.by) } };
     case 'scroll': {
       // У лога отсчёт от конца: он дописывается снизу, и «ноль» должен значить «самое свежее».
       const pane = state.focus === 'log' ? 'log' : 'details';
@@ -332,6 +334,19 @@ const LBL = { dim: true };                   // подписи полей
 const seg = (text, style = {}) => ({ text: String(text ?? ''), ...style });
 const line = (...parts) => ({ parts: parts.filter((p) => p && p.text !== '') });
 const GAP = { gap: true, parts: [] };        // пустая строка между смысловыми группами
+// Боковой сдвиг строки: панель обрезает текст справа, а прочитать хвост иначе нечем.
+export function shiftLine(l, off) {
+  if (!off || l.gap) return l;
+  let left = off;
+  const parts = [];
+  for (const p of l.parts) {
+    if (left >= p.text.length) { left -= p.text.length; continue; }
+    parts.push(left ? { ...p, text: p.text.slice(left) } : p);
+    left = 0;
+  }
+  return { ...l, parts };
+}
+
 export const lineText = (l) => (l?.parts ?? []).map((p) => p.text).join('');
 
 // Абзацы описания и комментариев переносятся по словам, а не обрезаются: текст задачи
@@ -378,13 +393,49 @@ export function mrRow(r) {
 }
 
 // Строка задачи: статус между ключом и названием — по нему и ищут глазами.
-export const issueRow = (r) => line(
-  seg(r.key, KEY),
-  seg(' · '),
-  seg(r.fields?.status?.name ?? '—', { color: statusTone(r.fields?.status) }),
-  seg(' · '),
-  seg(r.fields?.summary ?? ''),
-);
+// Перенос по словам с потолком: хвост, который не влез, обрезается многоточием.
+export function wrapText(text, width, max = Infinity) {
+  const words = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length || !(width > 0)) return [String(text ?? '')];
+  const out = [];
+  let cur = '';
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (next.length > width && cur) {
+      out.push(cur);
+      if (out.length === max) return [...out.slice(0, -1), `${cur.slice(0, Math.max(1, width - 1))}…`];
+      cur = w;
+    } else cur = next;
+  }
+  out.push(cur);
+  return out;
+}
+
+// Строка задачи в списке — карточка в несколько строк: кто делает, как называется,
+// какие метки и от какой родительской задачи. В одну строку это не помещалось.
+export function issueCard(r, width = 60) {
+  const f = r.fields ?? {};
+  const parent = f.parent;
+  const labels = f.labels ?? [];
+  const title = wrapText(f.summary ?? '', Math.max(10, width - 1), 3);
+  return [
+    line(
+      seg(r.key, KEY),
+      seg(' · '),
+      seg(f.status?.name ?? '—', { color: statusTone(f.status) }),
+      seg(' · '),
+      seg(fieldText(f.assignee) || 'нету', f.assignee ? VAL : { dim: true }),
+    ),
+    ...title.map((t) => line(seg(t))),
+    labels.length || parent
+      ? line(
+        labels.length ? seg(labels.join(', '), { color: 'blue' }) : null,
+        labels.length && parent ? seg(' · ', LBL) : null,
+        parent ? seg(`↑ ${parent.key} ${parent.fields?.summary ?? ''}`, LBL) : null,
+      )
+      : null,
+  ].filter(Boolean);
+}
 
 export const cardRows = (r) => [
   line(seg(r.key, KEY), seg(`  ${fieldText(r.fields?.priority) || ''}`, LBL)),
@@ -556,6 +607,8 @@ export function keyIntent(input, key, state) {
     if (key.pageUp) return { type: 'boardMove', row: -10 };
     if (key.pageDown) return { type: 'boardMove', row: 10 };
   }
+  if (key.leftArrow) return { type: 'scrollX', by: -8 };
+  if (key.rightArrow) return { type: 'scrollX', by: 8 };
   const scroll = state.focus === 'list' ? null : 'scroll';
   if (key.upArrow || input === 'k') return { type: scroll ?? 'move', by: -1 };
   if (key.downArrow || input === 'j') return { type: scroll ?? 'move', by: 1 };
@@ -570,6 +623,7 @@ export function keyIntent(input, key, state) {
   if (input === 'S' && state.tab === 'issues') return { type: 'sprint' };
   if (input === 'c' && state.tab === 'issues') return { type: 'comment' };
   if (input === 'E' && state.tab === 'issues') return { type: 'editField' };
+  if (input === 'p' && state.tab === 'issues') return { type: 'parent' };
   if (input === 'p' && state.tab === 'mr') return { type: 'pipeline' };
   if (input === 'f' && (state.tab === 'mr' || state.tab === 'issues')) return { type: 'openFilters' };
   if (input === 'R') return { type: 'reload' };
