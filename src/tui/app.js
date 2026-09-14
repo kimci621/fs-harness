@@ -6,7 +6,7 @@ import TextInput from 'ink-text-input';
 import htm from 'htm';
 import {
   TABS, fieldsFor, promptRow, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
-  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, flowLines, visibleItems, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
+  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, flowLines, visibleItems, onBoard, boardLanes, cardRows, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
 import { fieldText, editValueFor } from '../jira.js';
@@ -297,6 +297,45 @@ export function App({ ctx, opts }) {
     });
   }
 
+  // Колонки доски читаем один раз: это настройка проекта, за сессию она не меняется.
+  async function loadColumns() {
+    if (state.columns.length) return;
+    try {
+      const j = jira();
+      const projectKey = ctx.cfg.jira?.projectKey || selected(state)?.key?.split('-')[0];
+      const { values: boards = [] } = (await j.boards(projectKey)) ?? {};
+      if (!boards.length) throw new Error(`у проекта ${projectKey} нет доски`);
+      const conf = await withBusy('колонки доски', () => j.boardConfig(boards[0].id));
+      dispatch({ type: 'columns', columns: conf?.columnConfig?.columns ?? [] });
+    } catch (err) {
+      dispatch({ type: 'error', tab: 'issues', message: `доска: ${err.message}` });
+    }
+  }
+
+  // Перенос карточки — это переход по статусу: ищем тот, что ведёт в статус соседней колонки.
+  async function moveCard(by) {
+    const item = selected(state);
+    const cols = boardLanes(state);
+    const target = state.columns.find((c) => c.name === cols[state.boardCursor.col + by]?.name);
+    if (!item?.key || !target) return;
+    const ids = new Set((target.statuses ?? []).map((st) => String(st.id)));
+    try {
+      const j = jira();
+      const { transitions = [] } = await withBusy(`переходы ${item.key}`, () => j.transitions(item.key));
+      const hit = transitions.find((t) => ids.has(String(t.to?.id)));
+      if (!hit) {
+        bufferRef.current.push(`${item.key} ▸ ❌ в «${target.name}» отсюда перехода нет`);
+        return;
+      }
+      await withBusy(`${item.key} → ${hit.to?.name ?? hit.name}`, () => j.transition(item.key, hit.id));
+      bufferRef.current.push(`${item.key} ▸ ${hit.to?.name ?? hit.name}`);
+      dispatch({ type: 'boardMove', col: by });
+      await load('issues');
+    } catch (err) {
+      bufferRef.current.push(`${item.key} ▸ ❌ ${err.message}`);
+    }
+  }
+
   // Что у задачи можно править, спрашиваем у самой Jira: editmeta знает и список полей,
   // и форму значения. Показываем только то, что есть чем заполнить — люди и готовые опции.
   async function openEditFields() {
@@ -508,6 +547,13 @@ export function App({ ctx, opts }) {
     if (intent.type === 'openFilters') return openFilters();
     if (intent.type === 'searchOpen' || intent.type === 'searchClose') return void dispatch(intent);
     if (intent.type === 'editField') return void openEditFields();
+    if (intent.type === 'boardToggle') {
+      dispatch(intent);
+      if (!state.board) loadColumns();
+      return;
+    }
+    if (intent.type === 'boardMove') return void dispatch(intent);
+    if (intent.type === 'moveCard') return void moveCard(intent.by);
     if (intent.type === 'promptOverride' || intent.type === 'promptDrop') return promptSource(intent.type === 'promptOverride');
     if (intent.type === 'pipeline') return void openPipeline().catch((err) => dispatch({ type: 'error', tab: 'mr', message: err.message }));
     if (intent.type === 'modalApply') {
@@ -590,6 +636,11 @@ export function App({ ctx, opts }) {
 
 // Где мы в списке — единственное место, где это видно, когда строк больше экрана.
 const position = (state) => {
+  if (onBoard(state)) {
+    const cols = boardLanes(state);
+    const col = cols[state.boardCursor.col];
+    return col ? `${col.name}: ${state.boardCursor.row + 1}/${col.items.length}` : 'доска пуста';
+  }
   const len = visibleItems(state).length;
   return len ? `${state.cursor[state.tab] + 1}/${len}` : '0/0';
 };
@@ -602,6 +653,7 @@ const Help = ({ height }) =>
     <${Text}>p — пайплайн MR: все джобы и их запуск · f — фильтры списка MR<//>
     <${Text}>n — проанализировать задачу · s — статус · S — спринт · c — комментарий · e — раскрыть поля<//>
     <${Text}>E — изменить поле задачи: Assignee, Ответственный разработчик, Priority и всё, что даёт Jira<//>
+    <${Text}>v — доска вместо списка задач: h/l — колонки, j/k — карточки, H/L — перенести карточку<//>
     <${Text}>/ — поиск по списку (терпит опечатки, ищет по всем полям) · f — фильтры списка MR<//>
     <${Text}>x — прервать все запуски · R — перечитать список · o — открыть в браузере · q — выход<//>
     <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
@@ -670,7 +722,8 @@ function Modal({ modal, filters, fields, optionsFor, height, onSubmit, onChange 
 function Body({ state, item, width, height, onSearch, onSearchDone }) {
   // Узкий терминал: две колонки по 40 знаков нечитаемы, поэтому показываем ту,
   // что в фокусе, и Tab становится переключателем «список ↔ карточка».
-  const narrow = width < NARROW;
+  const board = onBoard(state);
+  const narrow = width < NARROW || board; // доске нужна вся ширина: колонки по 26 знаков
   const onDetails = state.focus === 'details';
   const listWidth = narrow ? width : Math.max(30, Math.floor(width * (state.tab === 'mr' ? 0.58 : 0.45)));
   const inner = Math.max(1, height - 2); // рамка сверху и снизу
@@ -687,7 +740,9 @@ function Body({ state, item, width, height, onSearch, onSearchDone }) {
               <${Text} dimColor> · ${visibleItems(state).length} из ${state.items[state.tab].length}<//>
             <//>`
           : null}
-        <${List} state=${state} height=${state.searching || state.search[state.tab] ? inner - 1 : inner} width=${listWidth - 4} />
+        ${board
+          ? html`<${Board} state=${state} height=${inner} width=${listWidth - 4} />`
+          : html`<${List} state=${state} height=${state.searching || state.search[state.tab] ? inner - 1 : inner} width=${listWidth - 4} />`}
       <//>`}
       ${narrow && !onDetails ? null : html`<${Box} flexDirection="column" flexGrow=${1} minWidth=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${onDetails ? 'cyan' : 'gray'}>
         <${Details} state=${state} item=${item} height=${inner} width=${detailsWidth} />
@@ -727,6 +782,49 @@ function List({ state, height, width }) {
 }
 
 const row = (tab, r) => (tab === 'issues' ? issueRow(r) : tab === 'prompts' ? promptRow(r) : runRow(r));
+
+const COL_MIN = 26; // уже этого карточка нечитаема
+
+// Доска: те же колонки, что человек видит в Jira. Пустых нет, видимые листаются h/l.
+function Board({ state, height, width }) {
+  const cols = boardLanes(state);
+  if (state.loading.issues && !cols.length) return html`<${Text} dimColor>загружаю…<//>`;
+  if (!cols.length) return html`<${Text} dimColor>${state.columns.length ? 'ни одна задача не попала на доску' : 'колонки доски ещё не прочитаны'}<//>`;
+
+  const fit = Math.max(1, Math.min(cols.length, Math.floor(width / COL_MIN)));
+  const from = Math.max(0, Math.min(state.boardCursor.col - Math.floor(fit / 2), cols.length - fit));
+  const colWidth = Math.floor(width / fit);
+  const perCard = 3; // две строки карточки и отбивка
+  const rows = Math.max(1, Math.floor((height - 1) / perCard));
+
+  return html`<${Box} flexDirection="column">
+    <${Box}>
+      ${cols.slice(from, from + fit).map((c, i) => html`
+        <${Box} key=${c.name} width=${colWidth} flexShrink=${0}>
+          <${Text} bold color=${from + i === state.boardCursor.col ? 'cyan' : undefined} wrap="truncate-end">${c.name} ${c.items.length}<//>
+        <//>
+      `)}
+    <//>
+    <${Box}>
+      ${cols.slice(from, from + fit).map((c, ci) => {
+        const active = from + ci === state.boardCursor.col;
+        const start = active ? Math.max(0, Math.min(state.boardCursor.row - Math.floor(rows / 2), c.items.length - rows)) : 0;
+        return html`<${Box} key=${c.name} width=${colWidth} flexShrink=${0} flexDirection="column">
+          ${c.items.slice(start, start + rows).flatMap((it, i) => {
+            const here = active && start + i === state.boardCursor.row;
+            return [
+              ...cardRows(it).map((l, k) => html`<${Box} key=${`${it.key}-${k}`}>
+                <${Marker} active=${here && k === 0} />
+                <${Text} wrap="truncate-end">${l.parts.map((pt, j) => html`<${Text} key=${j} bold=${pt.bold || here} dimColor=${pt.dim} color=${pt.color}>${pt.text}<//>`)}<//>
+              <//>`),
+              html`<${Text} key=${`${it.key}-sep`} dimColor wrap="truncate-end">${'─'.repeat(Math.max(1, colWidth - 1))}<//>`,
+            ];
+          })}
+        <//>`;
+      })}
+    <//>
+  <//>`;
+}
 
 // Маркер курсора не жмётся: иначе на обрезанной строке ink съедает его ширину и строки разъезжаются.
 const Marker = ({ active }) => html`<${Box} flexShrink=${0} width=${1}><${Text} color="cyan">${active ? '▌' : ' '}<//><//>`;

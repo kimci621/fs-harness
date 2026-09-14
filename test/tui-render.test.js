@@ -299,3 +299,48 @@ test('TUI: f на задачах — assignee «все» перезапраши�
     app.unmount();
   }
 });
+
+// Доска: колонки настоящие, из конфигурации доски Jira; H/L двигает карточку переходом статуса.
+test('TUI: v рисует доску, H/L переносит карточку, v возвращает список', async () => {
+  const moved = [];
+  const iss = (key, sid, name, summary) => ({ key, fields: { summary, status: { id: sid, name }, updated: new Date().toISOString() } });
+  const columns = [
+    { name: 'To do', statuses: [{ id: '1' }] },
+    { name: 'Design', statuses: [{ id: '8' }] }, // пустая
+    { name: 'Development', statuses: [{ id: '3' }] },
+  ];
+  const ctxBoard = {
+    ...ctx,
+    cfg: { ...ctx.cfg, jira: { projectKey: 'FD' } },
+    jira: () => ({
+      ...ctx.jira(),
+      searchJql: async () => ({ issues: [iss('FD-1', '1', 'К выполнению', 'чекаут'), iss('FD-2', '3', 'В работе', 'промокоды')] }),
+      boards: async () => ({ values: [{ id: 7, name: 'FitStars' }] }),
+      boardConfig: async () => ({ columnConfig: { columns } }),
+      transitions: async () => ({ transitions: [{ id: '11', name: 'В работу', to: { id: '3', name: 'В работе' } }] }),
+      transition: async (key, id) => { moved.push([key, id]); return null; },
+    }),
+  };
+  const app = render(React.createElement(App, { ctx: ctxBoard, opts: {} }));
+  try {
+    await tick(300);
+    app.stdin.write('2');
+    await tick(300);
+    app.stdin.write('v');
+    await tick(400);
+    assert.match(app.lastFrame(), /To do 1/);
+    assert.match(app.lastFrame(), /Development 1/);
+    assert.doesNotMatch(app.lastFrame(), /Design/); // пустая колонка скрыта
+    assert.match(app.lastFrame(), /▌FD-1/);
+
+    app.stdin.write('L'); // перенести карточку в соседнюю колонку
+    await tick(400);
+    assert.deepEqual(moved, [['FD-1', '11']]);
+
+    app.stdin.write('v');
+    await tick(300);
+    assert.match(app.lastFrame(), /FD-1 · К выполнению · чекаут/); // снова список
+  } finally {
+    app.unmount();
+  }
+});
