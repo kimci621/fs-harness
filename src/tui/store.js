@@ -6,7 +6,7 @@ import { fieldByName, fieldText, openSprints } from '../jira.js';
 
 export const TABS = [
   { key: 'mr', title: 'MR', hint: 'a решить конфликт · t обработать тикеты · r локальное ревью · p пайплайн · f фильтры' },
-  { key: 'issues', title: 'Задачи', hint: 'n проанализировать задачу · s статус · S спринт · E поле · c комментарий · e раскрыть' },
+  { key: 'issues', title: 'Задачи', hint: 'n проанализировать · s статус · S спринт · E поле · c коммент · e раскрыть · f фильтры' },
   { key: 'runs', title: 'История', hint: 'прошлые запуски действий: вердикт, цена, каталог' },
   { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
 ];
@@ -78,26 +78,41 @@ export function filterOptions(key, rows = []) {
   ];
 }
 
+// Фильтры задач — те же, что в самом Jira: их значения складываются в JQL (buildJql),
+// свой язык запросов поверх чужого не выдумываем.
+export const ISSUE_FILTER_FIELDS = [
+  { key: 'assignee', label: 'Assignee', type: 'option' },
+  { key: 'status', label: 'Статус', type: 'option' },
+  { key: 'sprint', label: 'Спринт', type: 'option' },
+  { key: 'component', label: 'Компонент', type: 'option' },
+  { key: 'jql', label: 'Свой JQL', type: 'text' },
+];
+
+export const fieldsFor = (tab) => (tab === 'issues' ? ISSUE_FILTER_FIELDS : FILTER_FIELDS);
+
+// Значения, которых нет в списках: они не приходят из Jira, их понимает buildJql.
+const SPECIAL = { me: 'я', any: 'все', current: 'текущий' };
+
 const TRI = [null, true, false]; // не важно → да → нет
 
 export function toggleFilter(filters, key) {
-  const field = FILTER_FIELDS.find((f) => f.key === key);
+  const field = [...FILTER_FIELDS, ...ISSUE_FILTER_FIELDS].find((f) => f.key === key);
   if (field?.type === 'flag') return { ...filters, [key]: !filters[key] || null };
   if (field?.type === 'tri') return { ...filters, [key]: TRI[(TRI.indexOf(filters[key] ?? null) + 1) % TRI.length] };
   return filters;
 }
 
-export const filterValueText = (field, v, rows = []) => {
-  if (field.type === 'option') return v == null || v === '' ? '—' : filterOptions(field.key, rows).find((o) => o.value === v)?.label ?? v;
+export const filterValueText = (field, v, options = []) => {
+  if (field.type === 'option') return v == null || v === '' ? '—' : options.find((o) => o.value === v)?.label ?? SPECIAL[v] ?? v;
   if (field.type === 'text') return v || '—';
   if (field.type === 'flag') return v ? 'да' : '—';
   return v === true ? 'да' : v === false ? 'нет' : '—';
 };
 
 // Короткая сводка активных фильтров для шапки: иначе непонятно, почему список поредел.
-export function filterSummary(filters = {}, rows = []) {
-  const parts = FILTER_FIELDS.filter((f) => filters[f.key] !== null && filters[f.key] !== undefined && filters[f.key] !== '')
-    .map((f) => `${f.label.toLowerCase()}=${filterValueText(f, filters[f.key], rows)}`);
+export function filterSummary(filters = {}, fields = FILTER_FIELDS, optionsFor = () => []) {
+  const parts = fields.filter((f) => filters[f.key] !== null && filters[f.key] !== undefined && filters[f.key] !== '')
+    .map((f) => `${f.label.toLowerCase()}=${filterValueText(f, filters[f.key], optionsFor(f.key))}`);
   return parts.join(', ');
 }
 
@@ -112,7 +127,8 @@ export const initialState = (project = '') => ({
   expand: false,
   search: { mr: '', issues: '', runs: '', prompts: '' }, // запрос на вкладку
   searching: false, // открыто поле ввода поиска
-  filters: {},
+  filters: { mr: {}, issues: { assignee: 'me' } }, // по умолчанию задачи только мои, как было
+  options: { issues: {} }, // варианты фильтров, прочитанные из Jira: ключ поля → [{value,label}]
   details: {}, // ключ задачи → {issue, comments}: подробности догружаются по выбору
   prompts: {}, // имя шаблона → текст: читается с диска при выборе строки
   error: null,
@@ -171,8 +187,10 @@ export function reduce(state, ev) {
       return { ...state, details: { ...state.details, [ev.key]: { issue: ev.issue, comments: ev.comments ?? [] } } };
     case 'promptBody':
       return { ...state, prompts: { ...state.prompts, [ev.name]: ev.body } };
-    case 'filters':
-      return { ...state, filters: ev.filters };
+    case 'filterOptions':
+      return { ...state, options: { ...state.options, issues: { ...state.options.issues, [ev.key]: ev.items } } };
+    case 'filters': // фильтры свои у каждой вкладки: список MR и список задач фильтруются по-разному
+      return { ...state, filters: { ...state.filters, [ev.tab ?? state.tab]: ev.filters }, cursor: { ...state.cursor, [ev.tab ?? state.tab]: 0 } };
     case 'loading':
       return { ...state, loading: { ...state.loading, [ev.tab]: true } };
     case 'error':
@@ -279,6 +297,27 @@ const seg = (text, style = {}) => ({ text: String(text ?? ''), ...style });
 const line = (...parts) => ({ parts: parts.filter((p) => p && p.text !== '') });
 const GAP = { gap: true, parts: [] };        // пустая строка между смысловыми группами
 export const lineText = (l) => (l?.parts ?? []).map((p) => p.text).join('');
+
+// Абзацы описания и комментариев переносятся по словам, а не обрезаются: текст задачи
+// в одну строку не читается. Остальные строки — поля и заголовки — по-прежнему обрезаются.
+export function flowLines(lines, width) {
+  if (!(width > 0)) return lines;
+  return lines.flatMap((l) => {
+    if (!l.flow) return [l];
+    const style = l.parts[0] ?? {};
+    const indent = /^\s*/.exec(style.text ?? '')[0];
+    const words = String(style.text ?? '').trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return [l];
+    const out = [];
+    let cur = indent;
+    for (const w of words) {
+      const next = cur.trim() ? `${cur} ${w}` : `${cur}${w}`;
+      if (next.length > width && cur.trim()) { out.push(cur); cur = `${indent}${w}`; } else cur = next;
+    }
+    out.push(cur);
+    return out.map((text) => ({ parts: [{ ...style, text }], flow: true }));
+  });
+}
 
 const PIPE_TONE = { success: 'green', failed: 'red', canceled: 'gray', running: 'cyan', manual: 'yellow' };
 export const pipeTone = (status) => PIPE_TONE[status] ?? 'yellow';
@@ -411,7 +450,7 @@ function issueDetails(item, full, comments, expand) {
       seg(` · ${body ? `${lines.length} стр.` : 'пусто'}`, LBL),
       body && !expand ? seg(' · e раскрыть', LBL) : null,
     ));
-    if (expand && body) for (const l of lines) rows.push(line(seg(`  ${l}`)));
+    if (expand && body) for (const l of lines) rows.push({ ...line(seg(`  ${l}`)), flow: true });
     rows.push(GAP);
   }
   return rows.filter(Boolean);
@@ -423,7 +462,7 @@ function promptDetails(item, body) {
     line(seg('источник  ', LBL), seg(item.overridden ? item.source : 'встроенный', { color: item.overridden ? 'yellow' : undefined })),
     item.vars?.length ? line(seg('переменные ', LBL), seg(item.vars.join(', '), { color: 'blue' })) : null,
     GAP,
-    ...String(body ?? '').split('\n').map((l) => line(seg(l))),
+    ...String(body ?? '').split('\n').map((l) => ({ ...line(seg(l)), flow: true })),
   ].filter(Boolean);
 }
 
@@ -479,7 +518,7 @@ export function keyIntent(input, key, state) {
   if (input === 'c' && state.tab === 'issues') return { type: 'comment' };
   if (input === 'E' && state.tab === 'issues') return { type: 'editField' };
   if (input === 'p' && state.tab === 'mr') return { type: 'pipeline' };
-  if (input === 'f' && state.tab === 'mr') return { type: 'openFilters' };
+  if (input === 'f' && (state.tab === 'mr' || state.tab === 'issues')) return { type: 'openFilters' };
   if (input === 'R') return { type: 'reload' };
   const launch = LAUNCH[input];
   if (launch && launch.tab === state.tab) return { type: 'launch', action: launch.action };

@@ -104,7 +104,7 @@ test('TUI: рисует MR, переключает вкладку и показ�
     const issues = app.lastFrame();
     assert.match(issues, /FD-1 · В работе · Починить/); // статус между ключом и названием
     assert.match(issues, /─{10}/); // бледная линия между строками списка
-    assert.match(issues, /n проанализировать задачу/);
+    assert.match(issues, /n проанализировать · s статус/);
     assert.match(issues, /Assignee {2}Амир/);
     assert.match(issues, /Ответственный разработчик {2}Амир/);
     assert.match(issues, /Sprint {4}Спринт 18 \(active\)/);
@@ -253,6 +253,48 @@ test('TUI: E правит поле задачи — выбор поля, выб�
     app.stdin.write('\r');
     await tick(300);
     assert.deepEqual(puts[1], { key: 'FD-1', fields: { labels: ['Frontend', 'ui'] } });
+  } finally {
+    app.unmount();
+  }
+});
+
+// Задачи по умолчанию мои, но фильтруются как в самом Jira — значения приходят оттуда же.
+test('TUI: f на задачах — assignee «все» перезапрашивает список другим JQL', async () => {
+  const jqls = [];
+  const ctxJira = {
+    ...ctx,
+    cfg: { ...ctx.cfg, jira: { projectKey: 'FD', componentField: 'Компонент' } },
+    jira: () => ({
+      ...ctx.jira(),
+      searchJql: async ({ jql }) => { jqls.push(jql); return { issues: [{ key: 'FD-1', fields: { summary: 'Починить', status: { name: 'В работе' }, updated: new Date().toISOString() } }] }; },
+      projectUsers: async () => [{ accountId: 'a2', displayName: 'Эмиль Латыпов' }],
+    }),
+  };
+  const app = render(React.createElement(App, { ctx: ctxJira, opts: {} }));
+  try {
+    await tick(300);
+    app.stdin.write('2');
+    await tick(300);
+    assert.match(jqls[0], /assignee = currentUser\(\)/); // по умолчанию только мои
+
+    app.stdin.write('f');
+    await tick(150);
+    assert.match(app.lastFrame(), /Фильтры списка задач/);
+    assert.match(app.lastFrame(), /Assignee {2,}я/);
+    assert.match(app.lastFrame(), /Свой JQL/);
+
+    app.stdin.write('\r'); // варианты assignee: я, все, люди проекта
+    await tick(250);
+    assert.match(app.lastFrame(), /Эмиль Латыпов/);
+    app.stdin.write('j'); await tick(60);
+    app.stdin.write('\r'); // «все»
+    await tick(200);
+    assert.match(app.lastFrame(), /Assignee {2,}все/);
+
+    app.stdin.write('\u001B'); // Esc — применить и перечитать список
+    await tick(300);
+    assert.doesNotMatch(jqls.at(-1), /assignee/);
+    assert.match(jqls.at(-1), /statusCategory != Done/);
   } finally {
     app.unmount();
   }
