@@ -89,6 +89,12 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     transition: (key, id) =>
       api(`/rest/api/2/issue/${encodeURIComponent(key)}/transitions`, { method: 'POST', body: { transition: { id: String(id) } }, retries: 1 }),
 
+    // Статусы проекта приходят пачками по типам задач — имена дублируются, их дедуплицирует вызов.
+    statuses: (projectKey) => api(`/rest/api/2/project/${encodeURIComponent(projectKey)}/statuses`),
+
+    projectUsers: (projectKey) =>
+      api(`/rest/api/2/user/assignable/search?project=${encodeURIComponent(projectKey)}&maxResults=50`),
+
     // Доски и спринты живут в отдельном agile-API, в /rest/api их нет.
     boards: (projectKey) => api(`/rest/agile/1.0/board?projectKeyOrId=${encodeURIComponent(projectKey)}&maxResults=50`),
 

@@ -5,8 +5,8 @@ import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
 import htm from 'htm';
 import {
-  TABS, FILTER_FIELDS, promptRow, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
-  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, visibleItems, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
+  TABS, fieldsFor, promptRow, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
+  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, runRow, detailLines, flowLines, visibleItems, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
 import { fieldText, editValueFor } from '../jira.js';
@@ -14,6 +14,7 @@ import { listTemplates, loadTemplate, userOverride, dropUserOverride } from '../
 import { findCommand } from '../registry.js';
 import { runAction } from '../engine.js';
 import { cmdMRS, toJSON, anyFilter } from '../commands/mrs.js';
+import { buildJql } from '../commands/jira.js';
 import { boardOf } from '../commands/jira.js';
 import { cmdRun } from '../commands/run.js';
 import { cmdDeploy } from '../commands/deploy.js';
@@ -114,8 +115,8 @@ export function App({ ctx, opts }) {
     try {
       if (tab === 'mr') {
         // Под фильтрами короткого пути нет: конфликты и треды считаются только после дозагрузки.
-        if (anyFilter(state.filters)) {
-          const res = await withBusy('список MR под фильтрами', () => cmdMRS(ctx.g, ctx.repo, { asObject: true, ...state.filters }));
+        if (anyFilter(state.filters.mr)) {
+          const res = await withBusy('список MR под фильтрами', () => cmdMRS(ctx.g, ctx.repo, { asObject: true, ...state.filters.mr }));
           dispatch({ type: 'items', tab, items: res.mrs });
         } else {
           // Список MR приходит быстро, а треды, аппрувы и пайплайны — это запрос на каждый MR.
@@ -130,8 +131,9 @@ export function App({ ctx, opts }) {
       if (tab === 'runs') dispatch({ type: 'items', tab, items: listRuns({ limit: 30 }) });
       if (tab === 'prompts') dispatch({ type: 'items', tab, items: listTemplates({ projectDir: ctx.cfg.projectDir }) });
       if (tab === 'issues') {
+        const jql = buildJql({ ...state.filters.issues, componentField: ctx.cfg.jira?.componentField });
         const { issues } = await withBusy('задачи Jira', () =>
-          jira().searchJql({ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC' }));
+          jira().searchJql({ jql, fields: ['summary', 'status', 'updated', 'issuetype', 'priority', 'assignee'] }));
         dispatch({ type: 'items', tab, items: issues });
       }
     } catch (err) {
@@ -368,33 +370,76 @@ export function App({ ctx, opts }) {
     }
   }
 
-  // Фильтры списка MR — те же, что у флагов CLI, только выбираются с клавиш.
+  // Фильтры — те же, что у флагов CLI, только выбираются с клавиш. У каждой вкладки свои.
+  const myFilters = () => state.filters[state.tab] ?? {};
+
   function openFilters() {
-    dispatch({ type: 'modalOpen', kind: 'filters', title: 'Фильтры списка MR', items: FILTER_FIELDS });
+    const tab = state.tab;
+    dispatch({ type: 'modalOpen', kind: 'filters', title: tab === 'mr' ? 'Фильтры списка MR' : 'Фильтры списка задач', items: fieldsFor(tab) });
   }
 
-  function applyFilterRow() {
-    const field = FILTER_FIELDS[state.modal.cursor];
-    if (field.type === 'text') return void dispatch({ type: 'modalEdit', editing: field.key, value: state.filters[field.key] ?? '' });
+  async function applyFilterRow() {
+    const fields = fieldsFor(state.tab);
+    const field = fields[state.modal.cursor];
+    if (field.type === 'text') return void dispatch({ type: 'modalEdit', editing: field.key, value: myFilters()[field.key] ?? '' });
     if (field.type === 'option') {
-      const items = filterOptions(field.key, state.items.mr);
-      const cursor = Math.max(0, items.findIndex((o) => o.value === (state.filters[field.key] ?? null)));
-      return void dispatch({ type: 'modalOpen', kind: 'filterValue', title: `Фильтр: ${field.label}`, field: field.key, items, cursor });
+      const known = state.tab === 'mr' ? filterOptions(field.key, state.items.mr) : state.options.issues[field.key];
+      const cursor = (items) => Math.max(0, items.findIndex((o) => o.value === (myFilters()[field.key] ?? null)));
+      if (known) return void dispatch({ type: 'modalOpen', kind: 'filterValue', title: `Фильтр: ${field.label}`, field: field.key, items: known, cursor: cursor(known) });
+      // Варианты фильтров задач знает только Jira: спрашиваем один раз и держим до перезапуска.
+      dispatch({ type: 'modalOpen', kind: 'filterValue', title: `Фильтр: ${field.label}`, field: field.key, items: [], busy: true, note: 'читаю варианты…' });
+      try {
+        const items = await withBusy(`варианты «${field.label}»`, () => issueFilterOptions(field.key));
+        dispatch({ type: 'filterOptions', key: field.key, items });
+        dispatch({ type: 'modalItems', items, busy: false, note: '' });
+        dispatch({ type: 'modalMove', by: cursor(items) });
+      } catch (err) {
+        dispatch({ type: 'modalItems', items: [], busy: false, note: `❌ ${err.message}` });
+      }
+      return;
     }
-    dispatch({ type: 'filters', filters: toggleFilter(state.filters, field.key) });
+    dispatch({ type: 'filters', filters: toggleFilter(myFilters(), field.key) });
   }
 
-  // Значение выбирается из того, что реально встречается в списке MR, а не печатается руками.
+  // Откуда Jira берёт варианты: люди проекта, статусы проекта, спринты доски и опции поля-компонента.
+  async function issueFilterOptions(key) {
+    const j = jira();
+    const projectKey = ctx.cfg.jira?.projectKey || selected(state)?.key?.split('-')[0];
+    if (key === 'assignee') {
+      const users = await j.projectUsers(projectKey);
+      return [{ value: 'me', label: 'я' }, { value: 'any', label: 'все' }, ...users.map((u) => ({ value: u.displayName, label: u.displayName }))];
+    }
+    if (key === 'status') {
+      const byType = await j.statuses(projectKey);
+      const names = [...new Set(byType.flatMap((t) => (t.statuses ?? []).map((st) => st.name)))].sort();
+      return [{ value: null, label: '— любой незакрытый' }, ...names.map((n) => ({ value: n, label: n }))];
+    }
+    if (key === 'sprint') {
+      const { values: boards = [] } = (await j.boards(projectKey)) ?? {};
+      const { values: sprints = [] } = boards.length ? (await j.sprints(boards[0].id)) ?? {} : {};
+      return [
+        { value: null, label: '— любой' },
+        { value: 'current', label: 'текущий' },
+        ...sprints.map((sp) => ({ value: sp.name, label: `${sp.name} (${sp.state})` })),
+      ];
+    }
+    // Компонент — обычное поле задачи, его варианты лежат в editmeta любой задачи проекта.
+    const item = selected(state);
+    const meta = item?.key ? await j.editMeta(item.key) : { fields: {} };
+    const field = Object.values(meta.fields ?? {}).find((f) => f.name === (ctx.cfg.jira?.componentField || 'Компонент'));
+    return [{ value: null, label: '— любой' }, ...(field?.allowedValues ?? []).map((v) => ({ value: v.value ?? v.name, label: v.value ?? v.name }))];
+  }
+
   function applyFilterValue() {
     const { field, items, cursor } = state.modal;
-    dispatch({ type: 'filters', filters: { ...state.filters, [field]: items[cursor]?.value ?? null } });
+    dispatch({ type: 'filters', filters: { ...myFilters(), [field]: items[cursor]?.value ?? null } });
     openFilters();
   }
 
   function submitFilter(value) {
     const key = state.modal.editing;
     dispatch({ type: 'modalEdit', editing: null, value: '' });
-    dispatch({ type: 'filters', filters: { ...state.filters, [key]: value.trim() || null } });
+    dispatch({ type: 'filters', filters: { ...myFilters(), [key]: value.trim() || null } });
   }
 
   function launch(actionName) {
@@ -470,7 +515,7 @@ export function App({ ctx, opts }) {
       const kind = state.modal.kind;
       if (kind === 'pipeline') return void runJob();
       if (kind === 'sprint') return void applySprint();
-      if (kind === 'filters') return applyFilterRow();
+      if (kind === 'filters') return void applyFilterRow();
       if (kind === 'filterValue') return applyFilterValue();
       if (kind === 'editField') return void openEditValue();
       if (kind === 'editValue') return void applyEditValue();
@@ -478,14 +523,14 @@ export function App({ ctx, opts }) {
     }
     if (intent.type === 'modalClear') {
       if (state.modal.kind !== 'filters') return;
-      return void dispatch({ type: 'filters', filters: { ...state.filters, [FILTER_FIELDS[state.modal.cursor].key]: null } });
+      return void dispatch({ type: 'filters', filters: { ...myFilters(), [fieldsFor(state.tab)[state.modal.cursor].key]: null } });
     }
     if (intent.type === 'modalClose') {
       if (state.modal.kind === 'filterValue') return openFilters(); // назад к списку полей, а не наружу
       if (state.modal.kind === 'editValue') return void openEditFields();
       const wasFilters = state.modal.kind === 'filters';
       dispatch(intent);
-      if (wasFilters) load('mr');
+      if (wasFilters) load(state.tab);
       return;
     }
     if (intent.type === 'open') {
@@ -506,7 +551,10 @@ export function App({ ctx, opts }) {
   const item = selected(state);
   const running = activeRuns(state);
   const hint = TABS.find((t) => t.key === state.tab).hint;
-  const filters = state.tab === 'mr' ? filterSummary(state.filters, state.items.mr) : '';
+  const optionsFor = (key) => (state.tab === 'mr' ? filterOptions(key, state.items.mr) : state.options.issues[key] ?? []);
+  const filters = state.tab === 'mr' || state.tab === 'issues'
+    ? filterSummary(state.filters[state.tab], fieldsFor(state.tab), optionsFor)
+    : '';
 
   return html`
     <${Box} flexDirection="column" width=${columns} height=${height}>
@@ -528,7 +576,7 @@ export function App({ ctx, opts }) {
       ${state.help
         ? html`<${Help} height=${bodyInner} />`
         : state.modal
-          ? html`<${Modal} modal=${state.modal} filters=${state.filters} rows=${state.items.mr} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : state.modal.kind === 'editValue' ? applyEditValue : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
+          ? html`<${Modal} modal=${state.modal} filters=${state.filters[state.tab] ?? {}} fields=${fieldsFor(state.tab)} optionsFor=${optionsFor} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : state.modal.kind === 'editValue' ? applyEditValue : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
           : html`<${Body} state=${state} item=${item} width=${columns} height=${bodyInner}
               onSearch=${(v) => dispatch({ type: 'searchEdit', value: v })} onSearchDone=${() => dispatch({ type: 'searchClose' })} />`}
       ${cards.map((r) => html`
@@ -559,7 +607,7 @@ const Help = ({ height }) =>
     <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
   <//>`;
 
-function Modal({ modal, filters, rows, height, onSubmit, onChange }) {
+function Modal({ modal, filters, fields, optionsFor, height, onSubmit, onChange }) {
   const body = () => {
     if (modal.kind === 'editValue' && modal.editing) {
       return html`<${Box} flexDirection="column">
@@ -575,9 +623,9 @@ function Modal({ modal, filters, rows, height, onSubmit, onChange }) {
     }
     if (modal.kind === 'filters') {
       return html`<${Box} flexDirection="column">
-        ${FILTER_FIELDS.map((f, i) => html`
+        ${fields.map((f, i) => html`
           <${Text} key=${f.key} inverse=${i === modal.cursor && !modal.editing} wrap="truncate-end">${f.label.padEnd(28)} ${
-            modal.editing === f.key ? html`<${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} />` : filterValueText(f, filters[f.key], rows)
+            modal.editing === f.key ? html`<${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} />` : filterValueText(f, filters[f.key], optionsFor(f.key))
           }<//>
         `)}
         <${Text} dimColor>Enter — задать или переключить · Backspace — сбросить · Esc — применить и закрыть<//>
@@ -626,6 +674,7 @@ function Body({ state, item, width, height, onSearch, onSearchDone }) {
   const onDetails = state.focus === 'details';
   const listWidth = narrow ? width : Math.max(30, Math.floor(width * (state.tab === 'mr' ? 0.58 : 0.45)));
   const inner = Math.max(1, height - 2); // рамка сверху и снизу
+  const detailsWidth = Math.max(20, (narrow ? width : width - listWidth) - 4); // минус рамка и padding
   return html`
     <${Box} height=${height}>
       ${narrow && onDetails ? null : html`<${Box} flexDirection="column" width=${listWidth} flexShrink=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${state.focus === 'list' ? 'cyan' : 'gray'}>
@@ -641,7 +690,7 @@ function Body({ state, item, width, height, onSearch, onSearchDone }) {
         <${List} state=${state} height=${state.searching || state.search[state.tab] ? inner - 1 : inner} width=${listWidth - 4} />
       <//>`}
       ${narrow && !onDetails ? null : html`<${Box} flexDirection="column" flexGrow=${1} minWidth=${0} overflow="hidden" paddingX=${1} borderStyle="round" borderColor=${onDetails ? 'cyan' : 'gray'}>
-        <${Details} state=${state} item=${item} height=${inner} />
+        <${Details} state=${state} item=${item} height=${inner} width=${detailsWidth} />
       <//>`}
     <//>
   `;
@@ -654,7 +703,7 @@ function List({ state, height, width }) {
   if (!rows.length) {
     const hint = state.search[state.tab]
       ? `ничего не нашлось по «${state.search[state.tab]}» · / — поправить запрос`
-      : anyFilter(state.filters) && state.tab === 'mr'
+      : anyFilter(state.filters.mr) && state.tab === 'mr'
         ? 'под фильтры не попал ни один MR · f — фильтры'
         : `${EMPTY[state.tab]} · R — перечитать`;
     return html`<${Text} dimColor wrap="truncate-end">${hint}<//>`;
@@ -700,7 +749,7 @@ function MRRow({ r, active, width = 40 }) {
   <//>`;
 }
 
-function Details({ state, item, height }) {
+function Details({ state, item, height, width }) {
   const full = item?.key ? state.details[item.key] : null;
   const lines = detailLines(state.tab, item, {
     full: full?.issue ?? null,
@@ -708,8 +757,9 @@ function Details({ state, item, height }) {
     expand: state.expand,
     body: item?.name ? state.prompts[item.name] ?? '' : '',
   });
-  const off = Math.min(state.scroll.details, Math.max(0, lines.length - height));
-  return lines.slice(off, off + height).map((l, i) => html`<${Line} key=${i} line=${l} />`);
+  const flowed = flowLines(lines, width);
+  const off = Math.min(state.scroll.details, Math.max(0, flowed.length - height));
+  return flowed.slice(off, off + height).map((l, i) => html`<${Line} key=${i} line=${l} />`);
 }
 
 // Строка из кусков: у каждого свой цвет. Пустая строка-разделитель рисуется пробелом,

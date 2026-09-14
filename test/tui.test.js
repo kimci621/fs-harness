@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, fieldsFor, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems, flowLines } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -65,6 +65,13 @@ test('logLine: что попадает в лог, а что рисуется к�
 });
 
 test('клавиши: запуск действия только на своей вкладке', () => {
+  // Фильтры свои у каждой вкладки: у задач по умолчанию только мои, как в Jira.
+  assert.deepEqual(initialState('app').filters, { mr: {}, issues: { assignee: 'me' } });
+  const issuesTab = reduce(reduce(initialState('app'), { type: 'tab', tab: 'issues' }), { type: 'filters', filters: { assignee: 'any' } });
+  assert.deepEqual(issuesTab.filters, { mr: {}, issues: { assignee: 'any' } });
+  assert.deepEqual(fieldsFor('issues').map((x) => x.key), ['assignee', 'status', 'sprint', 'component', 'jql']);
+  assert.equal(filterSummary({ assignee: 'any', status: 'В работе' }, fieldsFor('issues')), 'assignee=все, статус=В работе');
+
   const s = withItems();
   assert.deepEqual(keyIntent('a', {}, s), { type: 'launch', action: 'conflict' });
   assert.deepEqual(keyIntent('r', {}, s), { type: 'launch', action: 'review' });
@@ -237,11 +244,12 @@ test('фильтры MR: переключатели, сводка для шап�
   assert.deepEqual(filterOptions('label', rows).map((o) => o.value), [null, 'bug', 'review']);
   assert.deepEqual(filterOptions('pipeline', rows).map((o) => o.value), [null, 'success', 'none']);
   assert.equal(filterOptions('draft', rows).length, 0); // переключатель, выбирать нечего
-  assert.equal(filterValueText(FILTER_FIELDS[0], 'amir', rows), 'Амир Латипов');
+  assert.equal(filterValueText(FILTER_FIELDS[0], 'amir', filterOptions('author', rows)), 'Амир Латипов');
 
   const s = withItems();
   assert.deepEqual(keyIntent('f', {}, s), { type: 'openFilters' });
-  assert.equal(keyIntent('f', {}, reduce(s, { type: 'tab', tab: 'issues' })), null);
+  assert.deepEqual(keyIntent('f', {}, reduce(s, { type: 'tab', tab: 'issues' })), { type: 'openFilters' }); // у задач фильтры тоже свои
+  assert.equal(keyIntent('f', {}, reduce(s, { type: 'tab', tab: 'runs' })), null);
 
   // Пока набирают текст фильтра, клавиши принадлежат полю ввода.
   const modal = reduce(reduce(s, { type: 'modalOpen', kind: 'filters', title: 'ф', items: FILTER_FIELDS }), { type: 'modalEdit', editing: 'author', value: '' });
@@ -333,4 +341,19 @@ test('строка списка: маркер не жмётся, под стро
   } finally {
     app.unmount();
   }
+});
+
+test('карточка: абзацы описания переносятся по словам, поля — нет', () => {
+  const item = { key: 'FD-1', fields: { summary: 'Починить', status: { name: 'В работе' }, updated: new Date().toISOString() } };
+  const full = { names: {}, fields: { issuelinks: [], description: 'первая строка описания довольно длинная и должна разъехаться на несколько строк' } };
+  const wide = flowLines(detailLines('issues', item, { full, comments: [], expand: true }), 30).map(lineText);
+
+  const body = wide.filter((l) => l.includes('описания') || l.includes('разъехаться'));
+  assert.ok(body.length >= 2, 'абзац разбит на строки');
+  assert.ok(body.every((l) => l.length <= 30), `абзац не влез в ширину: ${body.find((l) => l.length > 30)}`);
+  assert.equal(wide.filter((l) => l.startsWith('  ')).join(' ').replace(/\s+/g, ' ').trim(),
+    'первая строка описания довольно длинная и должна разъехаться на несколько строк');
+
+  // Поля-строки не трогаем: их обрезает сам ink, иначе таблица полей поедет.
+  assert.deepEqual(flowLines([{ parts: [{ text: 'x'.repeat(80) }] }], 30).length, 1);
 });
