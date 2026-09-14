@@ -18,7 +18,7 @@ src/config.js           ~/.config/gl-helper/config.json
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, agent-guide, mr-comments, prompts, jira, task
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, agent-guide, mr-comments, prompts, jira, task, growthbook, flow
 src/jira.js             Jira REST: чтение и записи (статус, спринт, комментарий, поле), fetch инжектируется (тесты)
 src/commands/task.js    ветка задачи и push с открытием MR: гарды защищённых веток и грязного дерева
 src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/toggle), fetch инжектируется (тесты)
@@ -34,6 +34,7 @@ src/judge/schema.js     zod-схема вердикта, VERDICT_SHAPE, extractJ
 src/judge/payload.js    что показывать судье в роли acceptance
 src/judge/providers/    cli (процесс claude) и openai (всё OpenAI-совместимое)
 src/prompts/judge/*.md  рубрики по ролям — файл на роль
+src/prompts/flows/*.md  сценарии работы для агента: протокол на файл, description во front-matter
 src/engine.js           runAction: фазы действия, события, изоляция, гейт судьи; runActionCLI, judgeRun
 src/actions/*.js        декларации действий (conflict, threads, review, analyze): precheck/context/verify/publish и блок action
 src/prompts.js          шаблоны: loadTemplate/renderTemplate/listTemplates/checkTemplates
