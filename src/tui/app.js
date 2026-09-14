@@ -9,7 +9,7 @@ import TextInput from 'ink-text-input';
 import htm from 'htm';
 import {
   TABS, fieldsFor, promptRow, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
-  orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueCard, shiftLine, runRow, detailLines, flowLines, visibleItems, onBoard, boardLanes, cardRows, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
+  orderJobs, deploySlot, DEPLOY_JOB, mrRow, MR_FIELDS, mrFieldRow, issueCard, shiftLine, runRow, detailLines, flowLines, visibleItems, onBoard, boardLanes, cardRows, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
 import { fieldText, editKind, editValueFor } from '../jira.js';
@@ -435,6 +435,80 @@ export function App({ ctx, opts }) {
     }
   }
 
+  // Поля MR правятся тем же окном, что и поля задачи: сперва список полей, потом значение.
+  function openMRFields() {
+    const mr = selected(state);
+    if (!mr?.iid) return;
+    dispatch({ type: 'modalOpen', kind: 'editField', title: `!${mr.iid}: изменить поле`, mr: mr.iid, items: MR_FIELDS.map((f) => ({ ...f, label: mrFieldRow(f, mr) })) });
+  }
+
+  async function openMRValue() {
+    const field = state.modal.items[state.modal.cursor];
+    const mr = state.items.mr.find((m) => m.iid === state.modal.mr);
+    if (!field || !mr) return;
+    const title = `!${mr.iid} · ${field.name}`;
+    if (field.kind === 'flag') return void applyMR(mr.iid, field, !field.read(mr));
+    if (field.kind === 'editor') {
+      dispatch({ type: 'modalClose' });
+      return void editLongMR(mr, field);
+    }
+    if (field.kind !== 'pick') {
+      return void dispatch({ type: 'modalOpen', kind: 'editValue', title, mr: mr.iid, field: field.id, meta: field, items: [], editing: field.id, value: field.read(mr) });
+    }
+    dispatch({ type: 'modalOpen', kind: 'editValue', title, mr: mr.iid, field: field.id, meta: field, items: [], busy: true, note: 'читаю варианты…' });
+    try {
+      const opts = field.from === 'branches'
+        ? ((await withBusy('ветки проекта', () => ctx.g.branches(ctx.repo))) ?? []).map((b) => ({ value: b.name, label: b.name }))
+        : ((await withBusy('участники проекта', () => ctx.g.members(ctx.repo))) ?? []).map((u) => ({ value: u.id, label: `${u.name} (${u.username})` }));
+      dispatch({ type: 'modalItems', items: [{ label: '— очистить', clear: true }, ...opts], busy: false, note: '' });
+    } catch (err) {
+      dispatch({ type: 'modalItems', items: [], busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  async function applyMRValue(text) {
+    const { mr: iid, meta, items, cursor } = state.modal;
+    const opt = text === undefined ? items[cursor] : null;
+    if (text === undefined && !opt) return;
+    let value;
+    if (text === undefined) value = opt.clear ? (meta.id === 'assignee_ids' ? [] : '') : meta.id === 'assignee_ids' ? [opt.value] : opt.value;
+    else if (meta.kind === 'list') value = text.split(',').map((v) => v.trim()).filter(Boolean).join(',');
+    else if (meta.kind === 'users') {
+      // Ревьюеров GitLab принимает только id, поэтому логины сначала ищем среди участников.
+      const names = text.split(',').map((v) => v.trim().replace(/^@/, '')).filter(Boolean);
+      const people = ((await withBusy('участники проекта', () => ctx.g.members(ctx.repo))) ?? []);
+      const ids = names.map((n) => people.find((u) => u.username === n || u.name === n)?.id);
+      const bad = names.filter((n, i) => !ids[i]);
+      if (bad.length) return void dispatch({ type: 'modalItems', busy: false, note: `❌ нет таких участников: ${bad.join(', ')}` });
+      value = ids;
+    } else value = text;
+    dispatch({ type: 'modalItems', busy: true, note: 'сохраняю…' });
+    await applyMR(iid, meta, value);
+  }
+
+  async function applyMR(iid, field, value) {
+    try {
+      await withBusy(`${field.name} у !${iid}`, () => ctx.g.updateMR(ctx.repo, iid, { [field.id]: value }));
+      dispatch({ type: 'modalClose' });
+      bufferRef.current.push(`!${iid} ▸ ${field.name}: ${typeof value === 'boolean' ? (value ? 'да' : 'нет') : valueText(value)}`);
+      load('mr');
+    } catch (err) {
+      dispatch({ type: 'modalItems', busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  async function editLongMR(mr, field) {
+    let text;
+    try {
+      text = await openEditor(field.read(mr), `mr-${mr.iid}-${field.id}.md`);
+    } catch (err) {
+      return void bufferRef.current.push(`!${mr.iid} ▸ ${field.name}: ❌ ${err.message}`);
+    }
+    if (text === null) return void bufferRef.current.push(`!${mr.iid} ▸ ${field.name}: задай $EDITOR, без него многострочное поле не править`);
+    if (text === field.read(mr)) return void bufferRef.current.push(`!${mr.iid} ▸ ${field.name}: без изменений`);
+    await applyMR(mr.iid, field, text);
+  }
+
   // Описание правится в $EDITOR, а не внутри TUI: редактор текста мы не пишем (PLAN, п. 16).
   async function editLong(key, field, now) {
     let text;
@@ -603,7 +677,7 @@ export function App({ ctx, opts }) {
   useInput((input, key) => {
     if (!key.escape) return;
     if (state.modal?.kind === 'comment') return void dispatch({ type: 'modalClose' });
-    if (state.modal?.kind === 'editValue') return void openEditFields(); // назад к списку полей
+    if (state.modal?.kind === 'editValue') return void (state.tab === 'mr' ? openMRFields() : openEditFields()); // назад к списку полей
     dispatch({ type: 'modalEdit', editing: null, value: '' });
   }, { isActive: Boolean(editing) });
 
@@ -634,7 +708,7 @@ export function App({ ctx, opts }) {
     }
     if (intent.type === 'openFilters') return openFilters();
     if (intent.type === 'searchOpen' || intent.type === 'searchClose') return void dispatch(intent);
-    if (intent.type === 'editField') return void openEditFields();
+    if (intent.type === 'editField') return void (state.tab === 'mr' ? openMRFields() : openEditFields());
     if (intent.type === 'parent') return void openParent();
     if (intent.type === 'boardToggle') {
       dispatch(intent);
@@ -652,8 +726,8 @@ export function App({ ctx, opts }) {
       if (kind === 'sprint') return void applySprint();
       if (kind === 'filters') return void applyFilterRow();
       if (kind === 'filterValue') return applyFilterValue();
-      if (kind === 'editField') return void openEditValue();
-      if (kind === 'editValue') return void applyEditValue();
+      if (kind === 'editField') return void (state.tab === 'mr' ? openMRValue() : openEditValue());
+      if (kind === 'editValue') return void (state.tab === 'mr' ? applyMRValue() : applyEditValue());
       if (kind === 'parent') return void dispatch({ type: 'modalClose' }); // окно только читают
       return void applyTransition();
     }
@@ -663,7 +737,7 @@ export function App({ ctx, opts }) {
     }
     if (intent.type === 'modalClose') {
       if (state.modal.kind === 'filterValue') return openFilters(); // назад к списку полей, а не наружу
-      if (state.modal.kind === 'editValue') return void openEditFields();
+      if (state.modal.kind === 'editValue') return void (state.tab === 'mr' ? openMRFields() : openEditFields());
       const wasFilters = state.modal.kind === 'filters';
       dispatch(intent);
       if (wasFilters) load(state.tab);
@@ -712,7 +786,7 @@ export function App({ ctx, opts }) {
       ${state.help
         ? html`<${Help} height=${bodyInner} />`
         : state.modal
-          ? html`<${Modal} modal=${state.modal} filters=${state.filters[state.tab] ?? {}} fields=${fieldsFor(state.tab)} optionsFor=${optionsFor} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : state.modal.kind === 'editValue' ? applyEditValue : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
+          ? html`<${Modal} modal=${state.modal} filters=${state.filters[state.tab] ?? {}} fields=${fieldsFor(state.tab)} optionsFor=${optionsFor} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : state.modal.kind === 'editValue' ? (state.tab === 'mr' ? applyMRValue : applyEditValue) : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
           : html`<${Body} state=${state} item=${item} width=${columns} height=${bodyInner}
               onSearch=${(v) => dispatch({ type: 'searchEdit', value: v })} onSearchDone=${() => dispatch({ type: 'searchClose' })} />`}
       ${cards.map((r) => html`
@@ -742,7 +816,8 @@ const Help = ({ height }) =>
     <${Text}>a — решить конфликт · t — обработать тикеты · r — локальное ревью (вкладка MR)<//>
     <${Text}>p — пайплайн MR: все джобы и их запуск · f — фильтры списка MR<//>
     <${Text}>n — проанализировать задачу · s — статус · S — спринт · c — комментарий · e — раскрыть поля<//>
-    <${Text}>E — изменить поле задачи: Assignee, Ответственный разработчик, Priority и всё, что даёт Jira<//>
+    <${Text}>E — изменить поле: у задачи всё из editmeta, у MR заголовок, описание, ревьюеры, ветка<//>
+    <${Text}>Многострочный текст (описание задачи и MR) правится в $EDITOR и уходит одним запросом<//>
     <${Text}>p — родитель задачи со всеми подзадачами в отдельном окне<//>
     <${Text}>v — доска вместо списка задач: h/l — колонки, j/k — карточки, H/L — перенести карточку<//>
     <${Text}>/ — поиск по списку (терпит опечатки, ищет по всем полям) · f — фильтры списка MR<//>

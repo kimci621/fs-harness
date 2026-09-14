@@ -313,6 +313,57 @@ test('TUI: p открывает родителя задачи со всеми п
   }
 });
 
+// Поля MR правятся так же, как поля задачи: список полей с текущими значениями, потом значение.
+test('TUI: E правит поля MR — текст, флаг и ревьюеры по логинам', async () => {
+  const puts = [];
+  const ctxMR = {
+    ...ctx,
+    g: {
+      ...ctx.g,
+      members: async () => [{ id: 5, name: 'Эмиль', username: 'emil' }, { id: 6, name: 'Амир', username: 'amir' }],
+      branches: async () => [{ name: 'dev' }, { name: 'master' }],
+      updateMR: async (repo, iid, fields) => { puts.push({ iid, fields }); return { iid }; },
+    },
+  };
+  const app = render(React.createElement(App, { ctx: ctxMR, opts: {} }));
+  try {
+    await tick(300);
+    app.stdin.write('E');
+    await tick(200);
+    assert.match(app.lastFrame(), /Title {2,}fix: баннер/); // видно, что правишь
+    assert.match(app.lastFrame(), /Target branch {2,}dev/);
+    assert.match(app.lastFrame(), /Squash при мерже {2,}нет/);
+
+    app.stdin.write('\r'); // Title — обычный текст
+    await tick(200);
+    for (const ch of '!') { app.stdin.write(ch); await tick(25); }
+    app.stdin.write('\r');
+    await tick(300);
+    assert.deepEqual(puts[0], { iid: 2547, fields: { title: 'fix: баннер!' } });
+
+    app.stdin.write('E'); // Reviewers — логины через запятую, id ищем среди участников
+    await tick(200);
+    app.stdin.write('j'); await tick(60);
+    app.stdin.write('j'); await tick(60);
+    app.stdin.write('j'); await tick(60); // Title → Description → Assignee → Reviewers
+    app.stdin.write('\r');
+    await tick(200);
+    for (const ch of 'emil') { app.stdin.write(ch); await tick(25); }
+    app.stdin.write('\r');
+    await tick(300);
+    assert.deepEqual(puts[1], { iid: 2547, fields: { reviewer_ids: [5] } });
+
+    app.stdin.write('E'); // Squash — флаг, переключается без лишних окон
+    await tick(200);
+    for (let i = 0; i < 6; i++) { app.stdin.write('j'); await tick(40); }
+    app.stdin.write('\r');
+    await tick(300);
+    assert.deepEqual(puts[2], { iid: 2547, fields: { squash: true } });
+  } finally {
+    app.unmount();
+  }
+});
+
 // Задачи по умолчанию мои, но фильтруются как в самом Jira — значения приходят оттуда же.
 test('TUI: f на задачах — assignee «все» перезапрашивает список другим JQL', async () => {
   const jqls = [];

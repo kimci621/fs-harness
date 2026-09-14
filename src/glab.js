@@ -76,6 +76,14 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
 
     createMRPipeline: (repo, iid) => api(repo, `/merge_requests/${iid}/pipelines`, { method: 'POST' }),
 
+    // Правка полей MR одним PUT. Тело только через stdin: description многострочный.
+    updateMR: (repo, iid, fields) => api(repo, `/merge_requests/${iid}`, { method: 'PUT', input: JSON.stringify(fields) }),
+
+    // Участники и ветки — варианты для assignee, reviewers и target branch.
+    members: (repo) => api(repo, '/members/all?per_page=100'),
+
+    branches: (repo) => api(repo, '/repository/branches?per_page=100'),
+
     // Ответ в тред. Read-back обязателен: тихо потерянный ответ хуже явной ошибки.
     async replyDiscussion(repo, iid, discussionId, body) {
       const note = await api(repo, `/merge_requests/${iid}/discussions/${discussionId}/notes`, {
