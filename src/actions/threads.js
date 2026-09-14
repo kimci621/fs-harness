@@ -71,14 +71,14 @@ export const threadsAction = {
     writes: true,
     isolation: 'ephemeral-worktree',
     prompt: 'actions/threads',
-    agent: { default: 'claude', allow: ['claude', 'pi'], pickByJudge: false },
+    agent: { default: 'cc', pickByJudge: false },
     judge: { gate: 'pre-push', role: 'acceptance' },
     mcpDescription: 'Разобрать нерешённые треды код-ревью в MR силами AI-агента во временном git worktree: внести правки, подготовить ответы. Push, отправка ответов и резолв тредов происходят только после approve судьи. Меняет код и GitLab.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'номер MR или часть имени ветки' },
-        agent: { type: 'string', enum: ['claude', 'pi'], description: 'какой агент разбирает треды' },
+        agent: { type: 'string', description: 'какой агент разбирает треды (имя профиля из конфига: cc, ccq, cco, ccd, pi)' },
       },
       required: ['query'],
     },

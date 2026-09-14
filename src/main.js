@@ -9,7 +9,8 @@ const FLAGS_USAGE = `Флаги:
   -P, --project <имя>     Проект из конфига (дефолт activeProject / FS_HARNESS_PROJECT)
   --host <hostname>       GitLab-хост (дефолт из конфига)
   --json                  Вывод в JSON (mrs, mr, jobs, run, deploy) — удобно агентам
-  --agent claude|pi       Агент для действий (conflict, threads) и commit
+  --agent <профиль>       Агент для действий и commit: cc (по умолчанию), ccq, cco, ccd, pi
+                          Профили живут в конфиге, agents.<имя>. Можно и --agent=cc
   --project-dir <dir>     Каталог проекта для действий (worktree) и commit
   -B, --build-job <имя>   Имя build-джобы (deploy, conflict; дефолт build_image)
   -w, --watch             В run: ждать завершения джобы
@@ -132,42 +133,47 @@ function parseArgs(argv) {
     draft: null, conflicts: false, threads: false, pipeline: null,
   };
   const rest = [];
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '-R' || a === '--repo') opts.repo = argv[++i];
-    else if (a === '-P' || a === '--project') opts.project = argv[++i];
-    else if (a === '--host') opts.host = argv[++i];
+  // --flag=value разбираем в --flag value до разбора: дальше все ветки работают как раньше.
+  const av = argv.flatMap((a) => {
+    const eq = /^--[a-z][a-z-]*=/.test(a) ? a.indexOf('=') : -1;
+    return eq < 0 ? [a] : [a.slice(0, eq), a.slice(eq + 1)];
+  });
+  for (let i = 0; i < av.length; i++) {
+    const a = av[i];
+    if (a === '-R' || a === '--repo') opts.repo = av[++i];
+    else if (a === '-P' || a === '--project') opts.project = av[++i];
+    else if (a === '--host') opts.host = av[++i];
     else if (a === '--json') opts.json = true;
-    else if (a === '--agent') opts.agent = argv[++i];
-    else if (a === '--project-dir') opts.projectDir = argv[++i];
-    else if (a === '-B' || a === '--build-job') opts.buildJob = argv[++i];
+    else if (a === '--agent') opts.agent = av[++i];
+    else if (a === '--project-dir') opts.projectDir = av[++i];
+    else if (a === '-B' || a === '--build-job') opts.buildJob = av[++i];
     else if (a === '-w' || a === '--watch') opts.watch = true;
     else if (a === '-y' || a === '--yes') opts.yes = true;
     else if (a === '--keep-worktree') opts.keepWorktree = true;
     else if (a === '--rebuild') opts.rebuild = true;
     else if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--no-judge') opts.noJudge = true;
-    else if (a === '--judge') opts.judgeProfile = argv[++i];
-    else if (a === '--judge-only') opts.judgeOnly = argv[++i];
-    else if (a === '--for') opts.for = argv[++i];
-    else if (a === '--file') opts.file = argv[++i];
-    else if (a === '--env') opts.env = argv[++i];
+    else if (a === '--judge') opts.judgeProfile = av[++i];
+    else if (a === '--judge-only') opts.judgeOnly = av[++i];
+    else if (a === '--for') opts.for = av[++i];
+    else if (a === '--file') opts.file = av[++i];
+    else if (a === '--env') opts.env = av[++i];
     else if (a === '--check') opts.check = true;
-    else if (a === '--assignee') opts.assignee = argv[++i];
-    else if (a === '--sprint') opts.sprint = argv[++i];
-    else if (a === '--component') opts.component = argv[++i];
-    else if (a === '--status') opts.status = argv[++i];
-    else if (a === '--jql') opts.jql = argv[++i];
-    else if (a === '--author') opts.author = argv[++i];
-    else if (a === '--reviewer') opts.reviewer = argv[++i];
-    else if (a === '--target') opts.target = argv[++i];
-    else if (a === '--label') opts.label = argv[++i];
-    else if (a === '--search') opts.search = argv[++i];
+    else if (a === '--assignee') opts.assignee = av[++i];
+    else if (a === '--sprint') opts.sprint = av[++i];
+    else if (a === '--component') opts.component = av[++i];
+    else if (a === '--status') opts.status = av[++i];
+    else if (a === '--jql') opts.jql = av[++i];
+    else if (a === '--author') opts.author = av[++i];
+    else if (a === '--reviewer') opts.reviewer = av[++i];
+    else if (a === '--target') opts.target = av[++i];
+    else if (a === '--label') opts.label = av[++i];
+    else if (a === '--search') opts.search = av[++i];
     else if (a === '--draft') opts.draft = true;
     else if (a === '--no-draft') opts.draft = false;
     else if (a === '--conflicts') opts.conflicts = true;
     else if (a === '--threads') opts.threads = true;
-    else if (a === '--pipeline') opts.pipeline = argv[++i];
+    else if (a === '--pipeline') opts.pipeline = av[++i];
     else if (a === '--resolved' || a === '-resolved') opts.resolved = true;
     else if (a === '--open' || a === '-open') opts.open = true;
     else if (a === '-h' || a === '--help') opts.help = true;

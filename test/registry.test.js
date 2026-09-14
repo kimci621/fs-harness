@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { COMMANDS, ACTIONS, findCommand, mcpTools, createCtx, withProject, withRepoHost } from '../src/registry.js';
 import { ISOLATION_MODES, JUDGE_GATES } from '../src/engine.js';
+import { DEFAULTS } from '../src/config.js';
 import { loadTemplate, checkTemplates } from '../src/prompts.js';
 import { buildAgentGuide } from '../src/commands/agent-guide.js';
 import { CliError } from '../src/errors.js';
@@ -71,7 +72,7 @@ test('registry: декларации действий валидны и синт
     assert.ok(JUDGE_GATES.includes(a.judge.gate), `judge.gate у ${c.name}: ${a.judge.gate}`);
     assert.equal(typeof a.context, 'function', `context у ${c.name}`);
     assert.equal(typeof a.verify, 'function', `verify у ${c.name}`);
-    assert.ok(a.agent.allow.includes(a.agent.default), `agent.default вне allow у ${c.name}`);
+    assert.ok(DEFAULTS.agents[a.agent.default], `agent.default "${a.agent.default}" не описан в DEFAULTS.agents у ${c.name}`);
     if (a.writes) {
       assert.equal(typeof a.publish, 'function', `writes:true без publish у ${c.name}`);
       assert.notEqual(a.judge.gate, 'none', `writes:true без гейта у ${c.name}`);

@@ -24,7 +24,6 @@ const ISSUE = {
 const ctx = {
   repo: 'group/app',
   cfg: { activeProject: 'app', agent: 'claude', projectDir: '/tmp' },
-  agentArgs: () => [],
   g: {
     listOpenMRs: async () => [
       {

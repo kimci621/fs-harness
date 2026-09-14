@@ -347,7 +347,7 @@ test('строка списка: маркер не жмётся, под стро
   const { App } = await import('../src/tui/app.js');
   const issues = [1, 2].map((i) => ({ key: `FD-${i}`, fields: { summary: 'очень длинный заголовок '.repeat(4), status: { name: 'В работе' }, updated: new Date().toISOString() } }));
   const ctx = {
-    repo: 'g/a', cfg: { activeProject: 'app', agent: 'claude' }, agentArgs: () => [],
+    repo: 'g/a', cfg: { activeProject: 'app', agent: 'claude' },
     g: { listOpenMRs: async () => [] },
     jira: () => ({ searchJql: async () => ({ issues }), issue: async () => { throw new Error('нет'); }, comments: async () => ({ comments: [] }) }),
   };

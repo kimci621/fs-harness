@@ -34,7 +34,7 @@ import { CliError } from './errors.js';
 //   usage       строка использования (для help/agent-guide)
 //   description краткое описание для людей
 //   example     пример для help
-//   run(ctx, args, opts)  CLI-вызов (ctx: {g, repo, cfg, notify, agentArgs})
+//   run(ctx, args, opts)  CLI-вызов (ctx: {g, repo, cfg, notify})
 //   mcp         описание инструмента для MCP: {description, inputSchema, call(ctx, args)}
 //               если mcp нет — инструмент не экспортируется
 //   kind        'data' — обычная команда (по умолчанию); 'action' — agent-действие,
@@ -46,7 +46,6 @@ export function createCtx({ g, cfg, notify }) {
     repo: cfg.repo,
     cfg,
     notify,
-    agentArgs: (agent) => (cfg.agentArgs || {})[agent] || [],
     // Лениво: команды без Jira не должны требовать токен.
     jira: () => createJira({ ...cfg.jira, token: readSecret('jira') }),
     gb: () => createGrowthBook({ ...cfg.growthbook, token: readSecret('growthbook') }),
@@ -260,23 +259,23 @@ export const COMMANDS = [
         json: opts.json,
         yes: opts.yes,
         dryRun: opts.dryRun,
-        agentArgs: ctx.agentArgs(agent),
+        cfg: ctx.cfg,
       });
     },
     mcp: {
-      description: 'Агент (claude или pi) изучает git diff, формирует сообщение коммита по паттерну проекта (.llm-commit-pattern или встроенный) и коммитит все изменения. Push не делает. Меняет локальный git-репозиторий.',
+      description: 'Агент изучает git diff, формирует сообщение коммита по паттерну проекта (.llm-commit-pattern или встроенный) и коммитит все изменения. Push не делает. Меняет локальный git-репозиторий.',
       inputSchema: {
         type: 'object',
         properties: {
           dir: { type: 'string', description: 'каталог репозитория (по умолчанию текущий)' },
-          agent: { type: 'string', enum: ['claude', 'pi'] },
+          agent: { type: 'string', description: 'профиль агента из конфига (cc, ccq, cco, ccd, pi)' },
         },
       },
       call: (ctx, a) => {
         const agent = a.agent || ctx.cfg.agent;
         return cmdCommit([], {
           json: true, asObject: true, quiet: true, yes: true,
-          agent, projectDir: a.dir, agentArgs: ctx.agentArgs(agent),
+          agent, projectDir: a.dir, cfg: ctx.cfg,
         });
       },
     },
@@ -381,7 +380,6 @@ export function fromAction(spec) {
     ...opts,
     agent,
     projectDir: opts.projectDir || ctx.cfg.projectDir,
-    agentArgs: ctx.agentArgs(agent),
     cfg: ctx.cfg,
   });
   return {

@@ -38,14 +38,14 @@ export const reviewAction = {
     writes: false,
     isolation: 'checkout',
     prompt: 'actions/review',
-    agent: { default: 'claude', allow: ['claude', 'pi'], pickByJudge: false },
+    agent: { default: 'cc', pickByJudge: false },
     judge: { gate: 'advisory', role: 'mr-review' },
     mcpDescription: 'Отревьюить merge request по правилам проекта силами AI-агента: находки с файлом, строкой и severity. Ничего не правит и не комментирует MR, только читает.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'номер MR или часть имени ветки' },
-        agent: { type: 'string', enum: ['claude', 'pi'], description: 'какой агент ревьюит' },
+        agent: { type: 'string', description: 'какой агент ревьюит (имя профиля из конфига: cc, ccq, cco, ccd, pi)' },
       },
       required: ['query'],
     },

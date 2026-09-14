@@ -11,7 +11,7 @@ const GUIDE_TEMPLATE = `fsh — CLI для работы с GitLab (MR, пайп�
 
 {{COMMANDS}}
 
-Флаги: -R/--repo <repo>, --host <host>, --json, --agent claude|pi, --project-dir <dir>,
+Флаги: -R/--repo <repo>, --host <host>, --json, --agent <профиль: cc, ccq, cco, ccd, pi>, --project-dir <dir>,
 -B/--build-job <имя> (дефолт build_image), -w/--watch, -y/--yes, --keep-worktree, --rebuild, --dry-run,
 --resolved/--open (mr-comments), --no-judge / --judge <профиль> / --judge-only <runId> (conflict),
 --for <mr> (prompts show).

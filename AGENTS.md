@@ -26,7 +26,8 @@ src/config.js           конфиг v1/v2, миграция v1 в памяти,
 src/secrets.js          ключи: env → keychain (security) → файл (~/.growthbook_apikey) → ошибка с командой заведения
 src/notify.js           уведомления в Mattermost: runMessage + POST в incoming webhook, fetch инжектируется
 src/watch.js            watcher: снимок MR, diffSnapshots, триаж ролью event-triage; состояние в ~/.local/state/fs-harness/watch
-src/agent/spawn.js      запуск агента процессом: стрим строк, abort, SIGTERM→SIGKILL
+src/agents.js           профили агента: имя → bin/args/env/keyFile, ключ читается при запуске
+src/agent/spawn.js      запуск агента процессом: промпт в stdin, стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
 src/agent/journal.js    раны в ~/.local/state/fs-harness/runs/<id>/
 src/judge/index.js      judge(): рубрика + профиль → вердикт, фолбэк, ремонтный round-trip
@@ -92,6 +93,7 @@ resolve target → precheck → (skip?) → context → isolate → prompt
 | `isolation` | `'checkout'` \| `'ephemeral-worktree'` \| `'task-worktree'` |
 | `prompt` | имя шаблона в `src/prompts/` |
 | `judge` | `{gate: 'pre-push'\|'advisory'\|'none', role}` |
+| `agent` | `{default}` — имя профиля из `agents` в конфиге, перебивается `--agent` |
 | `precheck(x)` | до изоляции: посчитать факты, решить `skip`, отдать описание workspace |
 | `dryRun(x)` / `renderPlan(plan, log)` | план без side-effect'ов и его отрисовка |
 | `context(x)` | переменные промпта (списки собираются здесь, в шаблоне только подстановка) |

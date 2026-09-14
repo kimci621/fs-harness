@@ -23,14 +23,14 @@ export const analyzeAction = {
     writes: false,
     isolation: 'checkout',
     prompt: 'actions/analyze',
-    agent: { default: 'claude', allow: ['claude', 'pi'], pickByJudge: false },
+    agent: { default: 'cc', pickByJudge: false },
     judge: { gate: 'none', role: 'acceptance' },
     mcpDescription: 'Разобрать задачу Jira силами AI-агента: о чём она, где в коде править, что сломается, какие вопросы к постановщику. Только читает — ни код, ни Jira не меняет.',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'ключ задачи Jira, например FD-7647' },
-        agent: { type: 'string', enum: ['claude', 'pi'], description: 'какой агент разбирает' },
+        agent: { type: 'string', description: 'какой агент разбирает (имя профиля из конфига: cc, ccq, cco, ccd, pi)' },
       },
       required: ['query'],
     },
