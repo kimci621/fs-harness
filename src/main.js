@@ -36,6 +36,7 @@ const FLAGS_USAGE = `Флаги:
   --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые)
   --jql "<запрос>"        В jira: свой JQL вместо собранного из флагов
   --file <путь|->         В jira field: значение поля из файла или stdin
+  --env <окружение>       В growthbook: окружение флага (дефолт growthbook.env)
   --resolved / --open     В mr-comments: только решённые / нерешённые треды
 
 Режим агента (env):
@@ -124,7 +125,7 @@ function parseArgs(argv) {
     json: false, repo: null, host: null, project: null, agent: null, projectDir: null, buildJob: null,
     watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
-    noJudge: false, judgeProfile: null, judgeOnly: null, for: null, file: null,
+    noJudge: false, judgeProfile: null, judgeOnly: null, for: null, file: null, env: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
     author: null, reviewer: null, target: null, label: null, search: null,
     draft: null, conflicts: false, threads: false, pipeline: null,
@@ -149,6 +150,7 @@ function parseArgs(argv) {
     else if (a === '--judge-only') opts.judgeOnly = argv[++i];
     else if (a === '--for') opts.for = argv[++i];
     else if (a === '--file') opts.file = argv[++i];
+    else if (a === '--env') opts.env = argv[++i];
     else if (a === '--assignee') opts.assignee = argv[++i];
     else if (a === '--sprint') opts.sprint = argv[++i];
     else if (a === '--component') opts.component = argv[++i];

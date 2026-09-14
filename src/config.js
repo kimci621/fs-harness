@@ -13,7 +13,7 @@ export const CONFIG_PATH = CONFIG_PATHS[1];
 
 export const configPath = () => CONFIG_PATHS.find(existsSync) ?? CONFIG_PATH;
 
-const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'claude', buildJob: '', targetBranch: '', branchPattern: 'feature/{key}', jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' } };
+const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'claude', buildJob: '', targetBranch: '', branchPattern: 'feature/{key}', jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' }, growthbook: { baseUrl: '', project: '', env: 'production' } };
 
 export const DEFAULTS = {
   version: 2,
@@ -55,7 +55,7 @@ export const DEFAULTS = {
 // старый конфиг обязан работать бесконечно.
 export function migrateConfig(user) {
   if (user?.version === 2) return user;
-  const { repo = '', host = '', projectDir = '', agent, jira, buildJob, targetBranch, ...rest } = user ?? {};
+  const { repo = '', host = '', projectDir = '', agent, jira, growthbook, buildJob, targetBranch, ...rest } = user ?? {};
   // Пустой v1 (конфига нет вовсе) не превращаем в проект-пустышку.
   if (!repo && !projectDir) return { version: 2, activeProject: '', projects: {}, ...rest };
   const name = path.basename(projectDir || '') || repo.split('/')[1] || repo;
@@ -71,6 +71,7 @@ export function migrateConfig(user) {
         ...(buildJob ? { buildJob } : {}),
         ...(targetBranch ? { targetBranch } : {}),
         ...(jira ? { jira } : {}),
+        ...(growthbook ? { growthbook } : {}),
       },
     },
     ...rest,
@@ -123,6 +124,7 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
     targetBranch: p.targetBranch,
     branchPattern: p.branchPattern || PROJECT_DEFAULT.branchPattern,
     jira: p.jira,
+    growthbook: { ...PROJECT_DEFAULT.growthbook, ...(p.growthbook || {}) },
     agentArgs: { ...DEFAULTS.agentArgs, ...(v2.agentArgs || {}) },
     workspace: {
       ...DEFAULTS.workspace,

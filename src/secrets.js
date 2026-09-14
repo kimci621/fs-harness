@@ -1,4 +1,7 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import { CliError } from './errors.js';
 
 export const KEYCHAIN_SERVICE = 'fs-harness';
@@ -11,6 +14,10 @@ const ALIASES = {
   jira: ['JIRA_API_TOKEN'],
   mattermost: ['MATTERMOST_TOKEN'],
 };
+
+// Ключ, который на машине уже лежит файлом и используется другими инструментами владельца.
+// Заводить ему вторую копию в keychain — значит развести две правды.
+const FILES = { growthbook: path.join(homedir(), '.growthbook_apikey') };
 
 export const envNames = (name) => [`FS_HARNESS_${name.toUpperCase().replace(/-/g, '_')}`, ...(ALIASES[name] || [])];
 
@@ -25,12 +32,23 @@ export function readSecret(name, { env = process.env, required = true, exec = ke
   }
   const fromKeychain = exec(name);
   if (fromKeychain) return fromKeychain;
+  const fromFile = readFile(FILES[name]);
+  if (fromFile) return fromFile;
   if (!required) return null;
+  const where = FILES[name] ? `положи в ${FILES[name]}, заведи в keychain:\n  ${addCommand(name)}` : `заведи в keychain:\n  ${addCommand(name)}`;
   throw new CliError(
-    `Нет ключа "${name}". Заведи в keychain:\n  ${addCommand(name)}\nили экспортируй ${envNames(name)[0]}.`,
+    `Нет ключа "${name}". ${where}\nили экспортируй ${envNames(name)[0]}.`,
     1,
     'secret_missing',
   );
+}
+
+function readFile(file) {
+  try {
+    return file ? readFileSync(file, 'utf8').trim() : null;
+  } catch {
+    return null; // нет файла — это не ошибка, дальше по лесенке
+  }
 }
 
 function keychainRead(name) {
