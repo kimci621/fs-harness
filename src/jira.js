@@ -151,6 +151,18 @@ export function fieldIdByName(issue, name) {
   return Object.entries(issue?.names ?? {}).find(([, n]) => n === name)?.[0] ?? null;
 }
 
+// Чем править поле, говорит его схема из editmeta: готовый список, строка, число
+// или внешний редактор. null — значит нечем (вложения, связи, трекинг времени).
+export function editKind(meta) {
+  const s = meta?.schema ?? {};
+  if (meta?.allowedValues?.length || s.type === 'user' || s.items === 'user') return 'pick';
+  if (s.type === 'array' && s.items === 'string') return 'list';
+  if (s.type === 'string') return s.system === 'description' || s.system === 'environment' || /textarea/.test(s.custom ?? '') ? 'editor' : 'text';
+  if (s.type === 'number') return 'number';
+  if (s.type === 'date' || s.type === 'datetime') return 'text';
+  return null;
+}
+
 // Форма значения для PUT считается по схеме из editmeta, а не угадывается по текущему значению:
 // пустое поле не подсказывает, ждёт оно объект или массив.
 export function editValueFor(meta, option) {
