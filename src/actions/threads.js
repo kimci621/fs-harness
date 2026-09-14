@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { expandHome } from '../config.js';
 import { ACCEPTANCE_PATHSPECS } from '../judge/payload.js';
+import { runChecks, checksFact } from '../checks.js';
 import { makeGit, WORKTREE_ROOT } from '../workspace.js';
 import { CliError } from '../errors.js';
 
@@ -167,7 +168,7 @@ export const threadsAction = {
       `Разобрать ${pre.threads.length} нерешённых тредов ревью в MR !${mr.iid} «${mr.title}»: где ревьюер прав — поправить код, где нет — ответить по существу. ` +
       'Правки только по тредам, посторонние изменения запрещены. Ответы агент готовит текстом, отправляет их и резолвит треды fs-harness после приёмки.',
 
-    verify({ ws, pre, run }) {
+    verify({ ws, pre, run, opts, say }) {
       const { git, dir, base } = ws;
       const file = path.join(run.dir, 'replies.json');
       if (!existsSync(file)) {
@@ -187,6 +188,9 @@ export const threadsAction = {
         to_resolve: replies.filter((r) => r.resolve).length,
         replies,
         diff: commitsAhead ? git(['diff', `${base}..HEAD`, '--', ...ACCEPTANCE_PATHSPECS], dir) : '',
+        checks: !commitsAhead
+          ? 'не прогонялись: агент не менял код'
+          : checksFact(opts.cfg?.checks ?? [], ws.deps.available) ?? runChecks(opts.cfg.checks, dir, { say }),
       };
     },
 
