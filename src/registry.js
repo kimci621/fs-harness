@@ -199,16 +199,16 @@ export const COMMANDS = [
   },
   {
     name: 'task',
-    usage: 'task start <KEY> | task push [KEY] [--target <ветка>]',
-    description: 'Взять задачу в работу (ветка feature/<KEY> от целевой) и запушить её с открытием MR',
+    usage: 'task start <KEY> | task push [KEY] [--target <ветка>] | task judge [KEY]',
+    description: 'Взять задачу в работу (ветка feature/<KEY> от целевой), запушить её с открытием MR, показать приёмку судьи',
     example: 'fsh task start FD-7719',
     run: (ctx, args, opts) => cmdTask(ctx, args, opts),
     mcp: {
-      description: 'start: читает задачу Jira и ставит рабочее дерево на ветку по шаблону проекта (по умолчанию feature/<KEY>), создавая её от целевой ветки. push: пушит текущую ветку в origin и открывает MR в целевую ветку (по умолчанию dev), либо возвращает уже открытый. Меняет git-репозиторий и GitLab.',
+      description: 'start: читает задачу Jira и ставит рабочее дерево на ветку по шаблону проекта (по умолчанию feature/<KEY>), создавая её от целевой ветки. push: пушит текущую ветку в origin и открывает MR в целевую ветку (по умолчанию dev), либо возвращает уже открытый. judge: судья сверяет дифф ветки с текстом задачи и возвращает вердикт (совет, ничего не блокирует). start и push меняют git-репозиторий и GitLab.',
       inputSchema: {
         type: 'object',
         properties: {
-          sub: { type: 'string', enum: ['start', 'push'] },
+          sub: { type: 'string', enum: ['start', 'push', 'judge'] },
           key: { type: 'string', description: 'ключ задачи (FD-7719); для push необязателен, берётся из имени ветки' },
           target: { type: 'string', description: 'целевая ветка MR, по умолчанию dev' },
           dir: { type: 'string', description: 'каталог репозитория' },

@@ -128,3 +128,30 @@ test('task push: с защищённой ветки и без коммитов �
 test('task: неизвестный подкоманд — ошибка использования', async () => {
   await assert.rejects(() => cmdTask(ctxWith(), ['fly'], { asObject: true }), (e) => e.code === 'usage');
 });
+
+test('task judge: payload собирается из текста задачи, фактов и диффа', async () => {
+  git(['switch', 'feature/FD-1']);
+  const ctx = ctxWith();
+  ctx.cfg.judge = { profiles: { p: { provider: 'cli', bin: 'claude' } }, roles: { 'task-acceptance': ['p'] } };
+  ctx.jira = () => ({
+    issue: async () => ({
+      key: 'FD-1',
+      names: { customfield_10242: 'Technical details for QA' },
+      fields: { summary: 'Починить', description: 'надо починить', status: { name: 'В работе' }, customfield_10242: 'шаги' },
+    }),
+  });
+
+  const dry = await cmdTask(ctx, ['judge'], { asObject: true, dryRun: true });
+  assert.match(dry.payload, /FD-1: Починить/);
+  assert.match(dry.payload, /Technical details for QA: заполнено/);
+  assert.match(dry.payload, /Контент: пусто/);
+  assert.match(dry.payload, /```diff/);
+});
+
+test('task judge: без изменений против целевой ветки — no_commit', async () => {
+  git(['switch', '-c', 'feature/FD-8', 'origin/dev']);
+  await assert.rejects(
+    () => cmdTask(ctxWith(), ['judge'], { asObject: true }),
+    (e) => e.code === 'no_commit',
+  );
+});

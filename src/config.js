@@ -43,6 +43,7 @@ export const DEFAULTS = {
     },
     roles: {
       acceptance: ['opus-cli'],
+      'task-acceptance': ['opus-cli'],
       'mr-review': ['opus-cli'],
       'model-pick': ['local', 'opus-cli'],
       'event-triage': ['local', 'opus-cli'],
