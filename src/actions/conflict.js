@@ -6,7 +6,7 @@ import { ensureMRPipeline, findJob, startJob } from '../pipeline.js';
 import { waitJob } from '../ui.js';
 import { jobJSON } from '../output.js';
 import { ACCEPTANCE_PATHSPECS } from '../judge/payload.js';
-import { makeGit, WORKTREE_ROOT } from '../workspace.js';
+import { makeGit, WORKTREE_ROOT, GIT_MAX_BUFFER } from '../workspace.js';
 import { CliError } from '../errors.js';
 
 // Первая строка вывода merge-tree — OID результирующего дерева, а не имя файла.
@@ -27,6 +27,7 @@ function conflictingFiles(projectDir, target, source) {
       cwd: projectDir,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: GIT_MAX_BUFFER,
     });
     return []; // exit 0 — merge чистый
   } catch (err) {

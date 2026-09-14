@@ -4,12 +4,16 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { CliError } from './errors.js';
 
+// Дефолтный буфер execFileSync — мегабайт, а дифф ветки после мержа target легко больше:
+// на нём ран падал с ENOBUFS уже после работы агента.
+export const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
 // git с рабочим каталогом по умолчанию.
 // allowFail — для команд, у которых ненулевой код это ответ, а не поломка (git grep).
 export function makeGit(defaultCwd) {
   return (args, cwd = defaultCwd, { allowFail = false } = {}) => {
     try {
-      return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }).trim();
     } catch (err) {
       if (allowFail) return String(err.stdout ?? '').trim();
       throw new CliError(`git ${args.join(' ')} не удался: ${String(err.stderr || err.message).trim()}`, 1, 'git_failed');
