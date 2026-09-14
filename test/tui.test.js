@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, fieldsFor, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems, flowLines } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueRow, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, fieldsFor, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems, flowLines, boardColumns, boardLanes, onBoard } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -356,4 +356,42 @@ test('карточка: абзацы описания переносятся п�
 
   // Поля-строки не трогаем: их обрезает сам ink, иначе таблица полей поедет.
   assert.deepEqual(flowLines([{ parts: [{ text: 'x'.repeat(80) }] }], 30).length, 1);
+});
+
+test('доска: колонки из Jira, пустые скрыты, курсор ходит двумя осями', () => {
+  const iss = (key, sid, summary = key) => ({ key, fields: { summary, status: { id: sid, name: sid } } });
+  const columns = [
+    { name: 'To do', statuses: [{ id: '1' }, { id: '2' }] },
+    { name: 'Design', statuses: [{ id: '8' }] }, // пустая — на доске её не будет
+    { name: 'Development', statuses: [{ id: '3' }] },
+  ];
+  const issues = [iss('FD-1', '1', 'баннер'), iss('FD-2', '2', 'чекаут'), iss('FD-3', '3', 'промокоды'), iss('FD-9', '77', 'бампы')];
+
+  const cols = boardColumns(columns, issues);
+  assert.deepEqual(cols.map((c) => `${c.name}:${c.items.length}`), ['To do:2', 'Development:1', 'вне доски:1']);
+
+  let s = reduce(initialState('app'), { type: 'tab', tab: 'issues' });
+  s = reduce(reduce(s, { type: 'items', tab: 'issues', items: issues }), { type: 'columns', columns });
+  assert.equal(onBoard(s), false);
+  s = reduce(s, { type: 'boardToggle' });
+  assert.equal(onBoard(s), true);
+  assert.equal(selected(s).key, 'FD-1');
+
+  s = reduce(s, { type: 'boardMove', row: 1 });
+  assert.equal(selected(s).key, 'FD-2');
+  s = reduce(s, { type: 'boardMove', col: 1 });
+  assert.equal(selected(s).key, 'FD-3'); // строка подтянулась к длине колонки
+  assert.equal(reduce(s, { type: 'boardMove', col: 9 }).boardCursor.col, 2); // за край не уедет
+
+  // Поиск действует и на доске: колонки строятся из найденного.
+  const found = reduce(s, { type: 'searchEdit', value: 'промокоды' });
+  assert.deepEqual(boardLanes(found).map((c) => c.name), ['Development']);
+
+  assert.deepEqual(keyIntent('l', {}, s), { type: 'boardMove', col: 1 });
+  assert.deepEqual(keyIntent('L', {}, s), { type: 'moveCard', by: 1 });
+  assert.deepEqual(keyIntent('v', {}, s), { type: 'boardToggle' });
+  assert.deepEqual(keyIntent('j', {}, s), { type: 'boardMove', row: 1 });
+  // В списке те же клавиши значат прежнее.
+  const list = reduce(s, { type: 'boardToggle' });
+  assert.deepEqual(keyIntent('j', {}, list), { type: 'move', by: 1 });
 });

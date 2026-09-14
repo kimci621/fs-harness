@@ -6,7 +6,7 @@ import { fieldByName, fieldText, openSprints } from '../jira.js';
 
 export const TABS = [
   { key: 'mr', title: 'MR', hint: 'a решить конфликт · t обработать тикеты · r локальное ревью · p пайплайн · f фильтры' },
-  { key: 'issues', title: 'Задачи', hint: 'n проанализировать · s статус · S спринт · E поле · c коммент · e раскрыть · f фильтры' },
+  { key: 'issues', title: 'Задачи', hint: 'v доска · n проанализировать · s статус · S спринт · E поле · c коммент · f фильтры' },
   { key: 'runs', title: 'История', hint: 'прошлые запуски действий: вердикт, цена, каталог' },
   { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
 ];
@@ -125,6 +125,9 @@ export const initialState = (project = '') => ({
   loading: { mr: true, issues: false, runs: true, prompts: false },
   scroll: { details: 0, log: 0 }, // details — строк вниз от начала, log — строк вверх от конца
   expand: false,
+  board: false, // вкладка задач: доска вместо списка
+  boardCursor: { col: 0, row: 0 },
+  columns: [], // колонки доски из Jira: [{name, statuses:[{id}]}]
   search: { mr: '', issues: '', runs: '', prompts: '' }, // запрос на вкладку
   searching: false, // открыто поле ввода поиска
   filters: { mr: {}, issues: { assignee: 'me' } }, // по умолчанию задачи только мои, как было
@@ -161,6 +164,17 @@ export function reduce(state, ev) {
         cursor: { ...state.cursor, [state.tab]: clamp(state.cursor[state.tab] + ev.by, len) },
         scroll: { ...state.scroll, details: 0 },
       };
+    }
+    case 'boardToggle':
+      return { ...state, board: !state.board, boardCursor: { col: 0, row: 0 }, scroll: { ...state.scroll, details: 0 } };
+    case 'columns':
+      return { ...state, columns: ev.columns };
+    case 'boardMove': {
+      const cols = boardLanes(state);
+      if (!cols.length) return state;
+      const col = clamp(state.boardCursor.col + (ev.col ?? 0), cols.length);
+      const row = clamp(state.boardCursor.row + (ev.row ?? 0), cols[col].items.length);
+      return { ...state, boardCursor: { col, row }, scroll: { ...state.scroll, details: 0 } };
     }
     case 'scroll': {
       // У лога отсчёт от конца: он дописывается снизу, и «ноль» должен значить «самое свежее».
@@ -285,7 +299,29 @@ export function searchRows(tab, items, query) {
 }
 
 export const visibleItems = (state) => searchRows(state.tab, state.items[state.tab], state.search[state.tab]);
-export const selected = (state) => visibleItems(state)[state.cursor[state.tab]] ?? null;
+
+// Раскладка задач по колонкам доски. Колонка хранит id статусов, а не имена: имя колонки
+// и имя статуса в Jira совпадают не всегда. Пустые колонки прячем — их в FD больше половины.
+export function boardColumns(columns = [], issues = []) {
+  const byStatus = new Map();
+  columns.forEach((c, i) => (c.statuses ?? []).forEach((st) => byStatus.set(String(st.id), i)));
+  const buckets = columns.map((c) => ({ name: c.name, items: [] }));
+  const rest = [];
+  for (const it of issues) {
+    const i = byStatus.get(String(it.fields?.status?.id));
+    if (i === undefined) rest.push(it);
+    else buckets[i].items.push(it);
+  }
+  if (rest.length) buckets.push({ name: 'вне доски', items: rest });
+  return buckets.filter((b) => b.items.length);
+}
+
+export const onBoard = (state) => state.tab === 'issues' && state.board;
+export const boardLanes = (state) => boardColumns(state.columns, visibleItems(state));
+export const selected = (state) =>
+  (onBoard(state)
+    ? boardLanes(state)[state.boardCursor.col]?.items[state.boardCursor.row]
+    : visibleItems(state)[state.cursor[state.tab]]) ?? null;
 export const totalCost = (state) => Object.values(state.runs).reduce((s, r) => s + (r.cost ?? 0), 0);
 
 // Куски строки со своим цветом: важное — номер, исполнитель, статус, ветка — должно
@@ -349,6 +385,11 @@ export const issueRow = (r) => line(
   seg(' · '),
   seg(r.fields?.summary ?? ''),
 );
+
+export const cardRows = (r) => [
+  line(seg(r.key, KEY), seg(`  ${fieldText(r.fields?.priority) || ''}`, LBL)),
+  line(seg(r.fields?.summary ?? '')),
+];
 
 export const runRow = (r) => line(
   seg(r.id, KEY),
@@ -503,6 +544,18 @@ export function keyIntent(input, key, state) {
   if (key.tab) return { type: 'focus', by: key.shift ? -1 : 1 };
   const byNumber = { 1: 'mr', 2: 'issues', 3: 'runs', 4: 'prompts' }[input];
   if (byNumber) return { type: 'tab', tab: byNumber };
+  if (input === 'v' && state.tab === 'issues') return { type: 'boardToggle' };
+  // На доске курсор двумя осями: h/l по колонкам, j/k по карточкам, H/L переносит карточку.
+  if (onBoard(state) && state.focus === 'list') {
+    if (input === 'H') return { type: 'moveCard', by: -1 };
+    if (input === 'L') return { type: 'moveCard', by: 1 };
+    if (key.leftArrow || input === 'h') return { type: 'boardMove', col: -1 };
+    if (key.rightArrow || input === 'l') return { type: 'boardMove', col: 1 };
+    if (key.upArrow || input === 'k') return { type: 'boardMove', row: -1 };
+    if (key.downArrow || input === 'j') return { type: 'boardMove', row: 1 };
+    if (key.pageUp) return { type: 'boardMove', row: -10 };
+    if (key.pageDown) return { type: 'boardMove', row: 10 };
+  }
   const scroll = state.focus === 'list' ? null : 'scroll';
   if (key.upArrow || input === 'k') return { type: scroll ?? 'move', by: -1 };
   if (key.downArrow || input === 'j') return { type: scroll ?? 'move', by: 1 };

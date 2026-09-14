@@ -98,6 +98,9 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     // Доски и спринты живут в отдельном agile-API, в /rest/api их нет.
     boards: (projectKey) => api(`/rest/agile/1.0/board?projectKeyOrId=${encodeURIComponent(projectKey)}&maxResults=50`),
 
+    // Колонки доски — не статусы проекта: это настройка доски, и именно её человек видит в Jira.
+    boardConfig: (boardId) => api(`/rest/agile/1.0/board/${boardId}/configuration`),
+
     sprints: (boardId) => api(`/rest/agile/1.0/board/${boardId}/sprint?state=active,future&maxResults=50`),
 
     // Запись 2. Через agile-API, а не PUT поля: id спринтового customfield у каждого проекта свой.
