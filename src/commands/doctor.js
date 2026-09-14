@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createGlab } from '../glab.js';
 import { createJira } from '../jira.js';
+import { createGrowthBook } from '../growthbook.js';
 import { loadConfig, CONFIG_PATH, expandHome } from '../config.js';
 import { readSecret, addCommand } from '../secrets.js';
 
@@ -68,6 +69,21 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject } = {})
         add('jira', true, `${cfg.jira.baseUrl} · ${me?.displayName ?? me?.accountId ?? 'ok'}`);
       } catch (err) {
         add('jira', false, `${cfg.jira.baseUrl}: ${err.message}`);
+      }
+    }
+  }
+
+  // GrowthBook тоже опционален: не настроен — молчим, про него спросит только growthbook.
+  if (cfg?.growthbook?.baseUrl) {
+    const token = readSecret('growthbook', { required: false });
+    if (!token) {
+      add('growthbook', false, 'ключа нет. Положи secret_… в ~/.growthbook_apikey');
+    } else {
+      try {
+        const { total } = await createGrowthBook({ ...cfg.growthbook, token }).features({ limit: 1 });
+        add('growthbook', true, `${cfg.growthbook.baseUrl} · флагов ${total}`);
+      } catch (err) {
+        add('growthbook', false, `${cfg.growthbook.baseUrl}: ${err.message}`);
       }
     }
   }

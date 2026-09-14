@@ -14,9 +14,11 @@ import { cmdDoctor } from './commands/doctor.js';
 import { cmdPrompts } from './commands/prompts.js';
 import { cmdJira } from './commands/jira.js';
 import { cmdTask } from './commands/task.js';
+import { cmdGrowthBook } from './commands/growthbook.js';
 import { cmdWatch } from './commands/watch.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
+import { createGrowthBook } from './growthbook.js';
 import { readSecret } from './secrets.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdConfig } from './config-cmd.js';
@@ -45,6 +47,7 @@ export function createCtx({ g, cfg, notify }) {
     agentArgs: (agent) => (cfg.agentArgs || {})[agent] || [],
     // Лениво: команды без Jira не должны требовать токен.
     jira: () => createJira({ ...cfg.jira, token: readSecret('jira') }),
+    gb: () => createGrowthBook({ ...cfg.growthbook, token: readSecret('growthbook') }),
   };
 }
 
@@ -217,6 +220,28 @@ export const COMMANDS = [
       },
       call: (ctx, a) => cmdTask(ctx, [a.sub, a.key].filter(Boolean), {
         json: true, asObject: true, yes: true, target: a.target, projectDir: a.dir,
+      }),
+    },
+  },
+  {
+    name: 'growthbook',
+    usage: 'growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>]',
+    description: 'Фича-флаги GrowthBook: список, один флаг, создание, включение и выключение в окружении',
+    example: 'fsh growthbook toggle new-onboarding on --env production',
+    run: (ctx, args, opts) => cmdGrowthBook(ctx, args, opts),
+    mcp: {
+      description: 'Фича-флаги GrowthBook. list/get — только чтение; create создаёт boolean-флаг, toggle включает или выключает флаг в окружении (меняет продакшен-поведение приложения).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sub: { type: 'string', enum: ['list', 'get', 'create', 'toggle'] },
+          id: { type: 'string', description: 'идентификатор флага' },
+          state: { type: 'string', enum: ['on', 'off'] },
+          env: { type: 'string', description: 'окружение, дефолт из конфига' },
+        },
+      },
+      call: (ctx, a) => cmdGrowthBook(ctx, [a.sub ?? 'list', a.id, a.state].filter(Boolean), {
+        json: true, asObject: true, yes: true, env: a.env,
       }),
     },
   },

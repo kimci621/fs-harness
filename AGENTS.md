@@ -21,8 +21,9 @@ src/errors.js           CliError (сообщение без stack trace)
 src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, agent-guide, mr-comments, prompts, jira, task
 src/jira.js             Jira REST: чтение и записи (статус, спринт, комментарий, поле), fetch инжектируется (тесты)
 src/commands/task.js    ветка задачи и push с открытием MR: гарды защищённых веток и грязного дерева
+src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/toggle), fetch инжектируется (тесты)
 src/config.js           конфиг v1/v2, миграция v1 в памяти, выбор активного проекта
-src/secrets.js          ключи: env → keychain (security) → ошибка с командой заведения
+src/secrets.js          ключи: env → keychain (security) → файл (~/.growthbook_apikey) → ошибка с командой заведения
 src/notify.js           уведомления в Mattermost: runMessage + POST в incoming webhook, fetch инжектируется
 src/watch.js            watcher: снимок MR, diffSnapshots, триаж ролью event-triage; состояние в ~/.local/state/fs-harness/watch
 src/agent/spawn.js      запуск агента процессом: стрим строк, abort, SIGTERM→SIGKILL

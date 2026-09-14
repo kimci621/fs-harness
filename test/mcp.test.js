@@ -43,7 +43,7 @@ test('mcp: tools/list — все инструменты с inputSchema', async (
   const ctx = fakeCtx();
   const r = await handleMessage('tools/list', {}, ctx);
   const names = r.tools.map((t) => t.name);
-  assert.deepEqual(names, ['mrs', 'mr', 'mr-comments', 'jobs', 'run', 'deploy', 'conflict', 'threads', 'review', 'analyze', 'jira', 'task', 'commit', 'doctor', 'agent-guide']);
+  assert.deepEqual(names, ['mrs', 'mr', 'mr-comments', 'jobs', 'run', 'deploy', 'conflict', 'threads', 'review', 'analyze', 'jira', 'task', 'growthbook', 'commit', 'doctor', 'agent-guide']);
   for (const t of r.tools) assert.equal(t.inputSchema.type, 'object');
 });
 
