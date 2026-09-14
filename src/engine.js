@@ -280,9 +280,15 @@ export function runAction(spec, ctx, input, opts = {}) {
     try {
       done = await proc.result;
     } catch (err) {
-      throw new CliError(`Не удалось запустить ${agent}: ${err.message}`, 1, 'agent_failed');
+      throw new CliError(`Не удалось запустить ${agent.name}: ${err.message}`, 1, 'agent_failed');
     }
-    if (!done.ok) throw new CliError(`Агент ${agent} завершился с кодом ${done.code}.`, 1, 'agent_failed');
+    if (!done.ok) {
+      // Агент успел поработать: его правки в worktree не выбрасываем даже при провале.
+      keep = true;
+      const how = done.signal ? `прерван (${done.signal})` : `завершился с кодом ${done.code}`;
+      const where = ws?.created ? `\nWorktree сохранён: ${ws.dir}` : '';
+      throw new CliError(`Агент ${agent.name} ${how}.${where}`, 1, 'agent_failed');
+    }
     x.phase('agent', 'done');
     return out.join('\n');
   }

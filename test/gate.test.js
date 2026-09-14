@@ -108,6 +108,18 @@ test('гейт: падение бэкенда судьи тоже закрыва
   assert.ok(existsSync(dir), 'worktree снесён при сбое судьи');
 });
 
+test('agent_failed: worktree с работой агента сохранён', async () => {
+  const published = [];
+  const o = opts({ agent: 'failer' });
+  o.cfg.agents.failer = { bin: 'sh', args: ['-c', 'echo частичный результат; exit 3'] };
+  const run = runAction(spec(published), {}, {}, o);
+  let dir;
+  run.on((ev) => { if (ev.t === 'phase' && ev.phase === 'isolate' && ev.status === 'done') dir = ev.detail; });
+  await assert.rejects(() => run.result, (e) => e instanceof CliError && e.code === 'agent_failed');
+  assert.deepEqual(published, []);
+  assert.ok(existsSync(dir), 'worktree снесён вместе с работой агента');
+});
+
 // Судья по очереди: сначала revise, потом что скажут. Заодно считает свои заходы.
 const judgeQueue = (decisions) => {
   const left = [...decisions];
