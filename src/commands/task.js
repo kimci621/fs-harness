@@ -1,4 +1,6 @@
-import { ISSUE_KEY } from '../jira.js';
+import { ISSUE_KEY, fieldByName, fieldText } from '../jira.js';
+import { judge, formatVerdict } from '../judge/index.js';
+import { buildAcceptancePayload } from '../judge/payload.js';
 import { makeGit } from '../workspace.js';
 import { finish } from '../output.js';
 import { confirm } from '../ui.js';
@@ -29,7 +31,8 @@ export async function cmdTask(ctx, args, opts = {}) {
   const result =
     sub === 'start' ? await start(ctx, rest, opts)
       : sub === 'push' ? await push(ctx, rest, opts)
-        : (() => { throw new CliError('Использование: fsh task start <KEY> | fsh task push [KEY] [--target <ветка>].', 1, 'usage'); })();
+        : sub === 'judge' ? await review(ctx, rest, opts)
+          : (() => { throw new CliError('Использование: fsh task start <KEY> | fsh task push [KEY] [--target <ветка>] | fsh task judge [KEY].', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -119,9 +122,51 @@ async function push(ctx, [maybeKey], opts) {
   return { ...info, pushed: true, mr: { iid: mr?.iid ?? null, title: mr?.title ?? title, web_url: mr?.web_url ?? null }, mr_created: !existing };
 }
 
+// Приёмка: судья сверяет дифф ветки с тем, что написано в задаче. Совет, а не гейт —
+// решение всё равно за человеком, поэтому ok: true при любом вердикте.
+async function review(ctx, [maybeKey], opts) {
+  const dir = dirOf(ctx, opts);
+  const git = makeGit(dir);
+  const target = opts.target || ctx.cfg.targetBranch || 'dev';
+  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const key = maybeKey && ISSUE_KEY.test(maybeKey) ? maybeKey : keyFromBranch(branch);
+  if (!key) throw new CliError(`Из ветки "${branch}" ключ задачи не читается. Использование: fsh task judge FD-7719.`, 1, 'usage');
+
+  const issue = await ctx.jira().issue(key);
+  // Три точки, а не две: сравниваем с точкой ветвления, иначе в дифф попадёт чужая работа в dev.
+  const diff = git(['diff', `origin/${target}...HEAD`], dir, { allowFail: true });
+  if (!diff.trim()) throw new CliError(`В ${branch} нет изменений против origin/${target}: судить нечего.`, 1, 'no_commit');
+  const commits = git(['log', '--oneline', `origin/${target}..HEAD`], dir, { allowFail: true });
+
+  const f = issue.fields ?? {};
+  const goal = [`${key}: ${f.summary ?? ''}`, f.description ?? ''].join('\n\n').trim();
+  const payload = buildAcceptancePayload({
+    goal,
+    facts: {
+      статус: fieldText(f.status),
+      ветка: branch,
+      'целевая ветка': target,
+      коммиты: commits.split('\n').filter(Boolean).length,
+      'Technical details for QA': fieldText(fieldByName(issue, 'Technical details for QA')) ? 'заполнено' : 'пусто',
+      'Контент': fieldText(fieldByName(issue, 'Контент')) ? 'заполнено' : 'пусто',
+    },
+    extra: commits ? `Коммиты ветки:\n\n${commits}` : '',
+    diff,
+  });
+
+  if (opts.dryRun) return { ok: true, dry_run: true, key, branch, target, payload };
+  const verdict = await judge({ role: 'task-acceptance', cfg: ctx.cfg, profile: opts.judgeProfile, payload });
+  return { ok: true, key, branch, target, url: issueUrl(ctx, key), verdict };
+}
+
 const STATE_TEXT = { already: 'уже на ней', switched: 'переключился', tracked: 'взял с origin', created: 'создал' };
 
 function render(r) {
+  if (r.verdict || (r.dry_run && r.payload)) {
+    console.log(`${r.key} · ${r.branch} → ${r.target}`);
+    console.log(r.verdict ? formatVerdict(r.verdict) : r.payload);
+    return;
+  }
   if (r.issue) {
     console.log(`${r.issue.key} · ${r.issue.status} · ${r.issue.summary}`);
     console.log(`${r.issue.url}`);
