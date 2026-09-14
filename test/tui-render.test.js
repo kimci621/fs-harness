@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { render } from 'ink-testing-library';
 import React from 'react';
 import { App } from '../src/tui/app.js';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 const tick = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 
@@ -198,6 +201,10 @@ test('TUI: на узком терминале колонка одна и Tab п�
 
 // Правка поля задачи: список полей из editmeta, значения из allowedValues или из людей проекта.
 test('TUI: E правит поле задачи — выбор поля, выбор значения, один PUT', async () => {
+  // Вместо vim — крошечный sh-скрипт: это настоящий внешний редактор, только быстрый.
+  const fake = path.join(mkdtempSync(path.join(tmpdir(), 'fsh-test-')), 'editor.sh');
+  writeFileSync(fake, "printf '\\nи ещё строка' >> \"$1\"\n");
+  process.env.EDITOR = `/bin/sh ${fake}`;
   const puts = [];
   const ctxEdit = {
     ...ctx,
@@ -208,7 +215,9 @@ test('TUI: E правит поле задачи — выбор поля, выб�
           assignee: { name: 'Assignee', schema: { type: 'user' } },
           priority: { name: 'Priority', schema: { type: 'priority' }, allowedValues: [{ id: '2', name: 'High' }, { id: '3', name: 'Medium' }] },
           labels: { name: 'Labels', schema: { type: 'array', items: 'string' } }, // Jira не перечисляет — вводим руками
-          summary: { name: 'Summary', schema: { type: 'string' } }, // нечем заполнить — не показываем
+          summary: { name: 'Summary', schema: { type: 'string' } },
+          description: { name: 'Description', schema: { type: 'string', system: 'description' } }, // многострочное — уходит в $EDITOR
+          attachment: { name: 'Attachment', schema: { type: 'array', items: 'attachment' } }, // заполнить нечем — не показываем
         },
       }),
       assignableUsers: async () => [{ accountId: 'a1', displayName: 'Амир' }, { accountId: 'a2', displayName: 'Эмиль' }],
@@ -225,7 +234,8 @@ test('TUI: E правит поле задачи — выбор поля, выб�
     assert.match(app.lastFrame(), /FD-1: изменить поле/);
     assert.match(app.lastFrame(), /Assignee/);
     assert.match(app.lastFrame(), /Priority/);
-    assert.doesNotMatch(app.lastFrame(), /Summary/); // выбирать нечего, поле скрыто
+    assert.match(app.lastFrame(), /Summary/); // обычный текст тоже правится
+    assert.doesNotMatch(app.lastFrame(), /Attachment/); // а вот вложение заполнить нечем
 
     app.stdin.write('\r'); // Assignee → люди проекта
     await tick(250);
@@ -244,7 +254,7 @@ test('TUI: E правит поле задачи — выбор поля, выб�
     await tick(250);
     app.stdin.write('j'); await tick(60);
     app.stdin.write('j'); await tick(60);
-    app.stdin.write('j'); await tick(60); // Assignee → Ответственный… → Priority → Labels
+    app.stdin.write('j'); await tick(60); // Assignee → Priority → Description → Labels
     assert.match(app.lastFrame(), /Labels/);
     app.stdin.write('\r');
     await tick(200);
@@ -254,6 +264,17 @@ test('TUI: E правит поле задачи — выбор поля, выб�
     app.stdin.write('\r');
     await tick(300);
     assert.deepEqual(puts[1], { key: 'FD-1', fields: { labels: ['Frontend', 'ui'] } });
+
+    // Описание многострочное, поэтому уходит в $EDITOR: TUI отпускает ввод и ждёт его.
+    app.stdin.write('E');
+    await tick(250);
+    app.stdin.write('j'); await tick(60);
+    app.stdin.write('j'); await tick(60); // Assignee → Priority → Description
+    assert.match(app.lastFrame(), /Description/);
+    app.stdin.write('\r');
+    await tick(600); // $EDITOR — отдельный процесс, ему надо дать отработать
+    assert.deepEqual(puts[2], { key: 'FD-1', fields: { description: 'что сломалось\nи ещё строка' } });
+    assert.match(app.lastFrame(), /Description: что сломалось/); // в логе первая строка
   } finally {
     app.unmount();
   }

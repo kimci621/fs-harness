@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createJira, ISSUE_KEY, fieldByName, fieldIdByName, fieldText, editValueFor, openSprints } from '../src/jira.js';
+import { createJira, ISSUE_KEY, fieldByName, fieldIdByName, fieldText, editKind, editValueFor, openSprints } from '../src/jira.js';
 import { CliError } from '../src/errors.js';
 import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition, pickSprint, boardOf } from '../src/commands/jira.js';
 
@@ -256,6 +256,18 @@ test('jira: правка поля — форма значения берётся
   // Очистка: у списка это пустой массив, у одиночного поля null — Jira другого не принимает.
   assert.deepEqual(editValueFor(users, null), []);
   assert.equal(editValueFor(user, null), null);
+
+  // Чем править поле: список, строка, число или внешний редактор.
+  assert.equal(editKind(user), 'pick');
+  assert.equal(editKind(users), 'pick');
+  assert.equal(editKind({ schema: { type: 'priority' }, allowedValues: [{ id: '1' }] }), 'pick');
+  assert.equal(editKind(labels), 'list');
+  assert.equal(editKind({ schema: { type: 'string', system: 'summary' } }), 'text');
+  assert.equal(editKind({ schema: { type: 'string', system: 'description' } }), 'editor');
+  assert.equal(editKind({ schema: { type: 'string', custom: 'com.atlassian.jira.plugin.system.customfieldtypes:textarea' } }), 'editor');
+  assert.equal(editKind({ schema: { type: 'number' } }), 'number');
+  assert.equal(editKind({ schema: { type: 'date' } }), 'text');
+  assert.equal(editKind({ schema: { type: 'array', items: 'attachment' } }), null); // заполнить нечем
 
   assert.equal(fieldIdByName({ names: { customfield_10341: 'Ответственный разработчик' } }, 'Ответственный разработчик'), 'customfield_10341');
   assert.equal(fieldIdByName({ names: {} }, 'Нет такого'), null);

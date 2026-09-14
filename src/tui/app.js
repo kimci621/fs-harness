@@ -1,6 +1,9 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import React, { useEffect, useReducer, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
 import htm from 'htm';
@@ -9,7 +12,7 @@ import {
   orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueCard, shiftLine, runRow, detailLines, flowLines, visibleItems, onBoard, boardLanes, cardRows, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
 } from './store.js';
 import { listRuns } from '../agent/journal.js';
-import { fieldText, editValueFor } from '../jira.js';
+import { fieldText, editKind, editValueFor } from '../jira.js';
 import { listTemplates, loadTemplate, userOverride, dropUserOverride } from '../prompts.js';
 import { findCommand } from '../registry.js';
 import { runAction } from '../engine.js';
@@ -25,7 +28,8 @@ const html = htm.bind(React.createElement);
 // Наверх списка полей — то, что правят чаще всего.
 const EDIT_FIRST = ['Assignee', 'Ответственный разработчик', 'Ответственный тестировщик', 'Ответственный продакт', 'Priority'];
 const rank = (name) => (EDIT_FIRST.indexOf(name) + 1 || 99);
-const isTextList = (f) => f?.schema?.type === 'array' && f?.schema?.items === 'string';
+// Значение в лог: от многострочного описания там нужна первая строка, не весь текст.
+const valueText = (v) => (Array.isArray(v) ? v.join(', ') : String(v ?? '')).split('\n')[0].slice(0, 60) || 'очищено';
 
 const NARROW = 100; // уже этого две колонки не читаются, показываем одну
 const EMPTY = { mr: 'нет открытых MR', issues: 'нет задач на тебе', runs: 'запусков ещё не было', prompts: 'шаблонов не нашлось' };
@@ -52,6 +56,7 @@ export function App({ ctx, opts }) {
   const bufferRef = useRef([]);
   const quitArmedRef = useRef(false);
   const pipeRef = useRef({ iid: null, pipelineId: null, busy: false });
+  const { stdin, setRawMode, isRawModeSupported } = useStdin();
   const jiraRef = useRef(null);
   const jira = () => (jiraRef.current ??= ctx.jira());
 
@@ -365,7 +370,7 @@ export function App({ ctx, opts }) {
   }
 
   // Что у задачи можно править, спрашиваем у самой Jira: editmeta знает и список полей,
-  // и форму значения. Показываем только то, что есть чем заполнить — люди и готовые опции.
+  // и форму значения. Прячем только то, что заполнить нечем: вложения, связи, трекинг времени.
   async function openEditFields() {
     const item = selected(state);
     if (!item?.key) return;
@@ -373,7 +378,7 @@ export function App({ ctx, opts }) {
     try {
       const meta = await withBusy('редактируемые поля', () => jira().editMeta(item.key));
       const fields = Object.entries(meta?.fields ?? {})
-        .filter(([, f]) => f.allowedValues?.length || f.schema?.type === 'user' || f.schema?.items === 'user' || isTextList(f))
+        .filter(([, f]) => editKind(f))
         .map(([id, f]) => ({ id, label: f.name ?? id, meta: f }))
         .sort((a, b) => rank(a.label) - rank(b.label) || a.label.localeCompare(b.label));
       dispatch({ type: 'modalItems', items: fields, busy: false, note: fields.length ? '' : 'править нечего' });
@@ -386,10 +391,17 @@ export function App({ ctx, opts }) {
     const field = state.modal.items[state.modal.cursor];
     const key = state.modal.issue;
     if (!field) return;
-    // Списки строк (Labels) Jira не перечисляет — их набирают через запятую.
-    if (isTextList(field.meta)) {
-      const now = (state.details[key]?.issue?.fields?.[field.id] ?? []).join(', ');
-      return void dispatch({ type: 'modalOpen', kind: 'editValue', title: `${key} · ${field.label}`, issue: key, field: field.id, meta: field.meta, items: [], editing: field.id, value: now });
+    const kind = editKind(field.meta);
+    const now = state.details[key]?.issue?.fields?.[field.id];
+    // Многострочный текст (Описание и любое textarea) правим в $EDITOR: своего редактора в TUI нет.
+    if (kind === 'editor') {
+      dispatch({ type: 'modalClose' });
+      return void editLong(key, field, typeof now === 'string' ? now : '');
+    }
+    // Списки строк (Labels), однострочный текст и числа Jira не перечисляет — их набирают руками.
+    if (kind !== 'pick') {
+      const value = kind === 'list' ? (now ?? []).join(', ') : now === null || now === undefined ? '' : String(now);
+      return void dispatch({ type: 'modalOpen', kind: 'editValue', title: `${key} · ${field.label}`, issue: key, field: field.id, meta: field.meta, items: [], editing: field.id, value });
     }
     dispatch({ type: 'modalOpen', kind: 'editValue', title: `${key} · ${field.label}`, issue: key, field: field.id, meta: field.meta, items: [], busy: true, note: 'читаю значения…' });
     try {
@@ -406,15 +418,63 @@ export function App({ ctx, opts }) {
     const { issue, field, meta, items, cursor } = state.modal;
     const opt = text === undefined ? items[cursor] : null;
     if (text === undefined && !opt) return;
-    const value = text === undefined ? editValueFor(meta, opt.clear ? null : opt) : text.split(',').map((v) => v.trim()).filter(Boolean);
+    const kind = editKind(meta);
+    const value = text === undefined
+      ? editValueFor(meta, opt.clear ? null : opt)
+      : kind === 'list' ? text.split(',').map((v) => v.trim()).filter(Boolean)
+        : kind === 'number' ? (text.trim() === '' ? null : Number(text))
+          : text;
     dispatch({ type: 'modalItems', busy: true, note: 'сохраняю…' });
     try {
       await withBusy(`${meta.name} у ${issue}`, () => jira().updateIssue(issue, { [field]: value }));
       dispatch({ type: 'modalClose' });
-      bufferRef.current.push(`${issue} ▸ ${meta.name}: ${text !== undefined ? value.join(', ') || 'очищено' : opt.clear ? 'очищено' : opt.label}`);
+      bufferRef.current.push(`${issue} ▸ ${meta.name}: ${text !== undefined ? valueText(value) : opt.clear ? 'очищено' : opt.label}`);
       await reloadIssue(issue);
     } catch (err) {
       dispatch({ type: 'modalItems', busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  // Описание правится в $EDITOR, а не внутри TUI: редактор текста мы не пишем (PLAN, п. 16).
+  async function editLong(key, field, now) {
+    let text;
+    try {
+      text = await openEditor(now, `${key}-${field.id}.md`);
+    } catch (err) {
+      return void bufferRef.current.push(`${key} ▸ ${field.label}: ❌ ${err.message}`);
+    }
+    if (text === null) return void bufferRef.current.push(`${key} ▸ ${field.label}: задай $EDITOR, без него многострочное поле не править`);
+    if (text === now) return void bufferRef.current.push(`${key} ▸ ${field.label}: без изменений`);
+    try {
+      await withBusy(`${field.label} у ${key}`, () => jira().updateIssue(key, { [field.id]: text }));
+      bufferRef.current.push(`${key} ▸ ${field.label}: ${valueText(text)}`);
+      await reloadIssue(key);
+    } catch (err) {
+      bufferRef.current.push(`${key} ▸ ${field.label}: ❌ ${err.message}`);
+    }
+  }
+
+  // Пока человек в редакторе, ink отпускает ввод: иначе клавиши уходят обоим сразу.
+  async function openEditor(text, name) {
+    const editor = process.env.EDITOR || process.env.VISUAL;
+    if (!editor) return null;
+    const [bin, ...pre] = editor.split(' ').filter(Boolean); // EDITOR бывает с флагами: «code -w»
+    const dir = mkdtempSync(path.join(tmpdir(), 'fsh-'));
+    const file = path.join(dir, name.replace(/[^\w.-]/g, '_'));
+    writeFileSync(file, text ?? '');
+    try {
+      if (isRawModeSupported) setRawMode(false);
+      stdin.pause?.();
+      await new Promise((res, rej) => {
+        const child = spawn(bin, [...pre, file], { stdio: 'inherit' });
+        child.on('error', rej);
+        child.on('close', res);
+      });
+      return readFileSync(file, 'utf8');
+    } finally {
+      stdin.resume?.();
+      if (isRawModeSupported) setRawMode(true);
+      rmSync(dir, { recursive: true, force: true });
     }
   }
 
