@@ -16,6 +16,15 @@ test('init: скилл генерируется из реестра — кома
   assert.match(skill, /fsh flow show take-task/);
 });
 
+// description — единственное, по чему сессия решает, грузить скилл. Без ключа задачи,
+// MR и фича-флагов в триггерах он не подхватится там, где нужен.
+test('init: в description скилла есть триггеры на задачу, MR и флаги', () => {
+  const description = buildSkill(COMMANDS).match(/^description: (.+)$/m)[1];
+  for (const trigger of ['FD-1234', 'merge request', 'в работу', 'запушь', 'MR', 'флаг']) {
+    assert.ok(description.includes(trigger), `в description нет триггера "${trigger}"`);
+  }
+});
+
 test('init: пишет скилл и разрешение, второй запуск ничего не меняет', () => {
   const dir = fresh();
   const res = cmdInit(COMMANDS, ctx, { projectDir: dir, asObject: true, yes: true });
