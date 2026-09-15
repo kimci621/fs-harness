@@ -103,8 +103,13 @@ export const isTerminal = (status) => JOB_TERMINAL.has(status);
 // Опрос джобы каждые intervalMs с живой таблицей всех джоб пайплайна.
 // Возвращает финальный объект джобы.
 // quiet — без анимаций (MCP-режим); onTick(text) — вызывается при каждом опросе.
-export async function waitJob({ g, repo, pipelineId, jobId, intervalMs = 5000, timeoutMs = 60 * 60 * 1000, label, quiet = false, onTick }) {
+// onManual(job) — джоба стала manual: сыграть её и продолжить ждать. Нужен после свежего
+// push: до неё ещё не дошла стадия (статус created), и без этого ожидание manual-джобы
+// упирается в таймаут, хотя её надо просто play.
+export async function waitJob({ g, repo, pipelineId, jobId, intervalMs = 5000, timeoutMs = 60 * 60 * 1000, label, quiet = false, onTick, onManual = null }) {
   const started = Date.now();
+  let activeId = jobId;
+  let played = false;
   let table = null;
   let spinner = null;
   if (!quiet) {
@@ -114,7 +119,15 @@ export async function waitJob({ g, repo, pipelineId, jobId, intervalMs = 5000, t
 
   while (true) {
     const jobs = await g.getJobs(repo, pipelineId);
-    const job = jobs.find((j) => j.id === jobId) || (await g.getJob(repo, jobId));
+    let job = jobs.find((j) => j.id === activeId) || (await g.getJob(repo, activeId));
+    if (job.status === 'manual' && onManual && !played) {
+      played = true;
+      const run = await onManual(job);
+      // retry меняет id: дальше следим за новой джобой.
+      if (run?.id && run.id !== activeId) activeId = run.id;
+      if (run?.status) job = { ...job, id: activeId, status: run.status };
+      if (!quiet) spinner.text(`${label}: запущена (${job.status})`);
+    }
     if (quiet) {
       onTick?.(`${label}: ${job.status}`);
     } else {

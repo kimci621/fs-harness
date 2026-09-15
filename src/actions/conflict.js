@@ -229,6 +229,10 @@ export const conflictAction = {
       const final = await waitJob({
         g, repo, pipelineId: pipeline.id, jobId: (started ?? build).id,
         label: build.name, quiet: opts.quiet, onTick: opts.onTick,
+        // Свежий push создаёт новый пайплайн: build-джоба сначала created, до неё ещё
+        // не дошла стадия. waitJob сыграет её, когда она станет manual, а не будет ждать впустую.
+        onManual: (job) => startJob(g, repo, job),
+        ...(opts.intervalMs ? { intervalMs: opts.intervalMs } : {}),
       });
       if (final.status !== 'success') {
         throw new CliError(`Build завершился: ${final.status}.\nДетали: ${final.web_url}`, 1, 'build_failed');

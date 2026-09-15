@@ -55,6 +55,10 @@ before(() => {
   // а не в source — иначе следующие conflict-тесты видят уже смерженную ветку и уходят в skip.
   git(['branch', 'conflict-src', 'source'], project);
   git(['push', 'origin', 'conflict-src'], project);
+  // `conflict-stage` — своя ветка тесту «целевая джоба стала manual позже»: он тоже пушит
+  // мерж, и без отдельной ветки следующие conflict-тесты уйдут в skip.
+  git(['branch', 'conflict-stage', 'source'], project);
+  git(['push', 'origin', 'conflict-stage'], project);
 
   // Скрипты фейковых агентов: claude в headless-режиме — stream-json в stdout.
   const agent = (name, body) => {
@@ -281,6 +285,30 @@ test('conflict: агент ничего не сделал — agent_failed «н�
     () => runActionCLI(conflictAction, { g, repo: 'r/r' }, ['7'], opts({ agent: 'conflict-idle', makeProvider: fakeJudge('approve') })),
     (e) => e.code === 'agent_failed' && /не создал коммитов/.test(e.message),
   );
+});
+
+test('conflict: build-джоба ещё created (стадия tests идёт) — waitJob играет её, когда станет manual', async () => {
+  // Живой случай: после push пайплайн новый, build сначала created, manual — только когда
+  // отработает стадия tests. Раньше startJob на created ничего не делал, и ожидание упиралось
+  // в таймаут хотя джобу надо было просто play.
+  let polls = 0;
+  const { g, calls } = makeG({
+    getMR: async (_repo, iid) => ({
+      iid: Number(iid), title: 'тестовый MR', web_url: 'http://x/mr', sha: 'abc',
+      source_branch: 'conflict-stage', target_branch: 'target', head_pipeline: null,
+    }),
+    getJobs: async () => {
+      polls += 1;
+      const status = polls === 1 ? 'created' : polls === 2 ? 'manual' : 'success';
+      return [{ id: 5, name: 'build_image', stage: 'build', status, web_url: 'http://x/j5' }];
+    },
+  });
+  const res = await runActionCLI(conflictAction, { g, repo: 'r/r' }, ['7'], opts({
+    agent: 'conflict-bot', makeProvider: fakeJudge('approve'), intervalMs: 5,
+  }));
+  assert.equal(res.ok, true);
+  assert.equal(res.build.status, 'success');
+  assert.deepEqual(calls.played, [5], 'manual-джоба не сыграна после того, как стадия дошла');
 });
 
 test('conflict: конфликтов нет — skip, агент не запускается', async () => {

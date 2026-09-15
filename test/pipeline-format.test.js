@@ -173,6 +173,39 @@ test('waitJob: терминальный статус возвращает джо
   );
 });
 
+test('waitJob: джоба, ставшая manual после created, играется сама, а не ждётся час', async () => {
+  // Сценарий свежего push: стадия tests ещё идёт, build-джоба — created; только потом manual.
+  const seq = ['created', 'manual', 'success'];
+  let i = 0;
+  const job = () => ({ id: 9, name: 'build_image', stage: 'build', status: seq[Math.min(i++, seq.length - 1)] });
+  const played = [];
+  const final = await waitJob({
+    g: { getJobs: async () => [job()], getJob: async () => job() },
+    repo: 'r/repo', pipelineId: 1, jobId: 9, intervalMs: 1, quiet: true, label: 'build',
+    onManual: async (j) => { played.push(j.status); return { id: j.id, status: 'pending' }; },
+  });
+  assert.equal(final.status, 'success');
+  assert.deepEqual(played, ['manual'], 'manual-джоба должна играться ровно один раз');
+});
+
+test('waitJob: retry вернул новый id — дальше следим за новой джобой', async () => {
+  let polls = 0;
+  const g = {
+    getJobs: async () => {
+      polls += 1;
+      if (polls === 1) return [{ id: 9, name: 'deploy_dev', stage: 'deploy', status: 'manual' }];
+      return [{ id: 10, name: 'deploy_dev', stage: 'deploy', status: 'success' }];
+    },
+    getJob: async (_repo, id) => ({ id, name: 'deploy_dev', status: 'success' }),
+  };
+  const final = await waitJob({
+    g, repo: 'r/repo', pipelineId: 1, jobId: 9, intervalMs: 1, quiet: true, label: 'deploy',
+    onManual: async () => ({ id: 10, status: 'running' }),
+  });
+  assert.equal(final.id, 10);
+  assert.equal(final.status, 'success');
+});
+
 test('mrs: фильтры делятся на серверные и клиентские, me резолвится в ник', async () => {
   const params = await buildMRParams({ me: async () => ({ username: 'a.latipov' }) }, {
     author: 'me', reviewer: 'petya', target: 'dev', draft: false, label: 'ui',
