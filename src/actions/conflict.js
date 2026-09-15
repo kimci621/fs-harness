@@ -176,6 +176,13 @@ export const conflictAction = {
     // Механические факты после агента. Ни одного «по словам агента».
     verify({ ws, pre, opts, say }) {
       const { git, dir, base } = ws;
+      // Незавершённый мерж — не результат: коммита нет, а конфликтники висят в индексе.
+      // Без этой проверки ран «успешно» пушит несуществующее решение (живой случай из e2e-теста).
+      const mergeHead = git(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], dir, { allowFail: true });
+      const unmerged = git(['status', '--porcelain'], dir).split('\n').filter((l) => /^(UU|AA|DD|AU|UA|DU|UD)/.test(l));
+      if (mergeHead || unmerged.length) {
+        throw new CliError(`Мерж не завершён: ${unmerged.length ? `нерешённые файлы: ${unmerged.map((l) => l.slice(3)).join(', ')}` : 'есть MERGE_HEAD, коммита нет'}. Проверь: git -C ${dir} status.`, 1, 'agent_failed');
+      }
       const commitsAhead = Number(git(['rev-list', '--count', `${base}..HEAD`], dir));
       if (commitsAhead === 0) {
         throw new CliError(`Агент не создал коммитов в worktree (${dir}). Проверь вручную: git -C ${dir} status.`, 1, 'agent_failed');
