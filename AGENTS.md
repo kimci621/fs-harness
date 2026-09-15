@@ -29,6 +29,7 @@ src/watch.js            watcher: снимок MR, diffSnapshots, триаж ро
 src/agents.js           профили агента: имя → bin/args/env/keyFile, ключ читается при запуске
 src/agent/spawn.js      запуск агента процессом: промпт в stdin, стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
+src/agent/stream.js     разбор stream-json агента claude: активность шагами, отчёт из result
 src/agent/journal.js    раны в ~/.local/state/fs-harness/runs/<id>/
 src/judge/index.js      judge(): рубрика + профиль → вердикт, фолбэк, ремонтный round-trip
 src/judge/schema.js     zod-схема вердикта, VERDICT_SHAPE, extractJson
