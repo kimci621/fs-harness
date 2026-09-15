@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createEventStream } from './agent/events.js';
+import { parseClaudeLine } from './agent/stream.js';
 import { createRun, saveArtifact, readRun, appendEvent } from './agent/journal.js';
 import { spawnAgent } from './agent/spawn.js';
 import { renderTemplate } from './prompts.js';
@@ -14,6 +15,7 @@ import { acquireWorkspace, MODES as ISOLATION_MODES } from './workspace.js';
 import { resolveAgent } from './agents.js';
 import { confirm } from './ui.js';
 import { makeLogger, finish } from './output.js';
+import { fmtDuration, hhmmss } from './format.js';
 import { postMattermost, runMessage } from './notify.js';
 import { CliError } from './errors.js';
 
@@ -57,8 +59,9 @@ export function runAction(spec, ctx, input, opts = {}) {
   let meta = null;
   let keep = Boolean(opts.keepWorktree);
 
+  // at ставится здесь, а не только в журнале: рендереру CLI нужны метки времени на каждой строке.
   const emit = (ev) => {
-    const full = { run: runDir?.id ?? null, ...ev };
+    const full = { at: new Date().toISOString(), run: runDir?.id ?? null, ...ev };
     appendEvent(runDir, full);
     events.push(full);
   };
@@ -261,19 +264,42 @@ export function runAction(spec, ctx, input, opts = {}) {
     const session = SESSION_ARGS[agent.family];
     if (session && !x.sessionId) x.sessionId = randomUUID();
     const sessionArgs = session ? (resume ? session.resume(x.sessionId) : session.start(x.sessionId)) : [];
+    // stream-json у claude: без него headless-агент молчит до самого конца, и долгая работа
+    // неотличима от зависания (живой случай: 21 минута тишины и прерванный ран). Профиль со
+    // своим --output-format не трогаем.
+    const streamJson = agent.family === 'claude' && !agent.args.includes('--output-format');
+    const extraArgs = streamJson ? ['--output-format', 'stream-json', '--verbose'] : [];
     x.phase('agent', 'start', agent.name);
     x.say(`🤖 ${resume ? 'Возвращаю задачу' : 'Запускаю'} ${agent.name}…`);
+    const startedAt = Date.now();
     const proc = spawnAgent({
       bin: agent.bin,
-      args: [...agent.args, ...sessionArgs, '-p'],
+      args: [...agent.args, ...sessionArgs, ...extraArgs, '-p'],
       input: resume ?? x.prompt, // промпт в stdin: в argv он упирается в ARG_MAX
       cwd: ws.dir,
       env: { ...process.env, ...agent.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo },
       signal: ac.signal,
     });
     const out = [];
+    let resultText = null; // финальный отчёт из события result потока stream-json
     proc.events.on((ev) => {
       if (ev.t !== 'log') return;
+      if (ev.stream === 'stdout' && streamJson) {
+        const { activity, result, passthrough } = parseClaudeLine(ev.text);
+        if (result !== null) {
+          resultText = result;
+          return;
+        }
+        if (activity) {
+          emit({ t: 'log', stream: 'activity', text: activity });
+          return;
+        }
+        if (passthrough) {
+          out.push(passthrough);
+          emit({ t: 'log', stream: 'stdout', text: passthrough });
+        }
+        return;
+      }
       if (ev.stream === 'stdout') out.push(ev.text);
       emit({ t: 'log', stream: ev.stream, text: ev.text });
     });
@@ -288,10 +314,10 @@ export function runAction(spec, ctx, input, opts = {}) {
       keep = true;
       const how = done.signal ? `прерван (${done.signal})` : `завершился с кодом ${done.code}`;
       const where = ws?.created ? `\nWorktree сохранён: ${ws.dir}` : '';
-      throw new CliError(`Агент ${agent.name} ${how}.${where}`, 1, 'agent_failed');
+      throw new CliError(`Агент ${agent.name} ${how} за ${fmtDuration(Date.now() - startedAt)}.${where}`, 1, 'agent_failed');
     }
-    x.phase('agent', 'done');
-    return out.join('\n');
+    x.phase('agent', 'done'); // длительность фазы считает рендерер по времени старта
+    return resultText ?? out.join('\n');
   }
 
   return {
@@ -329,19 +355,89 @@ export async function runActionCLI(spec, ctx, args, opts = {}) {
   }
   resolveAgent(opts.cfg, opts.agent); // список агентов открытый: проверка — есть ли профиль в конфиге
 
-  const log = opts.asObject ? () => {} : makeLogger(opts.json);
+  // Рендер событий: время на каждой строке, длительности фаз, сердцебиение на долгих фазах.
+  // Тихие режимы (MCP, asObject) ничего не печатают — stdout там занят протоколом/результатом.
+  const silent = Boolean(opts.asObject || opts.quiet);
+  const stamp = hhmmss; // метка времени как в журнале рана
+  // Единственная точка человеческого вывода: в json-режиме прогресс уходит в stderr.
+  const emitLine = (text, at = null) => {
+    if (silent) return;
+    const line = `${stamp(at)} ${text}`;
+    if (opts.json) process.stderr.write(`${line}\n`);
+    else console.log(line);
+  };
+
   const run = runAction(spec, ctx, { query }, opts);
+  const phaseStarted = new Map(); // имя фазы → момент старта, для длительности на done
+  let current = null; // открытая фаза для сердцебиения
+  let lastActivity = null; // чем агент был занят в последний раз — для сердцебиения
+  let lastEventAt = Date.now();
+  const HEARTBEAT_EVERY_MS = 30_000;
+  const HEARTBEAT_AFTER_MS = 45_000; // тише этого — значит есть повод напомнить о себе
+  const heartbeat = silent
+    ? null
+    : setInterval(() => {
+        if (!current || Date.now() - lastEventAt < HEARTBEAT_AFTER_MS) return;
+        const what = lastActivity ? `последнее: ${lastActivity}` : 'событий пока не было';
+        emitLine(`⏳ ${current.phase}: идёт ${fmtDuration(Date.now() - current.at)}, ${what}`);
+      }, HEARTBEAT_EVERY_MS);
+  heartbeat?.unref?.();
+
+  // Ctrl+C — не сырой kill: останавливаем агента и судью, движок сохраняет worktree
+  // с работой и печатает внятную ошибку. Второй Ctrl+C — жёсткий выход.
+  let interrupts = 0;
+  const onSigInt = () => {
+    interrupts += 1;
+    if (interrupts > 1) process.exit(130);
+    emitLine('⏹ Прерываю: останавливаю агента и судью, сохраняю worktree…');
+    run.abort();
+  };
+  if (!silent) process.on('SIGINT', onSigInt);
+
   run.on((ev) => {
-    if (ev.t === 'delta') return void (opts.json || process.stderr.write(ev.text)); // поток судьи, без переводов строк
+    lastEventAt = Date.now();
+    if (ev.t === 'delta') {
+      // Поток судьи: приходят готовые строки — печатаем с меткой времени, а не в одну моргающую строку.
+      for (const l of String(ev.text).split('\n').filter(Boolean)) emitLine(`  ⚙ ${l}`, ev.at);
+      return;
+    }
+    if (ev.t === 'phase') {
+      if (ev.status === 'start') {
+        phaseStarted.set(ev.phase, Date.now());
+        current = { phase: ev.phase, at: Date.now() };
+        emitLine(`▶ ${ev.phase}…`, ev.at);
+        return;
+      }
+      current = null;
+      if (ev.status !== 'done') return;
+      const from = phaseStarted.get(ev.phase);
+      const took = from ? ` за ${fmtDuration(Date.now() - from)}` : '';
+      emitLine(`✓ ${ev.phase}${took}${ev.detail ? ` — ${ev.detail}` : ''}`, ev.at);
+      return;
+    }
     if (ev.t !== 'log') return;
-    if (ev.stream === 'stderr') process.stderr.write(`${ev.text}\n`);
-    else log(ev.text);
+    if (ev.stream === 'stderr') {
+      if (!silent) process.stderr.write(`${stamp(ev.at)} ${ev.text}\n`);
+      return;
+    }
+    if (ev.stream === 'activity') {
+      lastActivity = ev.text;
+      emitLine(`  · ${ev.text}`, ev.at);
+      return;
+    }
+    emitLine(ev.text, ev.at);
   });
 
-  const result = await run.result;
+  let result;
+  try {
+    result = await run.result;
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    if (!silent) process.removeListener('SIGINT', onSigInt);
+  }
   if (opts.asObject) return result;
   if (result?.dry_run && !opts.json) {
-    a.renderPlan(result, log);
+    a.renderPlan(result, (t) => emitLine(t));
     return result;
   }
   finish(opts.json, result);
@@ -353,18 +449,25 @@ export async function runActionCLI(spec, ctx, args, opts = {}) {
 // сравнивать на одном и том же материале даже после уборки worktree.
 export async function judgeRun(runId, opts = {}) {
   const log = opts.asObject ? () => {} : makeLogger(opts.json);
-  const saved = readRun(runId);
+  const saved = readRun(runId, { root: opts.runsDir });
   const { meta } = saved;
   const diff = saved.read('diff.patch');
   if (diff === null) {
     throw new CliError(`У рана ${runId} нет diff.patch — судить нечего (ран не дошёл до verify).`, 1, 'run_incomplete');
   }
 
-  log(`⚖ Судья по рану ${runId} (действие ${meta.action}, MR !${meta.mr})`);
+  const stamp = hhmmss; // те же метки, что и в рендере действий
+  log(`${stamp()} ⚖ Судья по рану ${runId} (действие ${meta.action}, MR !${meta.mr})`);
   const verdict = await judge({
     role: meta.judge?.role ?? 'acceptance',
     cfg: opts.cfg,
     profile: opts.judgeProfile,
+    makeProvider: opts.makeProvider, // шов для тестов: судья без сети
+    // Поток размышлений судьи в лог: без него минуты проверки выглядят зависанием
+    // (живой случай: «судья завершился с кодом 143» после полной тишины).
+    onDelta: (text) => {
+      for (const l of String(text).split('\n').filter(Boolean)) log(`${stamp()}   ⚙ ${l}`);
+    },
     payload: buildAcceptancePayload({
       goal: meta.goal,
       facts: { ...(meta.facts ?? {}), diff_title: undefined },
@@ -378,6 +481,7 @@ export async function judgeRun(runId, opts = {}) {
 
   const result = { ok: true, run: runId, judge_only: true, mr: meta.mr, verdict };
   if (opts.asObject) return result;
+  log(`${stamp()} ⏱ Судья думал ${fmtDuration(verdict.meta.duration_ms ?? 0)}`);
   log(formatVerdict(verdict));
   finish(opts.json, result);
   return result;

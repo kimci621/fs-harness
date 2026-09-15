@@ -59,6 +59,8 @@ test('лог: кольцевой буфер не растёт бесконечн
 
 test('logLine: что попадает в лог, а что рисуется карточкой', () => {
   assert.equal(logLine('conflict-1', { t: 'log', text: 'merge' }), 'conflict ▸ merge');
+  // События движка несут метку времени — она попадает в лог (локальный часовой пояс).
+  assert.match(logLine('conflict-1', { t: 'log', at: '2026-09-15T08:05:52.276Z', text: 'merge' }), /^conflict ▸ \d{2}:\d{2}:\d{2} merge$/);
   assert.match(logLine('conflict-1', { t: 'verdict', verdict: { decision: 'approve', meta: { cost: 0.4 } } }), /судья: approve · \$0\.4000/);
   assert.equal(logLine('conflict-1', { t: 'phase', phase: 'judge', status: 'done' }), null);
   assert.equal(logLine('conflict-1', { t: 'delta', text: 'дум' }), null);

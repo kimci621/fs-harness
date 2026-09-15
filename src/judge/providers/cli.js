@@ -1,5 +1,6 @@
 import { spawnAgent } from '../../agent/spawn.js';
 import { resolveAgent } from '../../agents.js';
+import { parseClaudeLine } from '../../agent/stream.js';
 import { CliError } from '../../errors.js';
 
 // Судья через claude CLI: процесс, а не HTTP. По подписке ключ не нужен, но profile.agent
@@ -15,7 +16,10 @@ export function createCliProvider(profile, cfg) {
     model: profile.model ?? 'opus',
 
     async complete({ system, user, effort = profile.effort, signal, onDelta }) {
-      const args = ['--restricted', '--output-format', 'json'];
+      // stream-json, а не json: в одиночном JSON судья молчит до самого конца, а его проверка
+      // идёт минуты — без потока активности она неотличима от зависания (живой случай:
+      // «судья завершился с кодом 143» после полной тишины).
+      const args = ['--restricted', '--output-format', 'stream-json', '--verbose'];
       if (profile.model) args.push('--model', profile.model);
       if (effort) args.push('--effort', effort);
       if (system) args.push('--append-system-prompt', system);
@@ -24,11 +28,20 @@ export function createCliProvider(profile, cfg) {
       // Задание уходит в stdin: дифф в приёмке бывает в сотни килобайт, argv столько не держит.
       // Флаги профиля агента не берём: у судьи свой набор, и --restricted с ними конфликтует.
       const run = spawnAgent({ bin, args, input: user, cwd: profile.cwd, env: agent ? { ...process.env, ...agent.env } : undefined, signal });
-      const chunks = [];
+      let resultEnvelope = null;
       run.events.on((ev) => {
         if (ev.t !== 'log') return;
-        if (ev.stream === 'stdout') chunks.push(ev.text);
-        else onDelta?.(ev.text);
+        if (ev.stream === 'stderr') {
+          onDelta?.(ev.text); // предупреждения claude видны сразу, а не после проверки
+          return;
+        }
+        const { activity, result, envelope, passthrough } = parseClaudeLine(ev.text);
+        if (result !== null) {
+          resultEnvelope = envelope ?? { result };
+          return;
+        }
+        if (activity) onDelta?.(activity);
+        else if (passthrough) onDelta?.(passthrough);
       });
 
       let done;
@@ -37,27 +50,27 @@ export function createCliProvider(profile, cfg) {
       } catch (err) {
         throw new CliError(`Судья: не удалось запустить ${bin}: ${err.message}`, 1, 'judge_failed');
       }
-      const stdout = chunks.join('\n');
       if (!done.ok) {
-        throw new CliError(`Судья: ${bin} завершился с кодом ${done.code}.\n${stdout.slice(-500)}`, 1, 'judge_failed');
+        const how = done.signal ? `прерван (${done.signal})` : `завершился с кодом ${done.code}`;
+        throw new CliError(`Судья: ${bin} ${how}.`, 1, 'judge_failed');
       }
-
-      let envelope;
-      try {
-        envelope = JSON.parse(stdout);
-      } catch {
-        throw new CliError(`Судья: ${bin} вернул не JSON (--output-format json).\n${stdout.slice(0, 500)}`, 1, 'judge_failed');
+      if (!resultEnvelope) {
+        throw new CliError(`Судья: ${bin} не вернул результата (--output-format stream-json).`, 1, 'judge_failed');
       }
-      if (envelope.is_error) {
-        throw new CliError(`Судья: ${bin} отчитался ошибкой (${envelope.subtype}).`, 1, 'judge_failed');
+      if (resultEnvelope.is_error || (resultEnvelope.subtype && resultEnvelope.subtype !== 'success')) {
+        throw new CliError(
+          `Судья: ${bin} отчитался ошибкой (${resultEnvelope.subtype ?? 'is_error'}). ${String(resultEnvelope.result ?? '').slice(0, 300)}`,
+          1,
+          'judge_failed',
+        );
       }
 
       return {
-        text: String(envelope.result ?? ''),
-        model: envelope.modelUsage ? Object.keys(envelope.modelUsage)[0] : profile.model,
-        usage: envelope.usage ?? {},
-        cost: envelope.total_cost_usd ?? 0,
-        sessionId: envelope.session_id,
+        text: String(resultEnvelope.result ?? ''),
+        model: resultEnvelope.modelUsage ? Object.keys(resultEnvelope.modelUsage)[0] : profile.model,
+        usage: resultEnvelope.usage ?? {},
+        cost: resultEnvelope.total_cost_usd ?? 0,
+        sessionId: resultEnvelope.session_id,
       };
     },
   };

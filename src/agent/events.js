@@ -35,10 +35,14 @@ export function createEventStream() {
       return closed;
     },
 
-    // Подписка без backpressure (MCP-notify): отдаёт только то, что придёт дальше.
+    // Подписка без backpressure (MCP-notify): буфер отдаётся целиком, дальше — только то,
+    // что придёт после. Иначе первое событие рана (context start) терялось: go() успевал
+    // стартовать до того, как рендерер подписывался.
     // Возвращает функцию отписки.
     on(fn) {
       listeners.add(fn);
+      const n = buffer.length; // снимок: события, пришедшие при реплее, уходят через broadcast
+      for (let i = 0; i < n; i++) fn(buffer[i]);
       return () => listeners.delete(fn);
     },
 
