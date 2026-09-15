@@ -202,7 +202,8 @@ export function runAction(spec, ctx, input, opts = {}) {
   // Приёмка: вердикт revise возвращает работу агенту в ту же сессию, не дальше maxRevise раз.
   // Любой другой исход кроме approve на гейте pre-push закрывает push.
   async function accept(x) {
-    const limit = SESSION_ARGS[resolveAgent(opts.cfg, opts.agent).family] ? (opts.cfg?.judge?.maxRevise ?? 1) : 0;
+    // Доделка нужна только гейту: advisory нечего останавливать, перезапуск агента лишь жжёт деньги.
+    const limit = a.judge.gate === 'pre-push' && SESSION_ARGS[resolveAgent(opts.cfg, opts.agent).family] ? (opts.cfg?.judge?.maxRevise ?? 1) : 0;
     let verdict = await gate(x);
     for (let round = 1; verdict?.decision === 'revise' && round <= limit; round++) {
       x.say(`↻ Судья просит доделать (${round}/${limit}) — возвращаю задачу агенту.`);
