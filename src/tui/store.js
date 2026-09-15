@@ -1,7 +1,7 @@
 import Fuse from 'fuse.js';
 // Состояние TUI — чистые функции: их можно гонять тестами без терминала.
 // Ink-компоненты только рисуют то, что здесь посчитано.
-import { statusIcon, humanize, cleanTitle } from '../format.js';
+import { statusIcon, humanize, cleanTitle, hhmmss } from '../format.js';
 import { fieldByName, fieldText, openSprints } from '../jira.js';
 
 export const TABS = [
@@ -274,7 +274,9 @@ function applyRunEvent(state, id, e) {
 // Строки лога из события. null — событие не для лога (фазы рисуются в карточке).
 export function logLine(runId, e) {
   const tag = runId.split('-')[0];
-  if (e.t === 'log') return `${tag} ▸ ${e.text}`;
+  // Метка времени: долгий ран без неё неотличим от зависшего.
+  const at = e.at ? `${hhmmss(e.at)} ` : '';
+  if (e.t === 'log') return `${tag} ▸ ${at}${e.text}`;
   if (e.t === 'verdict') return `${tag} ▸ судья: ${e.verdict.decision} · $${(e.verdict.meta?.cost ?? 0).toFixed(4)}`;
   if (e.t === 'error') return `${tag} ▸ ❌ ${e.message}`;
   if (e.t === 'phase' && e.status === 'start') return `${tag} ▸ ${e.phase}…`;

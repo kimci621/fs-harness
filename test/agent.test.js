@@ -38,7 +38,7 @@ test('createEventStream: два итератора читают одно и то
   assert.deepEqual((await b).length, 1);
 });
 
-test('createEventStream: on() отдаёт только последующие события', async () => {
+test('createEventStream: on() доставляет буфер до подписки и последующие события', async () => {
   const s = createEventStream();
   s.push({ t: 'log', text: 'до' });
   const seen = [];
@@ -47,7 +47,8 @@ test('createEventStream: on() отдаёт только последующие �
   off();
   s.push({ t: 'log', text: 'после отписки' });
   s.close();
-  assert.deepEqual(seen, ['после']);
+  // Ран рендереру важен целиком: подписался позже — прочитал с начала, как и итератор.
+  assert.deepEqual(seen, ['до', 'после']);
 });
 
 test('spawnAgent: stdout и stderr приходят построчно, в конце done', async () => {

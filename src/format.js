@@ -29,6 +29,12 @@ export function humanize(iso) {
 }
 
 // Продолжительность для спиннера: 1м 03с.
+// Метка времени для строк лога: HH:MM:SS локального времени. Пустой вход — сейчас.
+export function hhmmss(at = null) {
+  const d = at ? new Date(at) : new Date();
+  return (Number.isNaN(d.getTime()) ? new Date() : d).toTimeString().slice(0, 8);
+}
+
 export function fmtDuration(ms) {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);
