@@ -60,7 +60,7 @@ export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, reb
   const started = await startJob(g, repo, build, { force: rebuild });
   const buildRun = started ?? { id: build.id };
   if (started) log(`   ${build.status} → ${started.status} (#${started.id})`);
-  const buildFinal = await waitJob({ ...waitFor, jobId: buildRun.id, label: build.name });
+  const buildFinal = await waitJob({ ...waitFor, jobId: buildRun.id, label: build.name, onManual: (job) => startJob(g, repo, job, { force: rebuild }) });
   if (buildFinal.status !== 'success') {
     throw new CliError(`Build ${buildFinal.status} — деплой не запускаю.\nДетали: ${buildFinal.web_url}`, 1, 'build_failed');
   }
@@ -81,7 +81,7 @@ export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, reb
   const deployStarted = await startJob(g, repo, deploy, { force: rebuild });
   const deployRun = deployStarted ?? { id: deploy.id };
   if (deployStarted) log(`   ${deploy.status} → ${deployStarted.status} (#${deployStarted.id})`);
-  const deployFinal = await waitJob({ ...waitFor, jobId: deployRun.id, label: deploy.name });
+  const deployFinal = await waitJob({ ...waitFor, jobId: deployRun.id, label: deploy.name, onManual: (job) => startJob(g, repo, job, { force: rebuild }) });
   if (deployFinal.status !== 'success') {
     throw new CliError(`Деплой завершился: ${deployFinal.status}.\nДетали: ${deployFinal.web_url}`, 1, 'deploy_failed');
   }
