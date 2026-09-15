@@ -159,6 +159,17 @@ test('revise: агент доделывает в той же сессии, вт�
   assert.equal(res.decision, 'approve');
 });
 
+test('advisory: revise не перезапускает агента', async () => {
+  const dir = mkdtempSync(path.join(root, 'advisory-'));
+  const calls = fakeClaude(dir);
+  const published = [];
+  const s = spec(published);
+  s.action.judge = { gate: 'advisory', role: 'acceptance' };
+  const res = await runAction(s, {}, {}, opts({ agent: 'claude', makeProvider: judgeQueue(['revise', 'approve']) })).result;
+  assert.equal(calls.args().length, 1, 'advisory-судья перезапустил читающего агента');
+  assert.equal(res.decision, 'revise');
+});
+
 test('revise: лимит 0 — доделки нет, гейт закрыт', async () => {
   const dir = mkdtempSync(path.join(root, 'revise0-'));
   const calls = fakeClaude(dir);
