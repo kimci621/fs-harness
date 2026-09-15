@@ -189,6 +189,35 @@ test('runChecks: код выхода и хвост вывода снимаютс
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('runChecks: упавшая проверка повторяется, флейк виден в фактах, поломка — нет', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-flake-'));
+  writeFileSync(path.join(dir, 'flaky.sh'), '#!/bin/sh\nn=$(cat counter 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > counter\n[ "$n" -ge 2 ]\n', { mode: 0o755 });
+  writeFileSync(path.join(dir, 'broken.sh'), '#!/bin/sh\nexit 4\n', { mode: 0o755 });
+  const logs = [];
+  const [flake, broken] = runChecks([`sh ${path.join(dir, 'flaky.sh')}`, `sh ${path.join(dir, 'broken.sh')}`], dir, { say: (t) => logs.push(t) });
+
+  // Флейк: первый заход красный, второй зелёный — и это записано в факт, а не спрятано.
+  assert.equal(flake.exit_code, 0);
+  assert.equal(flake.attempts, 2);
+  assert.equal(flake.first_exit_code, 1);
+  // Настоящая поломка повтором не маскируется: код остался ненулевым.
+  assert.equal(broken.exit_code, 4);
+  assert.equal(broken.attempts, 2);
+  assert.equal(broken.first_exit_code, 4);
+  assert.ok(logs.some((l) => /пробую ещё раз/.test(l)), logs.join('\n'));
+  assert.ok(logs.some((l) => /со 2-й попытки — флейк/.test(l)), logs.join('\n'));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('runChecks: retries=0 — один заход, без полей повтора', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-noretry-'));
+  const [c] = runChecks(['sh -c "exit 5"'], dir, { retries: 0 });
+  assert.equal(c.exit_code, 5);
+  assert.equal(c.attempts, undefined);
+  assert.equal(c.first_exit_code, undefined);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('checksFact: без настроенных команд и без зависимостей судье уходит причина, а не пустота', () => {
   assert.match(checksFact([], true), /не настроены/);
   assert.match(checksFact(['npm test'], false), /node_modules/);
