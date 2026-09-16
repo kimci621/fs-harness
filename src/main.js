@@ -36,7 +36,7 @@ const FLAGS_USAGE = `Флаги:
   --component <значение>  В jira: фильтр по checkbox-полю «Компонент»
   --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые)
   --jql "<запрос>"        В jira: свой JQL вместо собранного из флагов
-  --file <путь|->         В jira field: значение поля из файла или stdin
+  --file <путь|->         В jira field/create: значение из файла или stdin
   --env <окружение>       В growthbook: окружение флага (дефолт growthbook.env)
   --check                 В init: сверить скилл в проекте с реестром, ничего не писать
   --resolved / --open     В mr-comments: только решённые / нерешённые треды

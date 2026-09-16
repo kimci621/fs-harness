@@ -58,6 +58,10 @@ export function createGrowthBook({ baseUrl, token, fetchImpl = fetch, sleepMs = 
     // Отдельный эндпоинт, а не PUT: включение флага в окружении требует причины для аудита.
     toggleFeature: (id, environments, reason) =>
       api(`/api/v1/features/${encodeURIComponent(id)}/toggle`, { method: 'POST', body: { reason, environments } }).then((r) => r.feature ?? r),
+
+    // Живой (неархивированный) флаг удаляется только при включённом «REST API always
+    // bypasses approval requirements»; иначе API сам подскажет архивировать.
+    deleteFeature: (id) => api(`/api/v1/features/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) => r ?? { deletedId: id }),
   };
 }
 

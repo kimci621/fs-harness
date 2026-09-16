@@ -9,6 +9,8 @@ export const TABS = [
   { key: 'issues', title: 'Задачи', hint: 'v доска · n проанализировать · s статус · S спринт · E поле · p родитель · c коммент · f фильтры' },
   { key: 'runs', title: 'История', hint: 'прошлые запуски действий: вердикт, цена, каталог' },
   { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
+  { key: 'gb', title: 'Флаги', hint: 'c создать · t вкл/выкл в окружении · D удалить · R перечитать' },
+  { key: 'dict', title: 'Словарь', hint: 'c создать · E править · D удалить · n/p страница · R перечитать' },
 ];
 
 // Действия по клавишам: одно действие — одна клавиша, как в плане.
@@ -136,20 +138,22 @@ export const initialState = (project = '') => ({
   project,
   tab: 'mr',
   focus: 'list',
-  cursor: { mr: 0, issues: 0, runs: 0, prompts: 0 },
-  items: { mr: [], issues: [], runs: [], prompts: [] },
-  loading: { mr: true, issues: false, runs: true, prompts: false },
+  cursor: { mr: 0, issues: 0, runs: 0, prompts: 0, gb: 0, dict: 0 },
+  items: { mr: [], issues: [], runs: [], prompts: [], gb: [], dict: [] },
+  loading: { mr: true, issues: false, runs: true, prompts: false, gb: false, dict: false },
   scroll: { details: 0, log: 0, x: 0 }, // details — строк вниз от начала, log — строк вверх от конца
   expand: false,
   board: false, // вкладка задач: доска вместо списка
   boardCursor: { col: 0, row: 0 },
   columns: [], // колонки доски из Jira: [{name, statuses:[{id}]}]
-  search: { mr: '', issues: '', runs: '', prompts: '' }, // запрос на вкладку
+  search: { mr: '', issues: '', runs: '', prompts: '', gb: '', dict: '' }, // запрос на вкладку
   searching: false, // открыто поле ввода поиска
   filters: { mr: {}, issues: { assignee: 'me' } }, // по умолчанию задачи только мои, как было
   options: { issues: {} }, // варианты фильтров, прочитанные из Jira: ключ поля → [{value,label}]
   details: {}, // ключ задачи → {issue, comments}: подробности догружаются по выбору
   prompts: {}, // имя шаблона → текст: читается с диска при выборе строки
+  dictPage: { page: 1, size: 15, total: 0 }, // у словаря своя пагинация: API отдаёт по 15
+  languages: [], // коды языков словаря: читаются один раз для форм создания и правки
   error: null,
   busy: [], // {label, at} по каждому идущему запросу: пока список не пуст, в шапке спиннер
   runs: {}, // id → {id, action, target, phase, done, ok, cost, decision, error}
@@ -215,6 +219,17 @@ export function reduce(state, ev) {
       const i = state.busy.findIndex((b) => b.label === ev.label);
       return i === -1 ? state : { ...state, busy: [...state.busy.slice(0, i), ...state.busy.slice(i + 1)] };
     }
+    case 'dictPage': {
+      // Страница зажимается здесь, а не на вызывающем месте: так правило проверяется тестом.
+      const size = ev.meta?.size ?? state.dictPage.size;
+      const total = ev.meta?.total ?? state.dictPage.total;
+      const page = total
+        ? Math.min(Math.max(1, ev.meta?.page ?? state.dictPage.page), Math.max(1, Math.ceil(total / (size || 15))))
+        : (ev.meta?.page ?? state.dictPage.page);
+      return { ...state, dictPage: { ...state.dictPage, ...ev.meta, page }, cursor: { ...state.cursor, dict: 0 } };
+    }
+    case 'languages':
+      return { ...state, languages: ev.items };
     case 'issueDetails':
       return { ...state, details: { ...state.details, [ev.key]: { issue: ev.issue, comments: ev.comments ?? [] } } };
     case 'promptBody':
@@ -235,8 +250,8 @@ export function reduce(state, ev) {
       return state.modal ? { ...state, modal: { ...state.modal, items: ev.items ?? state.modal.items, cursor: clamp(state.modal.cursor, (ev.items ?? state.modal.items).length), busy: ev.busy ?? state.modal.busy, note: ev.note ?? state.modal.note } } : state;
     case 'modalMove':
       return state.modal ? { ...state, modal: { ...state.modal, cursor: clamp(state.modal.cursor + ev.by, state.modal.items.length) } } : state;
-    case 'modalEdit':
-      return state.modal ? { ...state, modal: { ...state.modal, editing: ev.editing, value: ev.value ?? '' } } : state;
+    case 'modalEdit': // meta не трогаем, если событие её не несёт: многошаговые формы копят поля в ней
+      return state.modal ? { ...state, modal: { ...state.modal, editing: ev.editing, value: ev.value ?? '', meta: ev.meta ?? state.modal.meta } } : state;
     case 'modalClose':
       return { ...state, modal: null };
     case 'searchOpen':
@@ -304,6 +319,8 @@ const HAY = {
   issues: (r) => [r.key, r.fields?.summary, r.fields?.status?.name, r.fields?.issuetype?.name, r.fields?.assignee?.displayName, ...(r.fields?.labels ?? [])],
   runs: (r) => [r.id, r.action, r.mr ? `!${r.mr}` : '', r.issue, r.state, r.decision],
   prompts: (r) => [r.name, r.overridden ? 'свой' : 'встроенный', ...(r.vars ?? [])],
+  gb: (r) => [r.id, r.type, r.envs, ...(r.tags ?? [])],
+  dict: (r) => [r.group, r.key, r.value, String(r.language_id ?? '')],
 };
 
 let cache = {}; // индекс переживает перерисовку: список меняется реже, чем кадр
@@ -474,6 +491,19 @@ export const promptRow = (r) => line(
   seg(`  ${r.overridden ? 'свой' : 'встроенный'}`, LBL),
 );
 
+export const gbRow = (r) => line(
+  seg(r.id, KEY),
+  seg(` · ${r.type ?? 'boolean'} · `, LBL),
+  seg(r.envs || 'нет окружений', { color: /production=on/.test(r.envs ?? '') ? 'green' : undefined }),
+  r.tags?.length ? seg(` · ${r.tags.join(', ')}`, { color: 'blue' }) : null,
+);
+
+export const dictRow = (r) => line(
+  seg(`${r.group}.${r.key}`, KEY),
+  seg(` · ${r.language_id} · `, LBL),
+  seg(String(r.value ?? '').slice(0, 60)),
+);
+
 // Правая панель — плоский список строк: так её можно прокручивать и проверять тестом.
 export function detailLines(tab, item, extra = {}) {
   const { full = null, comments = [], expand = false, body = '' } = extra;
@@ -481,6 +511,8 @@ export function detailLines(tab, item, extra = {}) {
   if (tab === 'mr') return mrDetails(item);
   if (tab === 'issues') return issueDetails(item, full, comments, expand);
   if (tab === 'prompts') return promptDetails(item, body, expand);
+  if (tab === 'gb') return gbDetails(item);
+  if (tab === 'dict') return dictDetails(item);
   return runDetails(item);
 }
 
@@ -592,6 +624,28 @@ function runDetails(item) {
   ].filter(Boolean);
 }
 
+function gbDetails(item) {
+  return [
+    line(seg(item.id, KEY), seg('  ', LBL), seg(item.type ?? 'boolean', VAL)),
+    line(seg('дефолт   ', LBL), seg(String(item.defaultValue ?? item.default ?? '—'))),
+    line(seg('окружения', LBL), seg(item.envs || '—', { color: /production=on/.test(item.envs ?? '') ? 'green' : undefined })),
+    item.tags?.length ? line(seg('метки    ', LBL), seg(item.tags.join(', '), { color: 'blue' })) : null,
+    GAP,
+    line(seg('t — включить или выключить в окружении · c — создать · D — удалить', LBL)),
+  ].filter(Boolean);
+}
+
+function dictDetails(item) {
+  return [
+    line(seg(`${item.group}.${item.key}`, KEY)),
+    line(seg('язык     ', LBL), seg(String(item.language_id ?? '—')), seg(`  (${item.language?.name ?? ''})`, LBL)),
+    GAP,
+    ...String(item.value ?? '').split('\n').map((l) => ({ ...line(seg(l)), flow: true })),
+    GAP,
+    line(seg('E — править значение · c — создать · D — удалить · после записи кэш обновляется сам', LBL)),
+  ].filter(Boolean);
+}
+
 // Клавиша → намерение. Чистая: в тестах не нужен ни ink, ни терминал.
 export function keyIntent(input, key, state) {
   // Пока открыта модалка, клавиши действий молчат: случайный запуск тут дороже удобства.
@@ -611,7 +665,7 @@ export function keyIntent(input, key, state) {
   if (input === 'q') return { type: 'quit' };
   if (input === 'x') return { type: 'abort' };
   if (key.tab) return { type: 'focus', by: key.shift ? -1 : 1 };
-  const byNumber = { 1: 'mr', 2: 'issues', 3: 'runs', 4: 'prompts' }[input];
+  const byNumber = { 1: 'mr', 2: 'issues', 3: 'runs', 4: 'prompts', 5: 'gb', 6: 'dict' }[input];
   if (byNumber) return { type: 'tab', tab: byNumber };
   if (input === 'v' && state.tab === 'issues') return { type: 'boardToggle' };
   // На доске курсор двумя осями: h/l по колонкам, j/k по карточкам, H/L переносит карточку.
@@ -640,6 +694,12 @@ export function keyIntent(input, key, state) {
   if (input === 's' && state.tab === 'issues') return { type: 'transition' };
   if (input === 'S' && state.tab === 'issues') return { type: 'sprint' };
   if (input === 'c' && state.tab === 'issues') return { type: 'comment' };
+  if (input === 'c' && (state.tab === 'gb' || state.tab === 'dict')) return { type: 'create' };
+  if (input === 't' && state.tab === 'gb') return { type: 'gbToggle' };
+  if (input === 'E' && state.tab === 'dict') return { type: 'dictEdit' };
+  if (input === 'n' && state.tab === 'dict') return { type: 'dictPage', by: 1 };
+  if (input === 'p' && state.tab === 'dict') return { type: 'dictPage', by: -1 };
+  if (input === 'D' && (state.tab === 'gb' || state.tab === 'dict')) return { type: 'delete' };
   if (input === 'E' && (state.tab === 'issues' || state.tab === 'mr')) return { type: 'editField' };
   if (input === 'p' && state.tab === 'issues') return { type: 'parent' };
   if (input === 'p' && state.tab === 'mr') return { type: 'pipeline' };

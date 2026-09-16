@@ -13,7 +13,7 @@ export const CONFIG_PATH = CONFIG_PATHS[1];
 
 export const configPath = () => CONFIG_PATHS.find(existsSync) ?? CONFIG_PATH;
 
-const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'cc', buildJob: '', targetBranch: '', branchPattern: 'feature/{key}', checks: [], jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' }, growthbook: { baseUrl: '', project: '', env: 'production' } };
+const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'cc', buildJob: '', targetBranch: '', branchPattern: 'feature/{key}', checks: [], jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' }, growthbook: { baseUrl: '', project: '', env: 'production' }, dict: { baseUrl: '' } };
 
 export const DEFAULTS = {
   version: 2,
@@ -102,7 +102,7 @@ export const DEFAULTS = {
 // старый конфиг обязан работать бесконечно.
 export function migrateConfig(user) {
   if (user?.version === 2) return user;
-  const { repo = '', host = '', projectDir = '', agent, jira, growthbook, buildJob, targetBranch, checks, ...rest } = user ?? {};
+  const { repo = '', host = '', projectDir = '', agent, jira, growthbook, dict, buildJob, targetBranch, checks, ...rest } = user ?? {};
   // Пустой v1 (конфига нет вовсе) не превращаем в проект-пустышку.
   if (!repo && !projectDir) return { version: 2, activeProject: '', projects: {}, ...rest };
   const name = path.basename(projectDir || '') || repo.split('/')[1] || repo;
@@ -120,6 +120,7 @@ export function migrateConfig(user) {
         ...(checks ? { checks } : {}),
         ...(jira ? { jira } : {}),
         ...(growthbook ? { growthbook } : {}),
+        ...(dict ? { dict } : {}),
       },
     },
     ...rest,
@@ -175,6 +176,7 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
     branchPattern: p.branchPattern || PROJECT_DEFAULT.branchPattern,
     jira: p.jira,
     growthbook: { ...PROJECT_DEFAULT.growthbook, ...(p.growthbook || {}) },
+    dict: { ...PROJECT_DEFAULT.dict, ...(p.dict || {}) },
     agentArgs: { ...DEFAULTS.agentArgs, ...(v2.agentArgs || {}) },
     agents: { ...DEFAULTS.agents, ...(v2.agents || {}) },
     workspace: {

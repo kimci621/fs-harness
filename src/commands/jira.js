@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { ISSUE_KEY, editKind, editValueFor, fieldByName, fieldText, openSprints } from '../jira.js';
+import { ISSUE_KEY, createJira, editKind, editValueFor, fieldByName, fieldText, openSprints } from '../jira.js';
 import { humanize, table, truncate } from '../format.js';
 import { finish } from '../output.js';
 import { confirm } from '../ui.js';
@@ -74,6 +74,7 @@ export async function boardOf(j, issue) {
 }
 
 // fsh jira [mine|<KEY>] [фильтры] | move <KEY> <статус> | sprint <KEY> <спринт> | comment <KEY> <текст>
+//             | field <KEY> "<поле>" <значение> | create <ПРОЕКТ> <тип> <summary> | delete <KEY>
 export async function cmdJira(ctx, args, opts = {}) {
   const { json, asObject } = opts;
   const j = ctx.jira();
@@ -87,6 +88,10 @@ export async function cmdJira(ctx, args, opts = {}) {
           ? await comment(j, rest, ctx, opts)
           : query === 'field'
             ? await field(j, rest, ctx, opts)
+          : query === 'create'
+            ? await create(j, rest, ctx, opts)
+          : query === 'delete'
+            ? await del(j, rest, ctx, opts)
           : !query || query === 'mine'
             ? await mine(j, { ...opts, componentField: ctx.cfg.jira?.componentField })
             : await one(j, query, ctx);
@@ -206,6 +211,64 @@ function shapeValue(meta, kind, text) {
   return editValueFor(meta, { id: opt.id, value: opt.value ?? opt.name, accountId: opt.accountId });
 }
 
+// Запись в Jira: создание задачи. Обязательное — проект, тип, summary; описание — --file или stdin.
+// Список типов проекта берётся из createmeta, чтобы опечатку в типе поймать до POST.
+async function create(j, [project, type, ...words], ctx, { yes, asObject, dryRun, file, component } = {}) {
+  const summary = words.join(' ').trim();
+  if (!project || !type || !summary) {
+    throw new CliError('Использование: fsh jira create <ПРОЕКТ> <тип> <summary> [--file <описание>|-].', 1, 'usage');
+  }
+  const types = await j.createTypes(project);
+  const lower = type.toLowerCase();
+  const t = types.find((x) => x.name.toLowerCase() === lower) ?? types.find((x) => x.name.toLowerCase().includes(lower));
+  if (!t) {
+    const list = types.map((x) => x.name).join(', ') || 'createmeta пуст';
+    throw new CliError(`Типа "${type}" нет в проекте ${project}. Доступны: ${list}.`, 1, 'usage');
+  }
+  const description = file ? String(readFileSync(file === '-' ? 0 : file, 'utf8')).trim() : '';
+  const fields = { project: { key: project }, issuetype: { id: String(t.id) }, summary };
+  if (description) fields.description = description;
+
+  // «Компонент» — customfield проекта, его id и форму значения даёт только createmeta
+  // с expand: editmeta без задачи не работает. Неизвестное значение не молчим — ошибкой.
+  if (component) {
+    const meta0 = await j.createMeta(project, t.id);
+    const name = ctx.cfg.jira?.componentField || 'Компонент';
+    const entry = Object.entries(meta0?.fields ?? {}).find(([, f]) => (f.name ?? '') === name);
+    if (!entry) {
+      const names = Object.values(meta0?.fields ?? {}).map((f) => f.name).filter(Boolean).join(', ');
+      throw new CliError(`У типа ${t.name} нет поля "${name}" для создания. Есть: ${names}. Или задай jira.componentField в конфиге.`, 1, 'usage');
+    }
+    const [id, meta1] = entry;
+    const kind = editKind(meta1);
+    if (!kind) throw new CliError(`Поле "${meta1.name}" fsh заполнить нечем: тип ${meta1.schema?.type}.`, 1, 'usage');
+    fields[id] = shapeValue(meta1, kind, component);
+  }
+
+  if (dryRun) return { ok: true, dry_run: true, project, type: t.name, summary, described: Boolean(description), component: component ?? null };
+  if (!yes && !asObject && !confirm(`${project}: создать задачу типа ${t.name} «${truncate(summary, 60)}»? [y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  const res = await j.createIssue(fields);
+  if (!res?.key) throw new CliError('Jira ответила без ключа задачи — создание под вопросом, проверь руками.', 1, 'api_failed');
+  return { ok: true, key: res.key, project, type: t.name, summary, component: component ?? null, url: issueUrl(ctx, res.key) };
+}
+
+// Запись в Jira: удаление задачи. Необратимо, поэтому подтверждение всегда (даже с --yes — нет).
+async function del(j, [key], ctx, { asObject, dryRun } = {}) {
+  if (!key || !ISSUE_KEY.test(key)) {
+    throw new CliError('Использование: fsh jira delete <KEY>.', 1, 'usage');
+  }
+  const issue = await j.issue(key);
+  const title = issue.fields?.summary ?? '';
+  if (dryRun) return { ok: true, dry_run: true, key, summary: title };
+  if (!asObject && !confirm(`Удалить ${key} «${truncate(title, 60)}» навсегда? [y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  await j.deleteIssue(key);
+  return { ok: true, key, summary: title };
+}
+
 async function one(j, key, ctx) {
   if (!ISSUE_KEY.test(key)) {
     throw new CliError(`"${key}" не похоже на ключ задачи (FD-7647). Использование: fsh jira [mine|<KEY>].`, 1, 'usage');
@@ -232,6 +295,15 @@ async function one(j, key, ctx) {
 export const issueUrl = (ctx, key) => `${(ctx.cfg.jira?.baseUrl || '').replace(/\/+$/, '')}/browse/${key}`;
 
 function render(r, ctx) {
+  if (r.dry_run && r.project) {
+    console.log(`${r.project}: задача типа ${r.type} ${r.dry_run ? 'не создана (dry-run)' : `создана: ${r.key}`}`);
+    console.log(truncate(r.summary, 80));
+    return;
+  }
+  if (r.summary && !r.issue && !r.issues) {
+    console.log(`${r.key}: ${r.dry_run ? 'не удалён (dry-run)' : 'удалён'}${r.transition ? '' : ''}`.trim());
+    return;
+  }
   if (r.transition || r.sprint_id) {
     console.log(`${r.key}: ${r.from} → ${r.to}${r.dry_run ? ' (dry-run, ничего не менял)' : ''}`);
     return;

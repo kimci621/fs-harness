@@ -449,3 +449,118 @@ test('TUI: v рисует доску, H/L переносит карточку, v
     app.unmount();
   }
 });
+
+// CRUD-вкладки: флаги GrowthBook и словарь REST бэкенда. Моки повторяют формы
+// реальных API: пагинация по 15 у словаря, environments у флага.
+const gbMock = {
+  features: async () => ({
+    features: [{ id: 'ai_coach', valueType: 'boolean', defaultValue: 'true', environments: { production: { enabled: false }, dev: { enabled: true } }, tags: ['web'] }],
+    total: 1, nextOffset: null,
+  }),
+  toggleFeature: async (id, environments) => ({ id, environments: { production: { enabled: environments.production }, dev: { enabled: true } } }),
+  createFeature: async (body) => ({ ...body }),
+  deleteFeature: async (id) => ({ deletedId: id }),
+};
+const dictMock = {
+  items: async () => ({
+    items: [{ dictionary_item_id: 7, language_id: 1, group: 'checkout', key: 'btn', value: 'Купить', language: { code: 'ru', name: 'Русский' } }],
+    page: { number: 1, size: 15, total: 3 },
+  }),
+  languages: async () => [{ language_id: 1, code: 'ru', name: 'Русский' }],
+  create: async () => ({ dictionary_item_id: 8, group: 'g1', key: 'k1', value: 'Тест', language_id: 1 }),
+  update: async (id, body) => ({ dictionary_item_id: id, ...body }),
+  remove: async () => null,
+  refresh: async () => ({ message: 'ok' }),
+};
+const ctxCrud = { ...ctx, gb: () => gbMock, dict: () => dictMock };
+
+test('TUI: флаги — список, переключение окружения, создание', async () => {
+  const app = render(React.createElement(App, { ctx: ctxCrud, opts: {} }));
+  try {
+    await tick(300);
+    app.stdin.write('5'); // вкладка флагов
+    await tick(300);
+    assert.match(app.lastFrame(), /▌ai_coach · boolean · production=off/);
+    assert.match(app.lastFrame(), /c создать · t вкл\/выкл/);
+
+    app.stdin.write('t'); // окружение: что сейчас и во что станет
+    await tick(200);
+    assert.match(app.lastFrame(), /ai_coach: окружение → вкл\/выкл/);
+    assert.match(app.lastFrame(), /production · сейчас off → станет on/);
+    app.stdin.write('\r'); // переключить production
+    await tick(300);
+    assert.match(app.lastFrame(), /ai_coach ▸ production → on/);
+
+    app.stdin.write('c'); // создать флаг: сперва id
+    await tick(200);
+    assert.match(app.lastFrame(), /Новый флаг: id/);
+    for (const ch of 'new_flag') { app.stdin.write(ch); await tick(20); }
+    app.stdin.write('\r'); // дальше — состояние
+    await tick(200);
+    assert.match(app.lastFrame(), /new_flag: в каком состоянии создать\?/);
+    assert.match(app.lastFrame(), /выключенным \(безопасно\)/);
+    app.stdin.write('\r'); // выключенным
+    await tick(300);
+    assert.match(app.lastFrame(), /new_flag ▸ флаг создан \(production=off\)/);
+
+    app.stdin.write('D'); // удаление с подтверждением, по умолчанию — отмена
+    await tick(200);
+    assert.match(app.lastFrame(), /Необратимо/);
+    assert.match(app.lastFrame(), /— отмена/);
+    app.stdin.write('\r'); // Enter на «отмена» — ничего не удалило
+    await tick(200);
+    assert.match(app.lastFrame(), /ai_coach/);
+    app.stdin.write('\u001B');
+  } finally {
+    app.unmount();
+  }
+});
+
+test('TUI: словарь — правка значения, создание по шагам, страницы', async () => {
+  const app = render(React.createElement(App, { ctx: ctxCrud, opts: {} }));
+  try {
+    await tick(300);
+    app.stdin.write('6'); // вкладка словаря
+    await tick(300);
+    assert.match(app.lastFrame(), /checkout\.btn · 1 · Купить/);
+
+    app.stdin.write('E'); // правка значения: поле предзаполнено
+    await tick(200);
+    assert.match(app.lastFrame(), /checkout\.btn/);
+    assert.match(app.lastFrame(), /› Купить/);
+    app.stdin.write('\r'); // без изменений — просто закрылось
+    await tick(200);
+
+    app.stdin.write('n'); // следующая страница: пустой запрос никуда не уходит
+    await tick(200);
+    app.stdin.write('c'); // создание: значение → ключ → группа → язык
+    await tick(200);
+    assert.match(app.lastFrame(), /Новая запись/);
+    for (const ch of 'Тест') { app.stdin.write(ch); await tick(20); }
+    app.stdin.write('\r'); // значение → ключ
+    await tick(150);
+    assert.match(app.lastFrame(), /ключ \(часть после точки\)/);
+    for (const ch of 'k1') { app.stdin.write(ch); await tick(20); }
+    app.stdin.write('\r'); // ключ → группа
+    await tick(150);
+    assert.match(app.lastFrame(), /группа \(часть до точки\)/);
+    for (const ch of 'g1') { app.stdin.write(ch); await tick(20); }
+    app.stdin.write('\r'); // группа → язык
+    await tick(150);
+    assert.match(app.lastFrame(), /код языка/);
+    assert.match(app.lastFrame(), /› ru/);
+    app.stdin.write('\r'); // язык по умолчанию — создать
+    await tick(300);
+    assert.match(app.lastFrame(), /создано g1\.k1 \(8\)/);
+
+    app.stdin.write('D'); // удаление: Enter на «отмена» ничего не делает
+    await tick(200);
+    assert.match(app.lastFrame(), /Удалить checkout\.btn\?/);
+    app.stdin.write('\r');
+    await tick(200);
+    assert.match(app.lastFrame(), /checkout\.btn/);
+    app.stdin.write('\u001B');
+  } finally {
+    app.unmount();
+  }
+});

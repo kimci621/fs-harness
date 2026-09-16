@@ -9,8 +9,9 @@ import TextInput from 'ink-text-input';
 import htm from 'htm';
 import {
   TABS, fieldsFor, promptRow, initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost,
-  orderJobs, deploySlot, DEPLOY_JOB, mrRow, MR_FIELDS, mrFieldRow, issueCard, shiftLine, runRow, detailLines, flowLines, visibleItems, onBoard, boardLanes, cardRows, toggleFilter, filterValueText, filterOptions, filterSummary, busyText,
+  orderJobs, deploySlot, DEPLOY_JOB, mrRow, MR_FIELDS, mrFieldRow, issueCard, shiftLine, runRow, detailLines, flowLines, visibleItems, onBoard, boardLanes, cardRows, toggleFilter, filterValueText, filterOptions, filterSummary, busyText, gbRow, dictRow,
 } from './store.js';
+import { envStates } from '../growthbook.js';
 import { listRuns } from '../agent/journal.js';
 import { fieldText, editKind, editValueFor } from '../jira.js';
 import { listTemplates, loadTemplate, userOverride, dropUserOverride } from '../prompts.js';
@@ -32,7 +33,7 @@ const rank = (name) => (EDIT_FIRST.indexOf(name) + 1 || 99);
 const valueText = (v) => (Array.isArray(v) ? v.join(', ') : String(v ?? '')).split('\n')[0].slice(0, 60) || 'очищено';
 
 const NARROW = 100; // уже этого две колонки не читаются, показываем одну
-const EMPTY = { mr: 'нет открытых MR', issues: 'нет задач на тебе', runs: 'запусков ещё не было', prompts: 'шаблонов не нашлось' };
+const EMPTY = { mr: 'нет открытых MR', issues: 'нет задач на тебе', runs: 'запусков ещё не было', prompts: 'шаблонов не нашлось', gb: 'флагов нет', dict: 'записей нет' };
 
 // Размер окна терминала: экран занимает его целиком и переживает ресайз.
 function useTerminalSize() {
@@ -59,6 +60,10 @@ export function App({ ctx, opts }) {
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   const jiraRef = useRef(null);
   const jira = () => (jiraRef.current ??= ctx.jira());
+  const gbRef = useRef(null);
+  const gb = () => (gbRef.current ??= ctx.gb());
+  const dictRef = useRef(null);
+  const dict = () => (dictRef.current ??= ctx.dict());
 
   // Любой запрос оборачиваем в подпись: пока он идёт, в шапке крутится спиннер с ней.
   // Без этого экран выглядит зависшим — половина запросов к GitLab и Jira идёт секундами.
@@ -115,7 +120,7 @@ export function App({ ctx, opts }) {
     return () => { alive = false; };
   }, [issueKey]);
 
-  async function load(tab) {
+  async function load(tab, pageArg) {
     dispatch({ type: 'loading', tab });
     try {
       if (tab === 'mr') {
@@ -135,6 +140,21 @@ export function App({ ctx, opts }) {
       }
       if (tab === 'runs') dispatch({ type: 'items', tab, items: listRuns({ limit: 30 }) });
       if (tab === 'prompts') dispatch({ type: 'items', tab, items: listTemplates({ projectDir: ctx.cfg.projectDir }) });
+      if (tab === 'gb') {
+        const out = [];
+        for (let offset = 0; ;) {
+          const page = await withBusy('флаги GrowthBook', () => gb().features({ project: ctx.cfg.growthbook?.project || undefined, offset }));
+          out.push(...page.features);
+          if (page.nextOffset === null) break;
+          offset = page.nextOffset;
+        }
+        dispatch({ type: 'items', tab, items: out.filter((f) => !f.archived).map((f) => ({ ...f, envs: envStates(f) })) });
+      }
+      if (tab === 'dict') {
+        const res = await withBusy('словарь', () => dict().items({ page: pageArg ?? state.dictPage.page }));
+        dispatch({ type: 'dictPage', meta: { page: res.page.number ?? pageArg ?? 1, size: res.page.size ?? 15, total: res.page.total ?? 0 } });
+        dispatch({ type: 'items', tab, items: res.items });
+      }
       if (tab === 'issues') {
         const jql = buildJql({ ...state.filters.issues, componentField: ctx.cfg.jira?.componentField });
         const { issues } = await withBusy('задачи Jira', () =>
@@ -572,6 +592,184 @@ export function App({ ctx, opts }) {
   }
 
   // Фильтры — те же, что у флагов CLI, только выбираются с клавиш. У каждой вкладки свои.
+  // ── Вкладка флагов: CRUD GrowthBook ─────────────────────────────────
+
+  function openGBCreate() {
+    dispatch({ type: 'modalOpen', kind: 'gbCreate', title: 'Новый флаг: id', items: [], editing: 'id', value: '' });
+  }
+
+  function submitGBId(text) {
+    const id = text.trim();
+    if (!id) return void dispatch({ type: 'modalClose' });
+    dispatch({ type: 'modalOpen', kind: 'gbState', title: `${id}: в каком состоянии создать?`, items: [
+      { id: 'off', label: 'выключенным (безопасно)', on: false },
+      { id: 'on', label: 'включённым', on: true },
+    ] });
+  }
+
+  async function applyGBCreate() {
+    const opt = state.modal.items[state.modal.cursor];
+    const id = (state.modal.title ?? '').match(/^([^:]+):/)?.[1];
+    if (!opt || !id) return void dispatch({ type: 'modalClose' });
+    const env = ctx.cfg.growthbook?.env || 'production';
+    dispatch({ type: 'modalItems', busy: true, note: 'создаю…' });
+    try {
+      await withBusy(`флаг ${id}`, () => gb().createFeature({
+        id, valueType: 'boolean', defaultValue: 'true',
+        ...(ctx.cfg.growthbook?.project ? { project: ctx.cfg.growthbook.project } : {}),
+        environments: { [env]: { enabled: opt.on, rules: [] } },
+      }));
+      bufferRef.current.push(`${id} ▸ флаг создан (${env}=${opt.on ? 'on' : 'off'})`);
+      dispatch({ type: 'modalClose' });
+      load('gb');
+    } catch (err) {
+      dispatch({ type: 'modalItems', busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  function openGBToggle() {
+    const f = selected(state);
+    if (!f?.id) return;
+    const envs = Object.entries(f.environments ?? {});
+    if (!envs.length) return void bufferRef.current.push(`${f.id} ▸ у флага нет окружений`);
+    dispatch({ type: 'modalOpen', kind: 'gbToggle', title: `${f.id}: окружение → вкл/выкл`, items: envs.map(([env, e]) => ({
+      id: env,
+      label: `${env} · сейчас ${e.enabled ? 'on' : 'off'} → станет ${e.enabled ? 'off' : 'on'}`,
+      on: !e.enabled,
+    })) });
+  }
+
+  async function applyGBToggle() {
+    const t = state.modal.items[state.modal.cursor];
+    const f = selected(state);
+    if (!t || !f?.id) return;
+    dispatch({ type: 'modalItems', busy: true, note: `переключаю ${t.id}…` });
+    try {
+      // Read-back: API отвечает 200 и на окружение, которого у флага нет.
+      const res = await withBusy(`флаг ${f.id}`, () => gb().toggleFeature(f.id, { [t.id]: t.on }, `fsh tui: ${t.id} → ${t.on ? 'on' : 'off'}`));
+      dispatch({ type: 'modalClose' });
+      const after = res?.environments?.[t.id];
+      const line = !after || after.enabled === undefined ? `${f.id} ▸ ${t.id} → ${t.on ? 'on' : 'off'} (в ответе нет окружения — проверь)`
+        : Boolean(after.enabled) === t.on ? `${f.id} ▸ ${t.id} → ${t.on ? 'on' : 'off'}`
+          : `${f.id} ▸ ❌ GrowthBook принял запрос, но ${t.id} остался ${after.enabled ? 'on' : 'off'}`;
+      bufferRef.current.push(line);
+      load('gb');
+    } catch (err) {
+      dispatch({ type: 'modalItems', busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  // ── Вкладка словаря: CRUD REST бэкенда ──────────────────────────────
+
+  function openDictCreate() {
+    dispatch({ type: 'modalOpen', kind: 'dictCreate', title: 'Новая запись: значение, ключ, группа, язык', items: [], editing: 'value', value: '', meta: {} });
+  }
+
+  async function submitDictField(text) {
+    const field = state.modal.editing;
+    const meta = { ...state.modal.meta, [field]: text.trim() };
+    const next = { value: 'key', key: 'group', group: 'lang' }[field];
+    // Накопленное — в modal.meta: следующим шагом submitDictField вызовется с новым state.
+    if (next) return void dispatch({ type: 'modalEdit', editing: next, value: next === 'lang' ? 'ru' : '', meta });
+    if (!meta.value || !meta.key || !meta.group) {
+      return void dispatch({ type: 'modalItems', items: [], busy: false, note: '❌ нужны и значение, и ключ, и группа' });
+    }
+    dispatch({ type: 'modalEdit', editing: null, value: '' });
+    dispatch({ type: 'modalItems', items: [], busy: true, note: 'создаю…' });
+    try {
+      const lang = await pickLanguage(meta.lang || 'ru');
+      const item = await withBusy('создание записи', () => dict().create({ language_id: lang.language_id, group: meta.group, key: meta.key, value: meta.value }));
+      bufferRef.current.push(`словарь ▸ создано ${meta.group}.${meta.key} (${item.dictionary_item_id})`);
+      dispatch({ type: 'modalClose' });
+      await refreshDictCache();
+      load('dict');
+    } catch (err) {
+      dispatch({ type: 'modalItems', items: [], busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  function openDictEdit() {
+    const item = selected(state);
+    if (!item?.dictionary_item_id) return;
+    dispatch({ type: 'modalOpen', kind: 'dictEdit', title: `${item.group}.${item.key}`, items: [], editing: 'value', value: item.value ?? '',
+      meta: { id: item.dictionary_item_id, language_id: item.language_id, group: item.group, key: item.key, value: item.value ?? '' } });
+  }
+
+  async function applyDictValue(text) {
+    const meta = state.modal.meta ?? {};
+    const value = text.trim();
+    if (!value) return void dispatch({ type: 'modalClose' });
+    dispatch({ type: 'modalEdit', editing: null, value: '' });
+    dispatch({ type: 'modalItems', items: [], busy: true, note: 'сохраняю…' });
+    try {
+      // PUT требует все поля разом, включая язык и группу — шлём как лежало.
+      await withBusy('правка словаря', () => dict().update(meta.id, { language_id: meta.language_id, group: meta.group, key: meta.key, value }));
+      bufferRef.current.push(`словарь ▸ ${meta.group}.${meta.key} обновлено`);
+      dispatch({ type: 'modalClose' });
+      await refreshDictCache();
+      load('dict');
+    } catch (err) {
+      dispatch({ type: 'modalItems', items: [], busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  async function pickLanguage(code) {
+    // После dispatch в этом же такте state ещё старый — ищем в локальном списке.
+    const langs = state.languages.length ? state.languages : await withBusy('языки словаря', () => dict().languages());
+    if (!state.languages.length) dispatch({ type: 'languages', items: langs });
+    const hit = langs.find((l) => l.code === code)
+      ?? langs.find((l) => String(l.code ?? '').startsWith(code));
+    if (!hit) throw new Error(`нет языка "${code}" — есть: ${langs.map((l) => l.code).join(', ')}`);
+    return hit;
+  }
+
+  async function refreshDictCache() {
+    try {
+      await dict().refresh();
+    } catch (err) {
+      bufferRef.current.push(`словарь ▸ ⚠ кэш не обновился: ${err.message}`);
+    }
+  }
+
+  function openDeleteConfirm() {
+    const item = selected(state);
+    if (!item) return;
+    if (state.tab === 'gb') {
+      return void dispatch({ type: 'modalOpen', kind: 'confirm', title: `Удалить флаг ${item.id}? Необратимо.`, items: [
+        { label: '— отмена' },
+        { label: `удалить ${item.id}`, yes: true, what: 'gb' },
+      ] });
+    }
+    dispatch({ type: 'modalOpen', kind: 'confirm', title: `Удалить ${item.group}.${item.key}?`, items: [
+      { label: '— отмена' },
+      { label: `удалить запись ${item.dictionary_item_id}`, yes: true, what: 'dict' },
+    ] });
+  }
+
+  async function applyConfirm() {
+    const opt = state.modal.items[state.modal.cursor];
+    if (!opt?.yes) return void dispatch({ type: 'modalClose' });
+    dispatch({ type: 'modalItems', busy: true, note: 'удаляю…' });
+    try {
+      if (opt.what === 'gb') {
+        const res = await withBusy(`удаление ${opt.label}`, () => gb().deleteFeature(selected(state).id));
+        if (res?.deletedId !== selected(state).id) throw new Error('GrowthBook не подтвердил удаление — проверь флаг в вебе');
+        bufferRef.current.push(`${selected(state).id} ▸ флаг удалён`);
+        dispatch({ type: 'modalClose' });
+        load('gb');
+      } else {
+        const item = selected(state);
+        await withBusy(`удаление ${item.dictionary_item_id}`, () => dict().remove(item.dictionary_item_id));
+        bufferRef.current.push(`словарь ▸ удалено ${item.group}.${item.key} (${item.dictionary_item_id})`);
+        dispatch({ type: 'modalClose' });
+        await refreshDictCache();
+        load('dict');
+      }
+    } catch (err) {
+      dispatch({ type: 'modalItems', busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
   const myFilters = () => state.filters[state.tab] ?? {};
 
   function openFilters() {
@@ -669,6 +867,17 @@ export function App({ ctx, opts }) {
     run.result.catch(() => {}); // ошибка уже пришла событием
   }
 
+  // Текстовые модалки: одна точка роутинга Enter из поля ввода.
+  function submitModal(text) {
+    const kind = state.modal?.kind;
+    if (kind === 'comment') return submitComment(text);
+    if (kind === 'editValue') return state.tab === 'mr' ? applyMRValue(text) : applyEditValue(text);
+    if (kind === 'gbCreate') return submitGBId(text);
+    if (kind === 'dictCreate') return submitDictField(text);
+    if (kind === 'dictEdit') return applyDictValue(text);
+    return submitFilter(text);
+  }
+
   const editing = state.modal?.editing ?? null;
 
   // Пока набирают текст, все клавиши принадлежат полю ввода — кроме Esc, он отменяет ввод.
@@ -676,6 +885,7 @@ export function App({ ctx, opts }) {
   useInput((input, key) => {
     if (!key.escape) return;
     if (state.modal?.kind === 'comment') return void dispatch({ type: 'modalClose' });
+    if (['gbCreate', 'dictCreate', 'dictEdit'].includes(state.modal?.kind)) return void dispatch({ type: 'modalClose' });
     if (state.modal?.kind === 'editValue') return void (state.tab === 'mr' ? openMRFields() : openEditFields()); // назад к списку полей
     dispatch({ type: 'modalEdit', editing: null, value: '' });
   }, { isActive: Boolean(editing) });
@@ -699,6 +909,16 @@ export function App({ ctx, opts }) {
     }
     if (intent.type === 'launch') return launch(intent.action);
     if (intent.type === 'transition') return void openTransitions();
+    if (intent.type === 'gbToggle') return void openGBToggle();
+    if (intent.type === 'create') return void (state.tab === 'gb' ? openGBCreate() : openDictCreate());
+    if (intent.type === 'dictEdit') return void openDictEdit();
+    if (intent.type === 'delete') return void openDeleteConfirm();
+    if (intent.type === 'dictPage') {
+      dispatch({ type: 'dictPage', meta: { ...state.dictPage, page: state.dictPage.page + intent.by } });
+      const next = state.dictPage.page + intent.by;
+      if (next >= 1) load('dict', next); // за границу не выходим: reduce зажмёт, а загрузка — нет
+      return;
+    }
     if (intent.type === 'sprint') return void openSprints();
     if (intent.type === 'comment') {
       const item = selected(state);
@@ -723,6 +943,9 @@ export function App({ ctx, opts }) {
       const kind = state.modal.kind;
       if (kind === 'pipeline') return void runJob();
       if (kind === 'sprint') return void applySprint();
+      if (kind === 'gbState') return void applyGBCreate();
+      if (kind === 'gbToggle') return void applyGBToggle();
+      if (kind === 'confirm') return void applyConfirm();
       if (kind === 'filters') return void applyFilterRow();
       if (kind === 'filterValue') return applyFilterValue();
       if (kind === 'editField') return void (state.tab === 'mr' ? openMRValue() : openEditValue());
@@ -785,7 +1008,7 @@ export function App({ ctx, opts }) {
       ${state.help
         ? html`<${Help} height=${bodyInner} />`
         : state.modal
-          ? html`<${Modal} modal=${state.modal} filters=${state.filters[state.tab] ?? {}} fields=${fieldsFor(state.tab)} optionsFor=${optionsFor} height=${bodyInner} onSubmit=${state.modal.kind === 'comment' ? submitComment : state.modal.kind === 'editValue' ? (state.tab === 'mr' ? applyMRValue : applyEditValue) : submitFilter} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
+          ? html`<${Modal} modal=${state.modal} filters=${state.filters[state.tab] ?? {}} fields=${fieldsFor(state.tab)} optionsFor=${optionsFor} height=${bodyInner} onSubmit=${submitModal} onChange=${(v) => dispatch({ type: 'modalEdit', editing: state.modal.editing, value: v })} />`
           : html`<${Body} state=${state} item=${item} width=${columns} height=${bodyInner}
               onSearch=${(v) => dispatch({ type: 'searchEdit', value: v })} onSearchDone=${() => dispatch({ type: 'searchClose' })} />`}
       ${cards.map((r) => html`
@@ -811,21 +1034,35 @@ const position = (state) => {
 const Help = ({ height }) =>
   html`<${Box} flexDirection="column" height=${height} borderStyle="round" borderColor="gray" paddingX=${1}>
     <${Text} bold>Клавиши<//>
-    <${Text}>1/2/3 — вкладки · Tab — перенести фокус (список → детали → лог) · ↑↓ или j/k — курсор и прокрутка<//>
-    <${Text}>a — решить конфликт · t — обработать тикеты · r — локальное ревью (вкладка MR)<//>
-    <${Text}>p — пайплайн MR: все джобы и их запуск · f — фильтры списка MR<//>
-    <${Text}>n — проанализировать задачу · s — статус · S — спринт · c — комментарий · e — раскрыть поля<//>
-    <${Text}>E — изменить поле: у задачи всё из editmeta, у MR заголовок, описание, ревьюеры, ветка<//>
-    <${Text}>Многострочный текст (описание задачи и MR) правится в $EDITOR и уходит одним запросом<//>
-    <${Text}>p — родитель задачи со всеми подзадачами в отдельном окне<//>
-    <${Text}>v — доска вместо списка задач: h/l — колонки, j/k — карточки, H/L — перенести карточку<//>
-    <${Text}>/ — поиск по списку (терпит опечатки, ищет по всем полям) · f — фильтры списка MR<//>
-    <${Text}>x — прервать все запуски · R — перечитать список · o — открыть в браузере · q — выход<//>
+    <${Text}>1…6 — вкладки (MR, задачи, история, промпты, флаги, словарь) · Tab — фокус: список → детали → лог<//>
+    <${Text}>↑↓ или j/k — курсор и прокрутка · / — поиск по списку (терпит опечатки) · R — перечитать<//>
+    <${Text}>MR: a — конфликт · t — тикеты · r — ревью · p — пайплайн и джобы · E — поле<//>
+    <${Text}>Задачи: n — анализ · s — статус · S — спринт · c — комментарий · p — родитель · v — доска (H/L — перенос)<//>
+    <${Text}>E — поле из editmeta · e — раскрыть текст; многострочное правится в $EDITOR<//>
+    <${Text}>Флаги (5): c — создать · t — вкл/выкл в окружении · D — удалить<//>
+    <${Text}>Словарь (6): c — создать (значение → ключ → группа → язык) · E — править значение · D — удалить · n/p — страницы<//>
+    <${Text}>x — прервать запуски · o — в браузере · q — выход<//>
     <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
   <//>`;
 
 function Modal({ modal, filters, fields, optionsFor, height, onSubmit, onChange }) {
   const body = () => {
+    if (['gbCreate', 'dictCreate', 'dictEdit'].includes(modal.kind) && modal.editing) {
+      const hints = {
+        gbCreate: 'ид флага: латиница, цифры, - и _ · Enter — дальше · Esc — отмена',
+        dictCreate: {
+          value: 'значение перевода · Enter — дальше',
+          key: 'ключ (часть после точки) · Enter — дальше',
+          group: 'группа (часть до точки) · Enter — дальше',
+          lang: 'код языка (ru, en, by…) · Enter — создать',
+        }[modal.editing],
+        dictEdit: 'Enter — сохранить и обновить кэш словаря · Esc — закрыть',
+      };
+      return html`<${Box} flexDirection="column">
+        <${Box}><${Text}>› <//><${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} /><//>
+        <${Text} dimColor>${hints[modal.kind]}<//>
+      <//>`;
+    }
     if (modal.kind === 'editValue' && modal.editing) {
       return html`<${Box} flexDirection="column">
         <${Box}><${Text}>› <//><${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} /><//>
@@ -963,7 +1200,10 @@ function List({ state, height, width }) {
 }
 
 // Задача рисуется карточкой: ключ со статусом, название до трёх строк, тэги и родитель.
-const rowLines = (tab, r, width) => (tab === 'issues' ? issueCard(r, width - 1) : [tab === 'prompts' ? promptRow(r) : runRow(r)]);
+const rowLines = (tab, r, width) => (tab === 'issues' ? issueCard(r, width - 1)
+  : tab === 'gb' ? [gbRow(r)]
+    : tab === 'dict' ? [dictRow(r)]
+      : [tab === 'prompts' ? promptRow(r) : runRow(r)]);
 
 
 const COL_MIN = 26; // уже этого карточка нечитаема

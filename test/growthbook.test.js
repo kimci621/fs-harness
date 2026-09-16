@@ -81,10 +81,41 @@ test('growthbook: dry-run ничего не отправляет, кривой �
   const dry = await cmdGrowthBook(ctxWith(gb), ['toggle', 'flag', 'off'], { asObject: true, dryRun: true });
   assert.deepEqual([dry.dry_run, dry.toggled, dry.enabled], [true, 'flag', false]);
   const dryNew = await cmdGrowthBook(ctxWith(gb), ['create', 'flag', 'on'], { asObject: true, dryRun: true });
-  assert.deepEqual(dryNew.body.environments, { production: { enabled: true } });
+  assert.deepEqual(dryNew.body.environments, { production: { enabled: true, rules: [] } });
   assert.equal(calls.length, 0);
 
   await assert.rejects(() => cmdGrowthBook(ctxWith(gb), ['toggle', 'flag'], { asObject: true }), (e) => e.code === 'usage');
+  await assert.rejects(() => cmdGrowthBook(ctxWith(gb), ['drop', 'flag'], { asObject: true }), (e) => e.code === 'usage');
+});
+
+test('growthbook create: у каждого окружения обязателен пустой rules (иначе 400 от API)', async () => {
+  const { gb, calls } = gbWith([{ status: 200, body: { feature: feature({ id: 'new-flag', environments: { production: { enabled: true, rules: [] } } }) } }]);
+  const res = await cmdGrowthBook(ctxWith(gb), ['create', 'new-flag', 'on'], { asObject: true, yes: true });
+  assert.equal(res.created, 'new-flag');
+  assert.equal(calls[0].method, 'POST');
+  assert.match(calls[0].url, /\/api\/v1\/features$/);
+  assert.deepEqual(calls[0].body.environments, { production: { enabled: true, rules: [] } });
+});
+
+test('growthbook delete: DELETE-запрос, dry-run без сети, нет id — usage', async () => {
+  const { gb, calls } = gbWith([{ status: 200, body: { deletedId: 'flag' } }]);
+  const dry = await cmdGrowthBook(ctxWith(gb), ['delete', 'flag'], { asObject: true, dryRun: true });
+  assert.deepEqual([dry.ok, dry.dry_run, dry.deleted], [true, true, 'flag']);
+  assert.equal(calls.length, 0);
+
+  const res = await cmdGrowthBook(ctxWith(gb), ['delete', 'flag'], { asObject: true, yes: true });
+  assert.deepEqual(res, { ok: true, deleted: 'flag' });
+  assert.equal(calls[0].method, 'DELETE');
+  assert.match(calls[0].url, /\/api\/v1\/features\/flag$/);
+
+  // API не подтвердил удаление — ошибка, а не тихий успех.
+  const bad = gbWith([{ status: 200, body: {} }]);
+  await assert.rejects(
+    () => cmdGrowthBook(ctxWith(bad.gb), ['delete', 'flag'], { asObject: true, yes: true }),
+    (e) => e.code === 'api_failed' && /не подтвердил/.test(e.message),
+  );
+
+  await assert.rejects(() => cmdGrowthBook(ctxWith(gb), ['delete'], { asObject: true }), (e) => e.code === 'usage');
   await assert.rejects(() => cmdGrowthBook(ctxWith(gb), ['drop', 'flag'], { asObject: true }), (e) => e.code === 'usage');
 });
 
