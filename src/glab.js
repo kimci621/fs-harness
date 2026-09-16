@@ -11,7 +11,9 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
     if (method !== 'GET') args.push('-X', method);
     // Тело только через stdin: --field ломает многострочный markdown, а на GET
     // уходит в query независимо от --input, что нам как раз не надо.
-    if (input !== undefined) args.push('--input', '-');
+    // Content-Type обязателен: glab с --input - его не ставит, и GitLab отвечает 415
+    // («provided content-type '' is not supported») на POST заметок и MR.
+    if (input !== undefined) args.push('-H', 'Content-Type: application/json', '--input', '-');
     let lastErr;
     for (let attempt = 1; attempt <= retries; attempt++) {
       let out;
