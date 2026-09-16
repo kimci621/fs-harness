@@ -361,3 +361,65 @@ test('jira field: dry-run показывает значение и ничего 
   assert.deepEqual([dry.dry_run, dry.field_id, dry.value], [true, 'customfield_10275', 'слово,перевод']);
   assert.deepEqual(j.stored, {});
 });
+
+// Поддельная Jira для CRUD: создание и удаление складываются в журнал вызовов.
+function fakeCrud() {
+  const done = [];
+  return {
+    done,
+    issue: async () => ({ key: 'FD-1', fields: { summary: 'старая задача' } }),
+    createTypes: async (project) => { done.push(['types', project]); return [{ id: '10001', name: 'Task' }, { id: '10002', name: 'Bug' }]; },
+    createMeta: async (project, typeId) => ({
+      id: typeId,
+      // allowedValues делает поле pick: значения проверяются по списку, как в TUI
+      fields: { customfield_10105: { name: 'Компонент', schema: { type: 'array', items: 'string', custom: 'textarea' }, allowedValues: [{ id: '1', value: 'Тест' }] } },
+    }),
+    createIssue: async (fields) => { done.push(['create', fields]); return { key: 'FD-9', id: '9' }; },
+    deleteIssue: async (key) => { done.push(['delete', key]); return null; },
+  };
+}
+
+test('jira create: тип по createmeta, dry-run не пишет, unknown тип — ошибка', async () => {
+  const j = fakeCrud();
+  const dry = await cmdJira(ctxWith(j), ['create', 'FD', 'bug', 'новая', 'задача'], { asObject: true, dryRun: true });
+  assert.deepEqual([dry.dry_run, dry.project, dry.type, dry.summary], [true, 'FD', 'Bug', 'новая задача']);
+  assert.deepEqual(j.done.filter((c) => c[0] === 'create'), []);
+
+  const res = await cmdJira(ctxWith(j), ['create', 'FD', 'task', 'новая задача'], { asObject: true, yes: true });
+  assert.equal(res.key, 'FD-9');
+  assert.deepEqual(j.done.at(-1)[1], { project: { key: 'FD' }, issuetype: { id: '10001' }, summary: 'новая задача' });
+
+  // --component уходит как customfield_10105 со значением по схеме поля (массив строк)
+  const withComp = await cmdJira(ctxWith(j), ['create', 'FD', 'task', 'с компонентом'], { asObject: true, yes: true, component: 'Тест' });
+  assert.deepEqual(withComp.component, 'Тест');
+  const body = j.done.at(-1)[1];
+  assert.deepEqual(body.customfield_10105, ['Тест']);
+
+  await assert.rejects(() => cmdJira(ctxWith(j), ['create', 'FD', 'task', 'x'], { asObject: true, yes: true, component: 'Чужой' }), (e) => e.code === 'usage');
+
+  await assert.rejects(() => cmdJira(ctxWith(j), ['create', 'FD', 'хотелка', 'x'], { asObject: true, yes: true }), (e) => e.code === 'usage');
+  await assert.rejects(() => cmdJira(ctxWith(j), ['create', 'FD', 'task'], { asObject: true, yes: true }), (e) => e.code === 'usage');
+});
+
+test('jira delete: dry-run не удаляет, без подтверждения — отмена', async () => {
+  const j = fakeCrud();
+  const dry = await cmdJira(ctxWith(j), ['delete', 'FD-1'], { asObject: true, dryRun: true });
+  assert.deepEqual([dry.dry_run, dry.key, dry.summary], [true, 'FD-1', 'старая задача']);
+  assert.deepEqual(j.done.filter((c) => c[0] === 'delete'), []);
+
+  const res = await cmdJira(ctxWith(j), ['delete', 'FD-1'], { asObject: true });
+  assert.equal(res.ok, true);
+  assert.deepEqual(j.done.at(-1), ['delete', 'FD-1']);
+
+  await assert.rejects(() => cmdJira(ctxWith(j), ['delete', 'мусор'], { asObject: true }), (e) => e.code === 'usage');
+});
+
+test('jira.js: createIssue и deleteIssue идут в правильные пути', async () => {
+  const { j, calls } = jira([{ status: 201, body: { key: 'FD-9' } }, { status: 204 }]);
+  await j.createIssue({ project: { key: 'FD' }, summary: 'x' });
+  await j.deleteIssue('FD-9');
+  assert.equal(calls[0].url, 'https://j.invalid/rest/api/2/issue');
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[1].url, 'https://j.invalid/rest/api/2/issue/FD-9');
+  assert.equal(calls[1].method, 'DELETE');
+});

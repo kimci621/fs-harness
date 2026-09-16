@@ -21,6 +21,7 @@ import { cmdWatch } from './commands/watch.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
 import { createGrowthBook } from './growthbook.js';
+import { createDict } from './dict.js';
 import { readSecret } from './secrets.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdConfig } from './config-cmd.js';
@@ -49,6 +50,8 @@ export function createCtx({ g, cfg, notify }) {
     // Лениво: команды без Jira не должны требовать токен.
     jira: () => createJira({ ...cfg.jira, token: readSecret('jira') }),
     gb: () => createGrowthBook({ ...cfg.growthbook, token: readSecret('growthbook') }),
+    // Лениво: словарь нужен только TUI, у него нет CLI-команд.
+    dict: () => createDict({ ...cfg.dict, token: readSecret('dict') }),
   };
 }
 
@@ -188,8 +191,8 @@ export const COMMANDS = [
   fromAction(analyzeAction),
   {
     name: 'jira',
-    usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|field <KEY> "<поле>" <значение>]',
-    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля',
+    usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|field <KEY> "<поле>" <значение>|create <ПРОЕКТ> <тип> <summary>|delete <KEY>]',
+    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля, создание и удаление задачи',
     example: 'fsh jira mine --sprint current --component Frontend',
     run: (ctx, args, opts) => cmdJira(ctx, args, opts),
     mcp: {
@@ -226,16 +229,16 @@ export const COMMANDS = [
   },
   {
     name: 'growthbook',
-    usage: 'growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>]',
-    description: 'Фича-флаги GrowthBook: список, один флаг, создание, включение и выключение в окружении',
+    usage: 'growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|delete <id>]',
+    description: 'Фича-флаги GrowthBook: список, один флаг, создание, включение/выключение в окружении, удаление',
     example: 'fsh growthbook toggle new-onboarding on --env production',
     run: (ctx, args, opts) => cmdGrowthBook(ctx, args, opts),
     mcp: {
-      description: 'Фича-флаги GrowthBook. list/get — только чтение; create создаёт boolean-флаг, toggle включает или выключает флаг в окружении (меняет продакшен-поведение приложения).',
+      description: 'Фича-флаги GrowthBook. list/get — только чтение; create создаёт boolean-флаг, toggle включает или выключает флаг в окружении, delete удаляет флаг необратимо (меняет продакшен-поведение приложения).',
       inputSchema: {
         type: 'object',
         properties: {
-          sub: { type: 'string', enum: ['list', 'get', 'create', 'toggle'] },
+          sub: { type: 'string', enum: ['list', 'get', 'create', 'toggle', 'delete'] },
           id: { type: 'string', description: 'идентификатор флага' },
           state: { type: 'string', enum: ['on', 'off'] },
           env: { type: 'string', description: 'окружение, дефолт из конфига' },

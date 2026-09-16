@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueCard, wrapText, shiftLine, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, fieldsFor, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems, flowLines, boardColumns, boardLanes, onBoard } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueCard, wrapText, shiftLine, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, fieldsFor, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems, flowLines, boardColumns, boardLanes, onBoard, gbRow, dictRow } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -13,7 +13,67 @@ test('вкладки: цифры, Tab по кругу', () => {
   assert.equal(s.tab, 'runs');
   s = reduce(s, { type: 'nextTab' });
   assert.equal(s.tab, 'prompts');
+  s = reduce(s, { type: 'nextTab' });
+  assert.equal(s.tab, 'gb');
+  s = reduce(s, { type: 'nextTab' });
+  assert.equal(s.tab, 'dict');
   assert.equal(reduce(s, { type: 'nextTab' }).tab, 'mr');
+});
+
+test('вкладки флагов и словаря: клавиши CRUD', () => {
+  let s = reduce(initialState('app'), { type: 'tab', tab: 'gb' });
+  assert.deepEqual(keyIntent('c', {}, s), { type: 'create' });
+  assert.deepEqual(keyIntent('t', {}, s), { type: 'gbToggle' });
+  assert.deepEqual(keyIntent('D', {}, s), { type: 'delete' });
+  // На других вкладках эти клавиши молчат или значат другое.
+  assert.equal(keyIntent('t', {}, reduce(s, { type: 'tab', tab: 'dict' })), null);
+
+  s = reduce(s, { type: 'tab', tab: 'dict' });
+  assert.deepEqual(keyIntent('c', {}, s), { type: 'create' });
+  assert.deepEqual(keyIntent('E', {}, s), { type: 'dictEdit' });
+  assert.deepEqual(keyIntent('D', {}, s), { type: 'delete' });
+  assert.deepEqual(keyIntent('n', {}, s), { type: 'dictPage', by: 1 });
+  assert.deepEqual(keyIntent('p', {}, s), { type: 'dictPage', by: -1 });
+  // В модалке и при вводе поиска клавиши CRUD молчат.
+  const modal = reduce(s, { type: 'modalOpen', kind: 'dictEdit', items: [], editing: 'value', value: '' });
+  assert.equal(keyIntent('E', {}, modal), null);
+});
+
+test('dictPage зажат между первой страницей и общим числом', () => {
+  // total — записей (134), страниц — ceil(134/15) = 9.
+  let s = reduce(initialState('app'), { type: 'dictPage', meta: { page: 5, size: 15, total: 134 } });
+  assert.deepEqual(s.dictPage, { page: 5, size: 15, total: 134 });
+  s = reduce(s, { type: 'dictPage', meta: { page: 0 } });
+  assert.equal(s.dictPage.page, 1);
+  s = reduce(s, { type: 'dictPage', meta: { page: 999 } });
+  assert.equal(s.dictPage.page, 9);
+  // Пока общего числа не знаем, зажимать нечем.
+  const fresh = reduce(initialState('app'), { type: 'dictPage', meta: { page: 3 } });
+  assert.equal(fresh.dictPage.page, 3);
+  // Смена страницы сбрасывает курсор: старый индекс указывает на чужую строку.
+  assert.equal(s.cursor.dict, 0);
+});
+
+test('строки и детали флага и словаря', () => {
+  const flag = { id: 'ai_coach', type: 'boolean', default: 'true', envs: 'production=on dev=off', tags: ['web'], environments: { production: { enabled: true }, dev: { enabled: false } } };
+  assert.match(lineText(gbRow(flag)), /ai_coach · boolean · production=on dev=off · web/);
+  const flagLines = detailLines('gb', flag).map(lineText);
+  assert.match(flagLines[0], /ai_coach/);
+  assert.match(flagLines[2], /production=on dev=off/);
+
+  const item = { dictionary_item_id: 7, language_id: 1, group: 'checkout', key: 'btn', value: 'Купить', language: { code: 'ru', name: 'Русский' } };
+  assert.match(lineText(dictRow(item)), /checkout\.btn · 1 · Купить/);
+  const dictLines = detailLines('dict', item).map(lineText);
+  assert.match(dictLines[0], /checkout\.btn/);
+  assert.match(dictLines[1], /язык/);
+});
+
+test('поиск по флагам и словарю', () => {
+  const flags = [{ id: 'ai_coach', type: 'boolean', envs: 'production=on dev=off', tags: ['web'] }, { id: 'old_banner', type: 'string', envs: '', tags: [] }];
+  assert.deepEqual(searchRows('gb', flags, 'ai').map((r) => r.id), ['ai_coach']);
+  const items = [{ dictionary_item_id: 1, group: 'checkout', key: 'btn', value: 'Купить', language_id: 1 }];
+  assert.deepEqual(searchRows('dict', items, 'купит').map((r) => r.key), ['btn']);
+  assert.deepEqual(searchRows('dict', items, 'нет такого').map((r) => r.key), []);
 });
 
 test('курсор не выезжает за список и переживает смену списка', () => {

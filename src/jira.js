@@ -2,7 +2,7 @@ import { CliError } from './errors.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Jira REST: чтение плюс три записи — статус (move), спринт (sprint) и комментарий (comment).
+// Jira REST: чтение плюс записи — статус, спринт, комментарий, поля, создание и удаление задачи.
 // fetchImpl инжектируется ради тестов без сети.
 // Форма та же, что у glab.js: один низкоуровневый api() с ретраями, поверх — методы.
 export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs = 1000 } = {}) {
@@ -121,6 +121,25 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     // Запись 4. Одним PUT правится любое поле — форму значения берём из editmeta.
     updateIssue: (key, fields) =>
       api(`/rest/api/2/issue/${encodeURIComponent(key)}`, { method: 'PUT', body: { fields }, retries: 1 }),
+
+    // Типы задач проекта для создания: createmeta отдаёт id, который нужен в POST.
+    // С полями (expand) — только когда они нужны: id customfield_* у каждого проекта свой,
+    // без createmeta их не узнать, а editmeta в creating-контексте не работает (нет задачи).
+    createTypes: (projectKey) =>
+      api(`/rest/api/2/issue/createmeta?projectKeys=${encodeURIComponent(projectKey)}&expand=projects`)
+        .then((meta) => meta?.projects?.[0]?.issuetypes ?? []),
+
+    createMeta: (projectKey, issueTypeId) =>
+      api(
+        `/rest/api/2/issue/createmeta?projectKeys=${encodeURIComponent(projectKey)}&issuetypeIds=${encodeURIComponent(issueTypeId)}&expand=projects.issuetypes.fields`,
+      ).then((meta) => meta?.projects?.[0]?.issuetypes?.[0] ?? null),
+
+    // Запись 5. Создание: Jira сама скажет, каких полей не хватило (см. errorText).
+    createIssue: (fields) => api('/rest/api/2/issue', { method: 'POST', body: { fields }, retries: 1 }),
+
+    // Запись 6. Удаление необратимо, 204 = удалена.
+    deleteIssue: (key) =>
+      api(`/rest/api/2/issue/${encodeURIComponent(key)}`, { method: 'DELETE', retries: 1, allow404: true }),
   };
 }
 

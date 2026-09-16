@@ -4,8 +4,8 @@ import { finish } from '../output.js';
 import { confirm } from '../ui.js';
 import { CliError } from '../errors.js';
 
-// fsh growthbook list|get|create|toggle — фича-флаги. Больше в v1 не нужно:
-// правило раскатки, эксперименты и метрики живут в вебе, туда мы не лезем.
+// fsh growthbook list|get|create|toggle|delete — фича-флаги. Правило раскатки,
+// эксперименты и метрики живут в вебе, туда мы не лезем.
 export async function cmdGrowthBook(ctx, args, opts = {}) {
   const [sub, ...rest] = args;
   const gb = ctx.gb();
@@ -14,7 +14,8 @@ export async function cmdGrowthBook(ctx, args, opts = {}) {
       : sub === 'get' ? await get(gb, rest)
         : sub === 'create' ? await create(gb, ctx, rest, opts)
           : sub === 'toggle' ? await toggle(gb, ctx, rest, opts)
-            : (() => { throw new CliError('Использование: fsh growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>].', 1, 'usage'); })();
+            : sub === 'delete' ? await del(gb, rest, opts)
+              : (() => { throw new CliError('Использование: fsh growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|delete <id>].', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -50,7 +51,8 @@ async function create(gb, ctx, [id, state], opts) {
     valueType: 'boolean',
     defaultValue: 'true',
     project: opts.for || ctx.cfg.growthbook.project || undefined,
-    environments: { [env]: { enabled: on } },
+    // rules обязателен в каждом окружении, иначе zod-валидатор API отдаёт 400.
+    environments: { [env]: { enabled: on, rules: [] } },
   };
   if (opts.dryRun) return { ok: true, dry_run: true, created: id, body };
   if (!opts.yes && !opts.asObject && !confirm(`Создать флаг "${id}" (${env}=${on ? 'on' : 'off'})? [y/N] `)) {
@@ -77,13 +79,26 @@ async function toggle(gb, ctx, [id, state], opts) {
 
 const brief = (f) => ({ id: f.id, type: f.valueType, default: f.defaultValue, envs: envStates(f), tags: f.tags ?? [] });
 
+// Удаление необратимо; API может отказаться для живого флага (см. growthbook.js).
+async function del(gb, [id], opts) {
+  if (!id) throw new CliError('Использование: fsh growthbook delete <id>.', 1, 'usage');
+  if (opts.dryRun) return { ok: true, dry_run: true, deleted: id };
+  if (!opts.yes && !opts.asObject && !confirm(`Удалить флаг "${id}" без возможности вернуть? [y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  const r = await gb.deleteFeature(id);
+  if (r?.deletedId !== id) throw new CliError(`GrowthBook не подтвердил удаление "${id}" — проверь флаг в вебе.`, 1, 'api_failed');
+  return { ok: true, deleted: id };
+}
+
 function render(r) {
   if (r.flags) {
     if (!r.flags.length) return void console.log('Флагов нет.');
     console.log(table(r.flags.map((f) => [f.id, f.type, f.envs, truncate((f.tags ?? []).join(', '), 30)])));
     return;
   }
-  if (r.dry_run) return void console.log(`dry-run: ${r.created ? `создать ${r.created}` : `${r.toggled} ${r.env} → ${r.enabled ? 'on' : 'off'}`}`);
+  if (r.dry_run) return void console.log(`dry-run: ${r.created ? `создать ${r.created}` : r.deleted ? `удалить ${r.deleted}` : `${r.toggled} ${r.env} → ${r.enabled ? 'on' : 'off'}`}`);
+  if (r.deleted) return void console.log(`Флаг ${r.deleted} удалён.`);
   const f = r.flag;
   if (r.created) return void console.log(`Флаг ${f.id} создан: ${f.envs}`);
   if (r.toggled) return void console.log(`Флаг ${f.id}: ${f.envs}`);
