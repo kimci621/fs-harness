@@ -82,14 +82,18 @@ test('defaultRun: не держит event loop и отдаёт stderr в оши�
   await assert.rejects(() => defaultRun('sh', ['-c', 'echo беда >&2; exit 3']), (e) => /беда/.test(e.stderr));
 });
 
-test('api: input добавляет --input - в аргументы glab', async () => {
+test('api: input добавляет --input - и Content-Type: application/json', async () => {
   const { g, calls } = fake([{}]);
   await g.api('r/repo', '/x', { method: 'POST', input: '{"body":"текст"}' });
   assert.ok(calls[0].args.includes('--input'), '--input в аргументах');
   assert.equal(calls[0].args[calls[0].args.indexOf('--input') + 1], '-');
+  // glab с --input - не ставит Content-Type сам: без заголовка GitLab отвечает 415
+  // («provided content-type '' is not supported») — живой случай на ответах в треды.
+  assert.equal(calls[0].args[calls[0].args.indexOf('-H') + 1], 'Content-Type: application/json');
   const plain = fake([{}]);
   await plain.g.api('r/repo', '/x');
   assert.equal(plain.calls[0].args.includes('--input'), false);
+  assert.equal(plain.calls[0].args.includes('-H'), false);
 });
 
 test('replyDiscussion: read-back ловит потерянный ответ', async () => {
