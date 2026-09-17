@@ -1,3 +1,4 @@
+import { expandHome } from '../config.js';
 import { ISSUE_KEY, fieldByName, fieldText } from '../jira.js';
 import { judge, formatVerdict } from '../judge/index.js';
 import { buildAcceptancePayload } from '../judge/payload.js';
@@ -21,7 +22,7 @@ export const branchFor = (key, pattern = 'feature/{key}') => pattern.replace('{k
 export const keyFromBranch = (branch) => branch.match(/[A-Z][A-Z0-9]+-\d+/)?.[0] ?? null;
 
 const dirOf = (ctx, opts) => {
-  const dir = opts.projectDir || ctx.cfg.projectDir;
+  const dir = expandHome(opts.projectDir || ctx.cfg.projectDir || '');
   if (!dir) throw new CliError('Не задан каталог проекта: --project-dir или projects.<имя>.dir в конфиге.', 1, 'config_invalid');
   return dir;
 };
