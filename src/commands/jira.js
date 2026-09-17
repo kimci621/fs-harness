@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { ISSUE_KEY, createJira, editKind, editValueFor, fieldByName, fieldText, openSprints } from '../jira.js';
 import { humanize, table, truncate } from '../format.js';
 import { finish } from '../output.js';
@@ -90,6 +91,8 @@ export async function cmdJira(ctx, args, opts = {}) {
             ? await field(j, rest, ctx, opts)
           : query === 'create'
             ? await create(j, rest, ctx, opts)
+          : query === 'attach'
+            ? await attach(j, rest, ctx, opts)
           : query === 'delete'
             ? await del(j, rest, ctx, opts)
           : !query || query === 'mine'
@@ -165,7 +168,7 @@ async function comment(j, [key, ...words], ctx, { yes, asObject, dryRun } = {}) 
 
 // Запись в Jira: любое поле по человеческому имени. id берётся из editmeta (customfield_*
 // у каждого проекта свой), форма значения — из схемы поля, как в TUI.
-async function field(j, [key, name, ...words], ctx, { yes, asObject, dryRun, file } = {}) {
+async function field(j, [key, name, ...words], ctx, { yes, asObject, dryRun, file, attach: alsoAttach } = {}) {
   if (!key || !ISSUE_KEY.test(key) || !name) {
     throw new CliError('Использование: fsh jira field <KEY> "<имя поля>" <значение> или --file <путь|->.', 1, 'usage');
   }
@@ -185,7 +188,11 @@ async function field(j, [key, name, ...words], ctx, { yes, asObject, dryRun, fil
   if (!text.trim()) throw new CliError(`Нечего писать в "${meta1.name}": значение пустое.`, 1, 'usage');
   const value = shapeValue(meta1, kind, text);
 
-  if (dryRun) return { ok: true, dry_run: true, key, field: meta1.name, field_id: id, value };
+  // --attach: тот же файл ложится и в поле текстом, и вложением. Со stdin нечего прикладывать.
+  if (alsoAttach && (!file || file === '-')) {
+    throw new CliError('--attach нужен файл: с --file - (stdin) прикладывать нечего.', 1, 'usage');
+  }
+  if (dryRun) return { ok: true, dry_run: true, key, field: meta1.name, field_id: id, value, attach: Boolean(alsoAttach) };
   if (!yes && !asObject && !confirm(`${key}: записать в «${meta1.name}» ${truncate(text.replace(/\n/g, ' '), 60)}? [y/N] `)) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
@@ -193,7 +200,8 @@ async function field(j, [key, name, ...words], ctx, { yes, asObject, dryRun, fil
   const after = await j.issue(key);
   const written = fieldText(after.fields?.[id]);
   if (!written) throw new CliError(`Jira приняла запись в "${meta1.name}", но при перечитывании поле пустое.`, 1, 'api_failed');
-  return { ok: true, key, field: meta1.name, field_id: id, written, url: issueUrl(ctx, key) };
+  const attached = alsoAttach ? (await j.addAttachment(key, [{ name: basename(file), data: readFileSync(file) }])).map(attachBrief) : null;
+  return { ok: true, key, field: meta1.name, field_id: id, written, ...(attached ? { attached } : {}), url: issueUrl(ctx, key) };
 }
 
 // Форма значения по типу поля: списки строк через запятую, число числом,
@@ -252,6 +260,68 @@ async function create(j, [project, type, ...words], ctx, { yes, asObject, dryRun
   const res = await j.createIssue(fields);
   if (!res?.key) throw new CliError('Jira ответила без ключа задачи — создание под вопросом, проверь руками.', 1, 'api_failed');
   return { ok: true, key: res.key, project, type: t.name, summary, component: component ?? null, url: issueUrl(ctx, res.key) };
+}
+
+const kb = (n) => (n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`);
+
+const ATTACH_USAGE ='Использование: fsh jira attach <KEY> [файл...] | fsh jira attach get <KEY> [имя|id] [--out <каталог>].';
+
+const attachBrief = (a) => ({
+  id: String(a.id),
+  filename: a.filename,
+  size: a.size ?? 0,
+  mime: a.mimeType ?? '',
+  created: a.created ?? '',
+  author: a.author?.displayName ?? '',
+});
+
+// Запись 7. Вложения: без файлов — список, с файлами — аплоад, get — выгрузка на диск.
+async function attach(j, rest, ctx, opts = {}) {
+  if (rest[0] === 'get') return attachGet(j, rest.slice(1), ctx, opts);
+  const [key, ...paths] = rest;
+  if (!key || !ISSUE_KEY.test(key)) throw new CliError(ATTACH_USAGE, 1, 'usage');
+  if (!paths.length) {
+    return { ok: true, key, attachments: (await j.attachments(key)).map(attachBrief), url: issueUrl(ctx, key) };
+  }
+  const files = paths.map((p) => {
+    if (!existsSync(p)) throw new CliError(`Файла нет: ${p}.`, 1, 'usage');
+    return { name: basename(p), data: readFileSync(p), path: p };
+  });
+  const names = files.map((f) => f.name).join(', ');
+  if (opts.dryRun) return { ok: true, dry_run: true, key, files: files.map((f) => ({ name: f.name, size: f.data.length })) };
+  if (!opts.yes && !opts.asObject && !confirm(`${key}: приложить ${names}? [y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  const added = await j.addAttachment(key, files);
+  if (!Array.isArray(added) || added.length !== files.length) {
+    throw new CliError(`Jira приняла не все вложения: отправлено ${files.length}, вернулось ${added?.length ?? 0}.`, 1, 'api_failed');
+  }
+  return { ok: true, key, attached: added.map(attachBrief), url: issueUrl(ctx, key) };
+}
+
+// Выгрузка вложения. Имя файла из Jira — чужой ввод: берём только basename,
+// иначе "../.." в имени увёл бы запись из каталога назначения.
+async function attachGet(j, [key, which], ctx, { out, asObject, dryRun } = {}) {
+  if (!key || !ISSUE_KEY.test(key)) throw new CliError(ATTACH_USAGE, 1, 'usage');
+  const list = await j.attachments(key);
+  if (!list.length) throw new CliError(`У ${key} нет вложений.`, 1, 'usage');
+  const lower = String(which ?? '').toLowerCase();
+  const picked = which
+    ? list.filter((a) => String(a.id) === which || (a.filename ?? '').toLowerCase().includes(lower))
+    : list;
+  if (!picked.length) {
+    throw new CliError(`У ${key} нет вложения "${which}". Есть: ${list.map((a) => a.filename).join(', ')}.`, 1, 'usage');
+  }
+  const dir = out || process.cwd();
+  if (dryRun) return { ok: true, dry_run: true, key, dir, files: picked.map((a) => basename(a.filename)) };
+  const saved = [];
+  for (const a of picked) {
+    const data = Buffer.from(await j.attachmentData(a.content));
+    const path = join(dir, basename(a.filename));
+    writeFileSync(path, data);
+    saved.push({ name: basename(a.filename), path, size: data.length });
+  }
+  return { ok: true, key, saved };
 }
 
 // Запись в Jira: удаление задачи. Необратимо, поэтому подтверждение всегда (даже с --yes — нет).
@@ -315,6 +385,20 @@ function render(r, ctx) {
   if (r.field_id) {
     console.log(`${r.key}: «${r.field}» ${r.dry_run ? 'не записано (dry-run)' : 'записано'}`);
     if (r.written) console.log(truncate(r.written.replace(/\n/g, ' '), 100));
+    if (r.attached) console.log(`📎 вложением: ${r.attached.map((a) => a.filename).join(', ')}`);
+    return;
+  }
+  if (r.saved) {
+    for (const s of r.saved) console.log(`⬇️  ${s.path} (${kb(s.size)})`);
+    return;
+  }
+  if (r.attached || r.attachments || (r.dry_run && r.files)) {
+    const list = r.attached ?? r.attachments ?? r.files;
+    if (!list.length) return void console.log(`У ${r.key} вложений нет.`);
+    if (r.dry_run) return void console.log(`${r.key}: не приложено (dry-run): ${list.map((f) => f.name).join(', ')}`);
+    const verb = r.attached ? 'приложено' : 'вложений';
+    console.log(`${r.key}: ${verb} ${list.length}`);
+    console.log(table(list.map((a) => [a.id, truncate(a.filename, 50), kb(a.size), a.author, humanize(a.created)])));
     return;
   }
   if (r.issues) {

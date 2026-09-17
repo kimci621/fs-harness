@@ -71,7 +71,11 @@ export const DEFAULTS = {
       },
     },
     pi: { bin: 'pi', family: 'pi', args: [] },
+    // agy (Antigravity CLI) — опционален, как pi: нет в PATH, мастер молча берёт cc.
+    agy: { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions'] },
   },
+  // Мастер по самому fsh (fsh ask, клавиша A в TUI). Профиль из agents.
+  chat: { agent: 'agy' },
   workspace: {
     root: '~/.local/state/fs-harness/worktrees',
     deps: { strategy: 'clone' },

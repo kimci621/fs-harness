@@ -245,13 +245,25 @@ export function reduce(state, ev) {
     case 'help':
       return { ...state, help: !state.help };
     case 'modalOpen':
-      return { ...state, modal: { kind: ev.kind ?? 'transition', title: ev.title, issue: ev.issue, mr: ev.mr, field: ev.field, meta: ev.meta, items: ev.items, cursor: ev.cursor ?? 0, note: ev.note ?? '', busy: Boolean(ev.busy), editing: ev.editing ?? null, value: ev.value ?? '' } };
+      return { ...state, modal: { kind: ev.kind ?? 'transition', title: ev.title, issue: ev.issue, mr: ev.mr, field: ev.field, meta: ev.meta, items: ev.items, cursor: ev.cursor ?? 0, note: ev.note ?? '', busy: Boolean(ev.busy), editing: ev.editing ?? null, value: ev.value ?? '', lines: ev.lines ?? [], stream: '' } };
     case 'modalItems': // обновление списка на месте: курсор и признак работы не трогаем
       return state.modal ? { ...state, modal: { ...state.modal, items: ev.items ?? state.modal.items, cursor: clamp(state.modal.cursor, (ev.items ?? state.modal.items).length), busy: ev.busy ?? state.modal.busy, note: ev.note ?? state.modal.note } } : state;
     case 'modalMove':
       return state.modal ? { ...state, modal: { ...state.modal, cursor: clamp(state.modal.cursor + ev.by, state.modal.items.length) } } : state;
     case 'modalEdit': // meta не трогаем, если событие её не несёт: многошаговые формы копят поля в ней
       return state.modal ? { ...state, modal: { ...state.modal, editing: ev.editing, value: ev.value ?? '', meta: ev.meta ?? state.modal.meta } } : state;
+    // Чат мастера: реплики копятся в модалке, поток ответа — отдельной строкой,
+    // иначе на каждую дельту пришлось бы перекраивать весь список.
+    case 'chatSay':
+      return state.modal ? { ...state, modal: { ...state.modal, lines: [...(state.modal.lines ?? []), { role: ev.role, text: ev.text }], stream: '', busy: ev.role === 'me' } } : state;
+    case 'chatDelta':
+      return state.modal ? { ...state, modal: { ...state.modal, stream: (state.modal.stream ?? '') + ev.text } } : state;
+    case 'chatNote':
+      return state.modal ? { ...state, modal: { ...state.modal, note: ev.text } } : state;
+    case 'chatDone':
+      return state.modal
+        ? { ...state, modal: { ...state.modal, lines: [...(state.modal.lines ?? []), { role: ev.role ?? 'мастер', text: ev.text }], stream: '', busy: false, note: '' } }
+        : state;
     case 'modalClose':
       return { ...state, modal: null };
     case 'searchOpen':
@@ -698,6 +710,8 @@ export function keyIntent(input, key, state) {
   if (state.searching) return key.escape || key.return ? { type: 'searchClose' } : null;
   if (state.modal) {
     if (state.modal.editing) return null; // ввод текста забирает поле ввода
+    // В списке вложений a переводит модалку в ввод пути: отдельной клавиши верхнего уровня не надо.
+    if (state.modal.kind === 'attach' && input === 'a') return { type: 'attachAdd' };
     if (key.escape || input === 'q') return { type: 'modalClose' };
     if (key.upArrow || input === 'k') return { type: 'modalMove', by: -1 };
     if (key.downArrow || input === 'j') return { type: 'modalMove', by: 1 };
@@ -709,6 +723,7 @@ export function keyIntent(input, key, state) {
   if (input === '?') return { type: 'help' };
   if (input === 'q') return { type: 'quit' };
   if (input === 'x') return { type: 'abort' };
+  if (input === 'A') return { type: 'ask' };
   if (key.tab) return { type: 'focus', by: key.shift ? -1 : 1 };
   const byNumber = { 1: 'mr', 2: 'issues', 3: 'runs', 4: 'prompts', 5: 'gb', 6: 'dict' }[input];
   if (byNumber) return { type: 'tab', tab: byNumber };
@@ -746,6 +761,7 @@ export function keyIntent(input, key, state) {
   if (input === 'p' && state.tab === 'dict') return { type: 'dictPage', by: -1 };
   if (input === 'D' && (state.tab === 'gb' || state.tab === 'dict')) return { type: 'delete' };
   if (input === 'E' && (state.tab === 'issues' || state.tab === 'mr')) return { type: 'editField' };
+  if (input === '@' && state.tab === 'issues') return { type: 'attach' };
   if (input === 'p' && state.tab === 'issues') return { type: 'parent' };
   if (input === 'p' && state.tab === 'mr') return { type: 'pipeline' };
   if (input === 'f' && (state.tab === 'mr' || state.tab === 'issues')) return { type: 'openFilters' };

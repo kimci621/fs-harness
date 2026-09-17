@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createJira, ISSUE_KEY, fieldByName, fieldIdByName, fieldText, editKind, editValueFor, openSprints } from '../src/jira.js';
@@ -422,4 +422,89 @@ test('jira.js: createIssue и deleteIssue идут в правильные пу�
   assert.equal(calls[0].method, 'POST');
   assert.equal(calls[1].url, 'https://j.invalid/rest/api/2/issue/FD-9');
   assert.equal(calls[1].method, 'DELETE');
+});
+
+// --- вложения ---
+
+test('jira addAttachment: multipart, X-Atlassian-Token и файл как есть', async () => {
+  const calls = [];
+  const impl = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => [{ id: 10, filename: 'content.csv', size: 3 }] };
+  };
+  const j = createJira({ baseUrl: 'https://j.invalid', email: 'me@e.st', token: 't', fetchImpl: impl, sleepMs: 1 });
+  const res = await j.addAttachment('FD-1', [{ name: 'content.csv', data: Buffer.from('a,b') }]);
+
+  assert.equal(calls[0].url, 'https://j.invalid/rest/api/2/issue/FD-1/attachments');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers['x-atlassian-token'], 'no-check');
+  // content-type не ставим руками: boundary проставляет fetch, иначе Jira не разберёт тело
+  assert.equal(calls[0].init.headers['content-type'], undefined);
+  assert.ok(calls[0].init.body instanceof FormData, 'тело должно уйти FormData, а не JSON-строкой');
+  const file = calls[0].init.body.get('file');
+  assert.equal(file.name, 'content.csv');
+  assert.equal(await file.text(), 'a,b');
+  assert.equal(res[0].id, 10);
+});
+
+test('jira attachmentData: абсолютная ссылка не клеится к baseUrl, тело не разбирается в JSON', async () => {
+  const calls = [];
+  const impl = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, headers: { get: () => null }, arrayBuffer: async () => new TextEncoder().encode('csv').buffer };
+  };
+  const j = createJira({ baseUrl: 'https://j.invalid', email: 'me@e.st', token: 't', fetchImpl: impl, sleepMs: 1 });
+  const buf = await j.attachmentData('https://j.invalid/rest/api/3/attachment/content/10');
+
+  assert.equal(calls[0].url, 'https://j.invalid/rest/api/3/attachment/content/10');
+  assert.equal(Buffer.from(buf).toString(), 'csv');
+});
+
+function fakeAttachJira(list = []) {
+  const done = [];
+  return {
+    done,
+    attachments: async (key) => { done.push(['list', key]); return list; },
+    addAttachment: async (key, files) => {
+      done.push(['add', key, files.map((f) => f.name)]);
+      return files.map((f, i) => ({ id: 100 + i, filename: f.name, size: f.data.length, author: { displayName: 'me' }, created: '2026-09-17T10:00:00.000+0300' }));
+    },
+    attachmentData: async (url) => { done.push(['get', url]); return new TextEncoder().encode('данные').buffer; },
+  };
+}
+
+test('jira attach: без файлов список, с файлами аплоад, dry-run молчит', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fsh-attach-'));
+  const file = path.join(dir, 'content.csv');
+  writeFileSync(file, 'Группа, Ключ, Значение\n');
+
+  const j = fakeAttachJira([{ id: 7, filename: 'old.txt', size: 12, author: { displayName: 'кто-то' }, created: '' }]);
+  const list = await cmdJira(ctxWith(j), ['attach', 'FD-1'], { asObject: true });
+  assert.deepEqual(list.attachments.map((a) => a.filename), ['old.txt']);
+  assert.deepEqual(j.done.at(-1), ['list', 'FD-1']);
+
+  const dry = await cmdJira(ctxWith(j), ['attach', 'FD-1', file], { asObject: true, dryRun: true });
+  assert.equal(dry.dry_run, true);
+  assert.deepEqual(j.done.filter((c) => c[0] === 'add'), []);
+
+  const res = await cmdJira(ctxWith(j), ['attach', 'FD-1', file], { asObject: true, yes: true });
+  assert.deepEqual(res.attached.map((a) => a.filename), ['content.csv']);
+  assert.deepEqual(j.done.at(-1), ['add', 'FD-1', ['content.csv']]);
+
+  await assert.rejects(() => cmdJira(ctxWith(j), ['attach', 'FD-1', path.join(dir, 'нет.txt')], { asObject: true, yes: true }), (e) => e.code === 'usage');
+  await assert.rejects(() => cmdJira(ctxWith(j), ['attach', 'мусор', file], { asObject: true, yes: true }), (e) => e.code === 'usage');
+});
+
+test('jira attach get: имя вложения из Jira — чужой ввод, каталог назначения из него не уедет', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fsh-attach-get-'));
+  const j = fakeAttachJira([
+    { id: 7, filename: '../../сбежал.txt', size: 6, content: 'https://j.example/a/7', author: { displayName: 'me' }, created: '' },
+  ]);
+  const res = await cmdJira(ctxWith(j), ['attach', 'get', 'FD-1'], { asObject: true, out: dir });
+
+  assert.equal(res.saved[0].path, path.join(dir, 'сбежал.txt'));
+  assert.equal(readFileSync(res.saved[0].path, 'utf8'), 'данные');
+  assert.deepEqual(j.done.at(-1), ['get', 'https://j.example/a/7']);
+
+  await assert.rejects(() => cmdJira(ctxWith(j), ['attach', 'get', 'FD-1', 'нет-такого'], { asObject: true, out: dir }), (e) => e.code === 'usage');
 });

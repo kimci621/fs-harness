@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
@@ -12,10 +12,12 @@ import {
   orderJobs, deploySlot, DEPLOY_JOB, mrRow, MR_FIELDS, mrFieldRow, issueCard, shiftLine, runRow, detailLines, flowLines, visibleItems, onBoard, boardLanes, cardRows, toggleFilter, filterValueText, filterOptions, filterSummary, busyText, gbRow, dictRow,
 } from './store.js';
 import { envStates } from '../growthbook.js';
-import { listRuns } from '../agent/journal.js';
+import { listRuns, readRun } from '../agent/journal.js';
 import { fieldText, editKind, editValueFor } from '../jira.js';
 import { listTemplates, loadTemplate, userOverride, dropUserOverride } from '../prompts.js';
 import { findCommand } from '../registry.js';
+import { startChat } from '../chat.js';
+import { HARNESS_DIR, buildAskBrief, lastFailedRun, pickChatAgent } from '../commands/ask.js';
 import { runAction } from '../engine.js';
 import { cmdMRS, toJSON, anyFilter } from '../commands/mrs.js';
 import { buildJql } from '../commands/jira.js';
@@ -25,6 +27,8 @@ import { cmdDeploy } from '../commands/deploy.js';
 import { statusIcon, commentStats } from '../format.js';
 
 const html = htm.bind(React.createElement);
+
+const attachSize = (n) => (n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`);
 
 // Наверх списка полей — то, что правят чаще всего.
 const EDIT_FIRST = ['Assignee', 'Ответственный разработчик', 'Ответственный тестировщик', 'Ответственный продакт', 'Priority'];
@@ -58,6 +62,7 @@ export function App({ ctx, opts }) {
   const quitArmedRef = useRef(false);
   const pipeRef = useRef({ iid: null, pipelineId: null, busy: false });
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
+  const chatRef = useRef(null);
   const jiraRef = useRef(null);
   const jira = () => (jiraRef.current ??= ctx.jira());
   const gbRef = useRef(null);
@@ -387,6 +392,115 @@ export function App({ ctx, opts }) {
     } catch (err) {
       bufferRef.current.push(`${item.key} ▸ ❌ ${err.message}`);
     }
+  }
+
+  // Мастер по самому fsh. Окно поверх TUI: агент работает в каталоге харнесса и правит его
+  // же — гейт тут человек за клавиатурой, он видит каждый шаг. Первая реплика несёт бриф
+  // об упавшем ране, дальше идёт обычный диалог в той же сессии агента.
+  function openMaster() {
+    if (state.modal) return; // поверх другого окна мастера не поднимаем
+    const run = masterRun();
+    const title = run?.error?.code ? `мастер fsh · ${run.id} · ${run.error.code}` : 'мастер fsh';
+    dispatch({ type: 'modalOpen', kind: 'chat', title, items: [], editing: 'chat', value: '', lines: [], meta: { run, first: true } });
+  }
+
+  // О каком ране спрашивать: на вкладке процессов — о выделенном, иначе о последнем упавшем.
+  function masterRun() {
+    try {
+      const item = state.tab === 'runs' ? selected(state) : null;
+      if (item?.id) {
+        const r = readRun(item.id);
+        return { id: r.id, dir: r.dir, action: r.meta?.action ?? '', error: null, tail: [] };
+      }
+    } catch {
+      // ран мог быть ещё живым и без meta.json — спросим про последний упавший
+    }
+    return lastFailedRun();
+  }
+
+  async function sendToMaster(text) {
+    const said = String(text ?? '').trim();
+    if (!said) return;
+    const meta = state.modal?.meta ?? {};
+    dispatch({ type: 'chatSay', role: 'me', text: said });
+    dispatch({ type: 'modalEdit', editing: 'chat', value: '' });
+    try {
+      if (!chatRef.current) {
+        const agent = pickChatAgent(ctx.cfg, null);
+        dispatch({ type: 'chatNote', text: `${agent.name} думает…` });
+        chatRef.current = startChat({
+          agent,
+          cwd: HARNESS_DIR,
+          env: { ...process.env, ...agent.env },
+          onEvent: (e) => {
+            if (e.t === 'delta') return void dispatch({ type: 'chatDelta', text: e.text });
+            if (e.t === 'activity') return void dispatch({ type: 'chatNote', text: e.text.slice(0, 120) });
+          },
+        });
+      }
+      // Бриф уходит только с первой репликой: дальше контекст держит сам агент.
+      const prompt = meta.first ? buildAskBrief({ run: meta.run, question: said }) : said;
+      if (meta.first) dispatch({ type: 'modalEdit', editing: 'chat', value: '', meta: { ...meta, first: false } });
+      const answer = await chatRef.current.send(prompt);
+      dispatch({ type: 'chatDone', text: answer || '(пустой ответ)' });
+    } catch (err) {
+      dispatch({ type: 'chatDone', role: '❌', text: err.message });
+    }
+  }
+
+  function closeMaster() {
+    chatRef.current?.close();
+    chatRef.current = null;
+    dispatch({ type: 'modalClose' });
+  }
+
+  // Вложения задачи. В editmeta их нет (заполнить полем нечем), поэтому окно своё:
+  // список читаем отдельным запросом, Enter выгружает на диск, a переводит в ввод пути.
+  async function openAttachments() {
+    const item = selected(state);
+    if (!item?.key) return;
+    dispatch({ type: 'modalOpen', kind: 'attach', title: `${item.key}: вложения`, issue: item.key, items: [], busy: true, note: 'читаю вложения…' });
+    try {
+      const list = await withBusy('вложения', () => jira().attachments(item.key));
+      const items = list.map((a) => ({
+        id: String(a.id),
+        filename: path.basename(a.filename ?? ''),
+        content: a.content,
+        label: `${path.basename(a.filename ?? '')}  ${attachSize(a.size ?? 0)}  ${a.author?.displayName ?? ''}`,
+      }));
+      dispatch({ type: 'modalItems', items, busy: false, note: items.length ? '' : 'вложений нет' });
+    } catch (err) {
+      dispatch({ type: 'modalItems', items: [], busy: false, note: `❌ ${err.message}` });
+    }
+  }
+
+  // Имя файла приходит из Jira — это чужой ввод, на диск кладём только basename.
+  async function downloadAttachment() {
+    const a = state.modal.items[state.modal.cursor];
+    const key = state.modal.issue;
+    if (!a) return;
+    try {
+      const data = Buffer.from(await withBusy(`выгрузка ${a.filename}`, () => jira().attachmentData(a.content)));
+      const dest = path.join(process.cwd(), path.basename(a.filename));
+      writeFileSync(dest, data);
+      bufferRef.current.push(`${key} ▸ ⬇️ ${dest}`);
+    } catch (err) {
+      bufferRef.current.push(`${key} ▸ ❌ ${err.message}`);
+    }
+  }
+
+  async function uploadAttachment(text) {
+    const key = state.modal.issue;
+    const file = String(text ?? '').trim().replace(/^~(?=\/|$)/, homedir());
+    if (!file) return void dispatch({ type: 'modalEdit', editing: null, value: '' });
+    try {
+      if (!existsSync(file)) throw new Error(`файла нет: ${file}`);
+      await withBusy(`вложение ${path.basename(file)}`, () => jira().addAttachment(key, [{ name: path.basename(file), data: readFileSync(file) }]));
+      bufferRef.current.push(`${key} ▸ 📎 ${path.basename(file)}`);
+    } catch (err) {
+      bufferRef.current.push(`${key} ▸ ❌ ${err.message}`);
+    }
+    await openAttachments();
   }
 
   // Что у задачи можно править, спрашиваем у самой Jira: editmeta знает и список полей,
@@ -875,6 +989,8 @@ export function App({ ctx, opts }) {
     if (kind === 'gbCreate') return submitGBId(text);
     if (kind === 'dictCreate') return submitDictField(text);
     if (kind === 'dictEdit') return applyDictValue(text);
+    if (kind === 'attach') return uploadAttachment(text);
+    if (kind === 'chat') return sendToMaster(text);
     return submitFilter(text);
   }
 
@@ -884,6 +1000,7 @@ export function App({ ctx, opts }) {
   // В окне комментария кроме ввода ничего нет, поэтому Esc закрывает его целиком.
   useInput((input, key) => {
     if (!key.escape) return;
+    if (state.modal?.kind === 'chat') return void closeMaster();
     if (state.modal?.kind === 'comment') return void dispatch({ type: 'modalClose' });
     if (['gbCreate', 'dictCreate', 'dictEdit'].includes(state.modal?.kind)) return void dispatch({ type: 'modalClose' });
     if (state.modal?.kind === 'editValue') return void (state.tab === 'mr' ? openMRFields() : openEditFields()); // назад к списку полей
@@ -929,6 +1046,9 @@ export function App({ ctx, opts }) {
     if (intent.type === 'searchOpen' || intent.type === 'searchClose') return void dispatch(intent);
     if (intent.type === 'editField') return void (state.tab === 'mr' ? openMRFields() : openEditFields());
     if (intent.type === 'parent') return void openParent();
+    if (intent.type === 'ask') return void openMaster();
+    if (intent.type === 'attach') return void openAttachments();
+    if (intent.type === 'attachAdd') return void dispatch({ type: 'modalEdit', editing: 'path', value: '' });
     if (intent.type === 'boardToggle') {
       dispatch(intent);
       if (!state.board) loadColumns();
@@ -950,6 +1070,7 @@ export function App({ ctx, opts }) {
       if (kind === 'filterValue') return applyFilterValue();
       if (kind === 'editField') return void (state.tab === 'mr' ? openMRValue() : openEditValue());
       if (kind === 'editValue') return void (state.tab === 'mr' ? applyMRValue() : applyEditValue());
+      if (kind === 'attach') return void downloadAttachment();
       if (kind === 'parent') return void dispatch({ type: 'modalClose' }); // окно только читают
       return void applyTransition();
     }
@@ -1038,10 +1159,10 @@ const Help = ({ height }) =>
     <${Text}>↑↓ или j/k — курсор и прокрутка · / — поиск по списку (терпит опечатки) · R — перечитать<//>
     <${Text}>MR: a — конфликт · t — тикеты · r — ревью · p — пайплайн и джобы · E — поле<//>
     <${Text}>Задачи: n — анализ · s — статус · S — спринт · c — комментарий · p — родитель · v — доска (H/L — перенос)<//>
-    <${Text}>E — поле из editmeta · e — раскрыть текст; многострочное правится в $EDITOR<//>
+    <${Text}>E — поле из editmeta · e — раскрыть текст ($EDITOR) · @ — вложения (Enter, a)<//>
     <${Text}>Флаги (5): c — создать · t — вкл/выкл в окружении · D — удалить<//>
     <${Text}>Словарь (6): c — создать (значение → ключ → группа → язык) · E — править значение · D — удалить · n/p — страницы<//>
-    <${Text}>x — прервать запуски · o — в браузере · q — выход<//>
+    <${Text}>A — мастер по fsh · x — прервать запуски · o — в браузере · q — выход<//>
     <${Text} dimColor>Запуски переживают выход: события пишутся в ~/.local/state/fs-harness/runs/${'<id>'}/events.jsonl<//>
   <//>`;
 
@@ -1092,6 +1213,38 @@ function Modal({ modal, filters, fields, optionsFor, height, onSubmit, onChange 
         `)}
         ${modal.items.length > Math.max(1, height - 4) ? html`<${Text} dimColor>…ещё ${modal.items.length - Math.max(1, height - 4)}<//>` : null}
         <${Text} dimColor>Enter — выбрать · Esc — назад к фильтрам<//>
+      <//>`;
+    }
+    if (modal.kind === 'chat') {
+      const room = Math.max(3, height - 5);
+      const stream = modal.stream ? [{ role: 'мастер', text: modal.stream }] : [];
+      // Показываем хвост переписки: окно короткое, а разговор растёт.
+      const shown = [...(modal.lines ?? []), ...stream].flatMap((m) => {
+        const mark = m.role === 'me' ? '›' : m.role === '❌' ? '❌' : '💬';
+        const color = m.role === 'me' ? 'cyan' : m.role === '❌' ? 'red' : undefined;
+        return String(m.text).split('\n').map((line, i) => ({ mark: i === 0 ? mark : ' ', line, color }));
+      }).slice(-room);
+      return html`<${Box} flexDirection="column">
+        ${shown.map((r, i) => html`<${Text} key=${i} color=${r.color} wrap="truncate-end">${r.mark} ${r.line}<//>`)}
+        ${!shown.length ? html`<${Text} dimColor>Спроси что угодно про fsh: почему упал ран, что делает команда, как починить.<//>` : null}
+        ${modal.note ? html`<${Text} color="yellow"><${Spinner} type="dots" /> ${modal.note}<//>` : null}
+        <${Box}><${Text} color="cyan">› <//><${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} /><//>
+        <${Text} dimColor>Enter — спросить · Esc — закрыть (мастер правит сам, ты видишь каждый шаг)<//>
+      <//>`;
+    }
+    if (modal.kind === 'attach') {
+      const room = Math.max(1, height - 5);
+      return html`<${Box} flexDirection="column">
+        ${modal.note ? html`<${Text} color="yellow">${modal.busy ? html`<${Spinner} type="dots" /> ` : ''}${modal.note}<//>` : null}
+        ${modal.items.slice(0, room).map((a, i) => html`
+          <${Text} key=${a.id} inverse=${i === modal.cursor && !modal.editing} wrap="truncate-end">📎 ${a.label}<//>
+        `)}
+        ${modal.editing
+          ? html`<${Box}><${Text}>путь: <//><${TextInput} value=${modal.value} onChange=${onChange} onSubmit=${onSubmit} /><//>`
+          : null}
+        <${Text} dimColor>${modal.editing
+          ? 'Enter — приложить к задаче · Esc — назад к списку'
+          : 'Enter — выгрузить в текущий каталог · a — приложить файл · Esc — закрыть'}<//>
       <//>`;
     }
     if (modal.kind === 'parent') {
