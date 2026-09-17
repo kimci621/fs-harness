@@ -16,7 +16,7 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
   const root = baseUrl.replace(/\/+$/, '');
 
   // withRes — отдать сам ответ, а не тело: токен сессии приходит заголовком Token, а не в JSON.
-  async function api(path, { method = 'GET', body, auth = true, withRes = false, retries = 3 } = {}) {
+  async function api(path, { method = 'GET', body, auth = true, withRes = false, allow404 = false, retries = 3 } = {}) {
     if (auth && !token) {
       throw new CliError('Нет токена Mattermost. Получи его: fsh mm login.', 1, 'secret_missing');
     }
@@ -40,6 +40,7 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
         continue;
       }
       if (res.ok) return withRes ? res : res.status === 204 ? null : res.json();
+      if (allow404 && res.status === 404) return null;
       if (res.status === 401 || res.status === 403) {
         throw new CliError(
           `Mattermost отклонил токен (${res.status}). Сессия протухает при разлогине — получи новый: fsh mm login.`,
@@ -62,6 +63,14 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
     me: () => api('/users/me'),
 
     channel: (id) => api(`/channels/${id}`),
+
+    teams: () => api('/users/me/teams'),
+
+    // Каналы, в которых я состою: искать по всем каналам инстанса прав нет, да и незачем.
+    myChannels: (teamId) => api(`/users/me/teams/${teamId}/channels`),
+
+    // Имя канала из URL (frontend-merge-requests), а не отображаемое. Нет такого — null.
+    channelByName: (team, name) => api(`/teams/name/${team}/channels/name/${name}`, { allow404: true }),
 
     // Токен сессии отдаётся заголовком Token, тело — это профиль вошедшего.
     async login({ loginId, password, mfa }) {

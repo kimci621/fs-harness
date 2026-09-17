@@ -5,19 +5,21 @@ import { makeGit } from '../workspace.js';
 import { keyFromBranch } from '../jira.js';
 import { issueUrl } from './jira.js';
 import { finish } from '../output.js';
+import { table } from '../format.js';
 import { confirm, promptSecret } from '../ui.js';
 import { CliError } from '../errors.js';
 
-// fsh mm login|whoami|post|review — сообщения в Mattermost от имени человека.
+// fsh mm login|whoami|channels|post|review — сообщения в Mattermost от имени человека.
 // Сценарий здесь один (review): канал на сценарий берётся из mattermost.channels.
 export async function cmdMM(ctx, args, opts = {}) {
   const [sub, ...rest] = args;
   const result =
     sub === 'login' ? await login(ctx, rest)
       : sub === 'whoami' ? await whoami(ctx)
+        : sub === 'channels' ? await channels(ctx, rest)
         : sub === 'post' ? await post(ctx, rest, opts)
           : sub === 'review' ? await review(ctx, rest, opts)
-            : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|post <сценарий|id канала> "<текст>"|review [KEY]].', 1, 'usage'); })();
+            : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]].', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -25,17 +27,56 @@ export async function cmdMM(ctx, args, opts = {}) {
   return result;
 }
 
-// Канал: имя сценария из конфига (review) либо сам id, если его передали руками.
+// id канала в Mattermost — ровно 26 символов [a-z0-9]. Всё, что не подошло, считаем именем.
+const CHANNEL_ID = /^[a-z0-9]{26}$/;
+
+// Куда пишем: имя сценария из конфига (review), сам id или имя канала (team/name либо name).
+// Имя из конфига разворачивается здесь же — сценарий тоже можно задать именем, а не id.
 export function resolveChannel(cfg, name) {
   const channels = cfg.mattermost?.channels ?? {};
   if (!name) {
     throw new CliError(`Не задан канал. Сценарии из конфига: ${Object.keys(channels).join(', ') || '—'}.`, 1, 'usage');
   }
-  const id = channels[name] || name;
-  if (!id) {
+  const ref = channels[name] || name;
+  if (!ref) {
     throw new CliError(`У сценария "${name}" нет канала: заполни mattermost.channels.${name} в конфиге.`, 1, 'config_invalid');
   }
-  return { id, scenario: channels[name] ? name : '' };
+  return { id: ref, scenario: channels[name] ? name : '' };
+}
+
+// Имя канала → id. Сам id проходит насквозь, в сеть за ним не ходим.
+// `team/name` спрашиваем напрямую, голое имя ищем по своим командам.
+export async function channelId(ctx, ref) {
+  if (CHANNEL_ID.test(ref)) return ref;
+  const mm = ctx.mm();
+  if (ref.includes('/')) {
+    const [team, name] = ref.split('/');
+    const ch = await mm.channelByName(team, name);
+    if (!ch) throw new CliError(`В команде "${team}" нет канала "${name}".`, 1, 'not_found');
+    return ch.id;
+  }
+  for (const team of await mm.teams()) {
+    const ch = await mm.channelByName(team.name, ref);
+    if (ch) return ch.id;
+  }
+  throw new CliError(`Канала "${ref}" нет ни в одной твоей команде. Найди его: fsh mm channels ${ref}`, 1, 'not_found');
+}
+
+// Свои каналы с фильтром по подстроке: id взять больше неоткуда — в URL лежит имя, не id.
+async function channels(ctx, [term = '']) {
+  const mm = ctx.mm();
+  const needle = term.toLowerCase();
+  const found = [];
+  for (const team of await mm.teams()) {
+    for (const ch of await mm.myChannels(team.id)) {
+      if (ch.type !== 'O' && ch.type !== 'P') continue; // личные и групповые пропускаем
+      const hay = `${ch.display_name} ${ch.name}`.toLowerCase();
+      if (needle && !hay.includes(needle)) continue;
+      found.push({ id: ch.id, name: ch.name, title: ch.display_name, team: team.name, private: ch.type === 'P' });
+    }
+  }
+  found.sort((a, b) => a.title.localeCompare(b.title, 'ru'));
+  return { ok: true, channels: found, total: found.length };
 }
 
 // Вход по логину и паролю: на этом инстансе Personal Access Tokens выключены, а сессионный
@@ -90,11 +131,19 @@ async function send(ctx, { id, scenario }, text, opts) {
   if (!opts.yes && !opts.asObject && !confirm(`Отправить в ${scenario || id}?\n${text}\n[y/N] `)) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
-  const created = await ctx.mm().post(id, text);
-  return { ok: true, channel: id, scenario, text, post_id: created?.id ?? null };
+  const target = await channelId(ctx, id);
+  const created = await ctx.mm().post(target, text);
+  return { ok: true, channel: target, scenario, text, post_id: created?.id ?? null };
 }
 
 function render(r) {
   if (r.user) return void console.log(`✅ ${r.user.username}${r.user.email ? ` <${r.user.email}>` : ''}${r.saved ? ' — токен в keychain' : ''}`);
+  if (r.channels) {
+    if (!r.total) return void console.log('Ничего не нашлось.');
+    return void console.log(table([
+      ['канал', 'имя', 'id', 'команда'],
+      ...r.channels.map((c) => [`${c.private ? '🔒 ' : ''}${c.title}`, c.name, c.id, c.team]),
+    ]));
+  }
   console.log(`${r.dry_run ? '📝 план' : '✅ отправлено'} → ${r.scenario || r.channel}\n${r.text}`);
 }

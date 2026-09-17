@@ -38,7 +38,7 @@ function ctxWith({ mrs = [], created = [], posts = [] } = {}) {
     cfg: {
       projectDir: project, targetBranch: 'dev', branchPattern: 'feature/{key}',
       jira: { baseUrl: 'https://j.example' },
-      mattermost: { baseUrl: 'https://mm.example', channels: { review: 'chan123' } },
+      mattermost: { baseUrl: 'https://mm.example', channels: { review: 'hn3e14mhebg9jmo5kmnzgbcque' } },
     },
     repo: 'g/p',
     jira: () => ({ issue: async () => ISSUE }),
@@ -126,7 +126,7 @@ test('task push --post: сообщение в Mattermost уходит тольк
 
   const res = await cmdTask(ctx, ['push'], { asObject: true, yes: true, post: true });
   assert.deepEqual(posts, [{
-    channel: 'chan123',
+    channel: 'hn3e14mhebg9jmo5kmnzgbcque',
     message: '• MR !7: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
   }]);
   assert.equal(res.posted.scenario, 'review');
