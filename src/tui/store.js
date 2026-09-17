@@ -7,7 +7,7 @@ import { fieldByName, fieldText, openSprints } from '../jira.js';
 export const TABS = [
   { key: 'mr', title: 'MR', hint: 'a решить конфликт · t обработать тикеты · r локальное ревью · p пайплайн · E поле · f фильтры' },
   { key: 'issues', title: 'Задачи', hint: 'v доска · n проанализировать · s статус · S спринт · E поле · p родитель · c коммент · f фильтры' },
-  { key: 'runs', title: 'История', hint: 'прошлые запуски действий: вердикт, цена, каталог' },
+  { key: 'runs', title: 'Процессы', hint: 'активные процессы и архив запусков (до 50): вердикт, цена, каталог' },
   { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
   { key: 'gb', title: 'Флаги', hint: 'c создать · t вкл/выкл в окружении · D удалить · R перечитать' },
   { key: 'dict', title: 'Словарь', hint: 'c создать · E править · D удалить · n/p страница · R перечитать' },
@@ -335,7 +335,30 @@ export function searchRows(tab, items, query) {
   return cache.fuse.search(q).map((r) => items[r.item.i]);
 }
 
-export const visibleItems = (state) => searchRows(state.tab, state.items[state.tab], state.search[state.tab]);
+// Вкладка «Процессы»: активные процессы первыми, затем до 50 архивных.
+export const processItems = (state) => {
+  const active = Object.values(state.runs || {})
+    .filter((r) => !r.done)
+    .map((r) => ({
+      id: r.id,
+      action: r.action,
+      target: r.target,
+      mr: r.target?.startsWith?.('!') ? r.target.slice(1) : (r.mr ?? null),
+      issue: !r.target?.startsWith?.('!') ? r.target : (r.issue ?? null),
+      created_at: r.created_at ?? 'сейчас',
+      state: 'в работе',
+      phase: r.phase,
+      decision: r.decision ?? null,
+      cost: r.cost ?? 0,
+      active: true,
+    }));
+
+  const archived = (state.items.runs || []).filter((ar) => !active.some((ac) => ac.id === ar.id)).slice(0, 50);
+  return [...active, ...archived];
+};
+
+export const visibleItems = (state) =>
+  searchRows(state.tab, state.tab === 'runs' ? processItems(state) : state.items[state.tab], state.search[state.tab]);
 
 // Раскладка задач по колонкам доски. Колонка хранит id статусов, а не имена: имя колонки
 // и имя статуса в Jira совпадают не всегда. Пустые колонки прячем — их в FD больше половины.
@@ -477,13 +500,24 @@ export const cardRows = (r) => [
   line(seg(r.fields?.summary ?? '')),
 ];
 
-export const runRow = (r) => line(
-  seg(r.id, KEY),
-  seg(` · ${r.action} `, LBL),
-  seg(r.mr ? `!${r.mr}` : r.issue ?? ''),
-  seg(' · '),
-  seg(r.decision ?? r.state, { color: r.decision === 'approve' ? 'green' : r.decision ? 'yellow' : undefined }),
-);
+export const runRow = (r) => {
+  if (r.active) {
+    return line(
+      seg(r.id, KEY),
+      seg(` · ${r.action} `, LBL),
+      seg(r.mr ? `!${r.mr}` : r.target || r.issue || ''),
+      seg(' · '),
+      seg(`⏳ ${r.phase || 'в работе'}`, { color: 'yellow' }),
+    );
+  }
+  return line(
+    seg(r.id, KEY),
+    seg(` · ${r.action} `, LBL),
+    seg(r.mr ? `!${r.mr}` : r.issue ?? ''),
+    seg(' · '),
+    seg(r.decision ?? r.state, { color: r.decision === 'approve' ? 'green' : r.decision ? 'yellow' : undefined }),
+  );
+};
 
 export const promptRow = (r) => line(
   seg(r.overridden ? '✏️ ' : '   '),
@@ -609,18 +643,29 @@ function promptDetails(item, body) {
 }
 
 function runDetails(item) {
+  if (item.active) {
+    return [
+      line(seg(item.id, KEY)),
+      line(seg('действие  ', LBL), seg(item.action, VAL), seg('  цель  ', LBL), seg(item.target ?? (item.mr ? `!${item.mr}` : item.issue ?? '—'))),
+      line(seg('статус    ', LBL), seg('⏳ в работе', { color: 'yellow' }), seg(`  фаза: ${item.phase || 'старт'}`)),
+      item.cost ? line(seg('расход    ', LBL), seg(`$${item.cost.toFixed(4)}`, VAL)) : null,
+      GAP,
+      line(seg('Активный процесс выполняется в изолированном окружении.', LBL)),
+      line(seg('Нажми x, чтобы прервать процесс.', LBL)),
+    ].filter(Boolean);
+  }
   return [
     line(seg(item.id, KEY)),
     line(seg('действие  ', LBL), seg(item.action, VAL), seg('  цель  ', LBL), seg(item.mr ? `!${item.mr}` : item.issue ?? '—')),
     line(
       seg('итог      ', LBL),
-      seg(item.state, { color: item.state === 'ok' ? 'green' : item.state === 'error' ? 'red' : undefined }),
+      seg(item.state, { color: item.state === 'ok' || item.state === 'done' ? 'green' : item.state === 'error' ? 'red' : undefined }),
       item.decision ? seg(`  вердикт  ${item.decision}`, { color: item.decision === 'approve' ? 'green' : 'yellow' }) : null,
       item.cost ? seg(`  $${item.cost.toFixed(2)}`, LBL) : null,
     ),
     GAP,
     line(seg('Прошлый запуск действия: каталог рана со всеми артефактами.', LBL)),
-    line(seg(item.dir, LBL)),
+    item.dir ? line(seg(item.dir, LBL)) : null,
   ].filter(Boolean);
 }
 

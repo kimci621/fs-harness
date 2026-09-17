@@ -76,8 +76,8 @@ export const DEFAULTS = {
     root: '~/.local/state/fs-harness/worktrees',
     deps: { strategy: 'clone' },
   },
-  // Пустой webhook — уведомления просто не шлются: интеграция необязательная.
-  mattermost: { webhook: '' },
+  // Пустой chat_id / bot_token — уведомления просто не шлются: интеграция необязательная.
+  telegram: { chat_id: '', bot_token: '' },
   // Судья сменный, и профиль выбирается на каждую роль отдельно: роли различаются
   // по цене на порядки. Список у роли — фолбэк: первый ответивший выигрывает.
   judge: {
@@ -184,7 +184,7 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
       ...(v2.workspace || {}),
       deps: { ...DEFAULTS.workspace.deps, ...(v2.workspace?.deps || {}), ...(p.deps || {}) },
     },
-    mattermost: { ...DEFAULTS.mattermost, ...(v2.mattermost || {}), ...(p.mattermost || {}) },
+    telegram: { ...DEFAULTS.telegram, ...(v2.telegram || {}), ...(p.telegram || {}) },
     judge: {
       ...DEFAULTS.judge,
       ...(v2.judge || {}),

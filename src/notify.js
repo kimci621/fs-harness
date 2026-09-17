@@ -1,7 +1,7 @@
 import { CliError } from './errors.js';
+import { readSecret } from './secrets.js';
 
-// Исходящие уведомления в Mattermost: incoming webhook и обычный POST, без бота и websocket.
-// Адрес webhook сам по себе ключ, поэтому берётся из конфига и никуда не печатается.
+// Исходящие уведомления в Telegram: отправка сообщений через Bot API (sendMessage).
 
 // Одна строка про завершившийся ран: что делали, чем кончилось, почём.
 export function runMessage({ action, target, ok, cost = 0, verdict, error, url }) {
@@ -13,18 +13,35 @@ export function runMessage({ action, target, ok, cost = 0, verdict, error, url }
   return parts.join(' · ');
 }
 
-export async function postMattermost(webhook, text, { fetchImpl = fetch, signal } = {}) {
+// Извлекает токен бота и chat_id из конфига/env/keychain. Если хотя бы одного нет — возвращает null.
+export function getTelegramTarget(cfg = {}, { env = process.env, readSecretImpl = readSecret } = {}) {
+  const tg = cfg.telegram || {};
+  const chatId = tg.chat_id || env.TELEGRAM_CHAT_ID;
+  const token = tg.bot_token || readSecretImpl('telegram', { env, required: false });
+  if (!chatId || !token) return null;
+  return { chatId, token };
+}
+
+export async function postTelegram({ token, chatId }, text, { fetchImpl = fetch, signal } = {}) {
   let res;
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
   try {
-    res = await fetchImpl(webhook, {
+    res = await fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ chat_id: chatId, text }),
       signal,
     });
   } catch (err) {
-    throw new CliError(`Mattermost недоступен: ${err.message}`, 1, 'mattermost_failed');
+    throw new CliError(`Telegram недоступен: ${err.message}`, 1, 'telegram_failed');
   }
-  if (!res.ok) throw new CliError(`Mattermost ответил ${res.status}.`, 1, 'mattermost_failed');
+  if (!res.ok) {
+    const errText = (await res.text?.().catch(() => '')) ?? '';
+    let desc = '';
+    try {
+      desc = JSON.parse(errText).description;
+    } catch {}
+    throw new CliError(`Telegram ответил ${res.status}${desc ? `: ${desc}` : ''}.`, 1, 'telegram_failed');
+  }
   return true;
 }

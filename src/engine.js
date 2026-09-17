@@ -16,7 +16,7 @@ import { resolveAgent } from './agents.js';
 import { confirm } from './ui.js';
 import { makeLogger, finish } from './output.js';
 import { fmtDuration, hhmmss } from './format.js';
-import { postMattermost, runMessage } from './notify.js';
+import { getTelegramTarget, postTelegram, runMessage } from './notify.js';
 import { CliError } from './errors.js';
 
 export { ISOLATION_MODES };
@@ -90,11 +90,11 @@ export function runAction(spec, ctx, input, opts = {}) {
     },
   );
 
-  // Уведомление о завершении рана. Не настроен webhook — молчим; упал POST — это строка
+  // Уведомление о завершении рана. Не настроен Telegram — молчим; упал POST — это строка
   // в логе, а не провал действия: работа агента уже сделана.
   async function notify(ok, err) {
-    const webhook = opts.cfg?.mattermost?.webhook;
-    if (!webhook || !runDir) return;
+    const target = getTelegramTarget(opts.cfg);
+    if (!target || !runDir) return;
     const text = runMessage({
       action: spec.name,
       target: x.target?.iid ? `!${x.target.iid}` : x.target?.key ?? '',
@@ -105,7 +105,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       url: x.target?.web_url ?? null,
     });
     try {
-      await postMattermost(webhook, text, { fetchImpl: opts.fetchImpl, signal: ac.signal });
+      await postTelegram(target, text, { fetchImpl: opts.fetchImpl, signal: ac.signal });
     } catch (e) {
       emit({ t: 'log', stream: 'stderr', text: `⚠ Уведомление не ушло: ${e.message}` });
     }

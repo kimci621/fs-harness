@@ -12,7 +12,7 @@ const ALIASES = {
   openrouter: ['OPENROUTER_API_KEY'],
   deepseek: ['DEEPSEEK_API_KEY'],
   jira: ['JIRA_API_TOKEN'],
-  mattermost: ['MATTERMOST_TOKEN'],
+  telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_TOKEN'],
 };
 
 // Ключ, который на машине уже лежит файлом и используется другими инструментами владельца.

@@ -33,7 +33,7 @@ const rank = (name) => (EDIT_FIRST.indexOf(name) + 1 || 99);
 const valueText = (v) => (Array.isArray(v) ? v.join(', ') : String(v ?? '')).split('\n')[0].slice(0, 60) || 'очищено';
 
 const NARROW = 100; // уже этого две колонки не читаются, показываем одну
-const EMPTY = { mr: 'нет открытых MR', issues: 'нет задач на тебе', runs: 'запусков ещё не было', prompts: 'шаблонов не нашлось', gb: 'флагов нет', dict: 'записей нет' };
+const EMPTY = { mr: 'нет открытых MR', issues: 'нет задач на тебе', runs: 'нет процессов', prompts: 'шаблонов не нашлось', gb: 'флагов нет', dict: 'записей нет' };
 
 // Размер окна терминала: экран занимает его целиком и переживает ресайз.
 function useTerminalSize() {
@@ -138,7 +138,7 @@ export function App({ ctx, opts }) {
             .catch(() => {}); // не дополнилось — список и так на экране
         }
       }
-      if (tab === 'runs') dispatch({ type: 'items', tab, items: listRuns({ limit: 30 }) });
+      if (tab === 'runs') dispatch({ type: 'items', tab, items: listRuns({ limit: 50 }) });
       if (tab === 'prompts') dispatch({ type: 'items', tab, items: listTemplates({ projectDir: ctx.cfg.projectDir }) });
       if (tab === 'gb') {
         const out = [];
@@ -1034,7 +1034,7 @@ const position = (state) => {
 const Help = ({ height }) =>
   html`<${Box} flexDirection="column" height=${height} borderStyle="round" borderColor="gray" paddingX=${1}>
     <${Text} bold>Клавиши<//>
-    <${Text}>1…6 — вкладки (MR, задачи, история, промпты, флаги, словарь) · Tab — фокус: список → детали → лог<//>
+    <${Text}>1…6 — вкладки (MR, задачи, процессы, промпты, флаги, словарь) · Tab — фокус: список → детали → лог<//>
     <${Text}>↑↓ или j/k — курсор и прокрутка · / — поиск по списку (терпит опечатки) · R — перечитать<//>
     <${Text}>MR: a — конфликт · t — тикеты · r — ревью · p — пайплайн и джобы · E — поле<//>
     <${Text}>Задачи: n — анализ · s — статус · S — спринт · c — комментарий · p — родитель · v — доска (H/L — перенос)<//>
