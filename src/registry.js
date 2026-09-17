@@ -242,10 +242,12 @@ export const COMMANDS = [
           id: { type: 'string', description: 'идентификатор флага' },
           state: { type: 'string', enum: ['on', 'off'] },
           env: { type: 'string', description: 'окружение, дефолт из конфига' },
+          type: { type: 'string', description: 'тип значения: boolean, string, number, json' },
+          default: { type: 'string', description: 'дефолтное значение флага' },
         },
       },
       call: (ctx, a) => cmdGrowthBook(ctx, [a.sub ?? 'list', a.id, a.state].filter(Boolean), {
-        json: true, asObject: true, yes: true, env: a.env,
+        json: true, asObject: true, yes: true, env: a.env, type: a.type, default: a.default,
       }),
     },
   },

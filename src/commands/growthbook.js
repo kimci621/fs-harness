@@ -43,13 +43,17 @@ async function get(gb, [id]) {
 }
 
 async function create(gb, ctx, [id, state], opts) {
-  if (!id) throw new CliError('Использование: fsh growthbook create <id> [on|off] [--for <проект>].', 1, 'usage');
+  if (!id) throw new CliError('Использование: fsh growthbook create <id> [on|off] [--type <тип>] [--default <значение>] [--for <проект>].', 1, 'usage');
   const on = state === 'on';
   const env = opts.env || ctx.cfg.growthbook.env;
+  const valueType = opts.type || 'boolean';
+  const defaultValue = opts.default !== undefined && opts.default !== null
+    ? String(opts.default)
+    : (valueType === 'boolean' ? 'true' : '');
   const body = {
     id,
-    valueType: 'boolean',
-    defaultValue: 'true',
+    valueType,
+    defaultValue,
     project: opts.for || ctx.cfg.growthbook.project || undefined,
     // rules обязателен в каждом окружении, иначе zod-валидатор API отдаёт 400.
     environments: { [env]: { enabled: on, rules: [] } },

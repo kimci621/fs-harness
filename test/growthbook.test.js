@@ -97,6 +97,14 @@ test('growthbook create: у каждого окружения обязателе
   assert.deepEqual(calls[0].body.environments, { production: { enabled: true, rules: [] } });
 });
 
+test('growthbook create: поддержка --type и --default', async () => {
+  const { gb, calls } = gbWith([{ status: 200, body: { feature: feature({ id: 'str-flag', valueType: 'string', defaultValue: 'control' }) } }]);
+  const res = await cmdGrowthBook(ctxWith(gb), ['create', 'str-flag', 'off'], { asObject: true, yes: true, type: 'string', default: 'control' });
+  assert.equal(res.created, 'str-flag');
+  assert.equal(calls[0].body.valueType, 'string');
+  assert.equal(calls[0].body.defaultValue, 'control');
+});
+
 test('growthbook delete: DELETE-запрос, dry-run без сети, нет id — usage', async () => {
   const { gb, calls } = gbWith([{ status: 200, body: { deletedId: 'flag' } }]);
   const dry = await cmdGrowthBook(ctxWith(gb), ['delete', 'flag'], { asObject: true, dryRun: true });
