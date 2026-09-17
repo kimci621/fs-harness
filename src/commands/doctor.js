@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createGlab } from '../glab.js';
 import { createJira } from '../jira.js';
 import { createGrowthBook } from '../growthbook.js';
+import { createMattermost } from '../mattermost.js';
 import { loadConfig, CONFIG_PATH, expandHome } from '../config.js';
 import { readSecret, addCommand } from '../secrets.js';
 import { cmdInit } from './init.js';
@@ -116,6 +117,23 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
     if (!hasToken) msg = `есть chat_id, но нет токена бота. Заведи: ${addCommand('telegram')}`;
     else if (!hasChatId) msg = 'есть токен, но не задан chat_id в конфиге (telegram.chat_id)';
     add('telegram', ok, msg);
+  }
+
+  // Mattermost опционален: не настроен — молчим. Токен сессионный и протухает при разлогине,
+  // поэтому дёргаем /users/me, а не ограничиваемся его наличием.
+  if (cfg?.mattermost?.baseUrl) {
+    const token = readSecret('mattermost', { required: false });
+    const channels = Object.keys(cfg.mattermost.channels ?? {});
+    if (!token) {
+      add('mattermost', false, 'токена нет — получи: fsh mm login <логин>');
+    } else {
+      try {
+        const me = await createMattermost({ ...cfg.mattermost, token, sleepMs: 100 }).me();
+        add('mattermost', true, `${cfg.mattermost.baseUrl} · ${me?.username ?? 'ok'} · сценарии: ${channels.join(', ') || '—'}`);
+      } catch (err) {
+        add('mattermost', false, `${cfg.mattermost.baseUrl}: ${err.message}`);
+      }
+    }
   }
 
   // Судью проверяем только по профилям, реально назначенным ролям: про остальные молчим.

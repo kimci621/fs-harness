@@ -18,10 +18,11 @@ src/config.js           ~/.config/gl-helper/config.json
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm
 src/jira.js             Jira REST: чтение и записи (статус, спринт, комментарий, поле, вложения), fetch инжектируется (тесты)
 src/commands/task.js    ветка задачи и push с открытием MR: гарды защищённых веток и грязного дерева
 src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/toggle/delete), fetch инжектируется (тесты)
+src/mattermost.js       Mattermost REST: вход по паролю, me, отправка в канал, fetch инжектируется (тесты)
 src/dict.js             REST словаря бэкенда (rest-token): CRUD + refresh кэша, fetch инжектируется (тесты)
 src/config.js           конфиг v1/v2, миграция v1 в памяти, выбор активного проекта
 src/secrets.js          ключи: env → keychain (security) → файл (~/.growthbook_apikey, REST_TOKEN из .env бэкенда) → ошибка с командой заведения
@@ -209,6 +210,24 @@ resolve target → precheck → (skip?) → context → isolate → prompt
 - **В бриф не попадает конфиг ни в каком виде**: в `telegram.bot_token` живой секрет. Кладутся
   только рантайм-факты рана (id, `code`, текст ошибки, 40 строк хвоста журнала, имена артефактов) —
   файлы репозитория агент читает сам и видит свежее.
+
+## Сообщения в Mattermost (mattermost.js + commands/mm.js)
+
+Сообщение в рабочий чат уходит **от имени человека**, а не от бота: в канале должно быть видно,
+кто отправил задачу в ревью.
+
+- **Токен сессионный, и это не выбор, а следствие.** На `mm.fitstars.ru` Personal Access Tokens
+  выключены админом инстанса, а бот писал бы от себя. `fsh mm login` меняет пароль на токен сессии
+  (заголовок `Token` в ответе `/users/login`) и кладёт токен в keychain. Пароль не хранится нигде.
+  Сессия умирает при разлогине — 401 говорит об этом прямо и зовёт перелогиниться.
+- **Канал на сценарий, а не на команду**: `mattermost.channels.<сценарий>` в конфиге. Сценарий в
+  v1 один — `review`. Агент канал не выбирает, он называет сценарий.
+- Запись в общий чат идёт по тем же правилам, что все записи харнесса: `--dry-run` печатает канал
+  и текст, без `-y` спрашивает подтверждение.
+- **MCP-инструмента у `mm` намеренно нет.** Вызовы из MCP идут с `yes: true`, то есть сообщение
+  в общий канал ушло бы мимо человека.
+- `fsh task push --post` зовёт ту же `postReview`, что и `fsh mm review`. Без флага пуш молчит:
+  запись в чат не должна быть побочным эффектом пуша.
 
 ## Чеклист перед коммитом
 
