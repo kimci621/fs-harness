@@ -38,6 +38,8 @@ const FLAGS_USAGE = `Флаги:
   --jql "<запрос>"        В jira: свой JQL вместо собранного из флагов
   --file <путь|->         В jira field/create: значение из файла или stdin
   --env <окружение>       В growthbook: окружение флага (дефолт growthbook.env)
+  --type <тип>            В growthbook create: тип значения (boolean, string, number, json)
+  --default <значение>    В growthbook create: дефолтное значение флага
   --check                 В init: сверить скилл в проекте с реестром, ничего не писать
   --resolved / --open     В mr-comments: только решённые / нерешённые треды
 
@@ -128,6 +130,7 @@ function parseArgs(argv) {
     watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
     noJudge: false, judgeProfile: null, judgeOnly: null, for: null, file: null, env: null, check: false,
+    type: null, default: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
     author: null, reviewer: null, target: null, label: null, search: null,
     draft: null, conflicts: false, threads: false, pipeline: null,
@@ -158,6 +161,8 @@ function parseArgs(argv) {
     else if (a === '--for') opts.for = av[++i];
     else if (a === '--file') opts.file = av[++i];
     else if (a === '--env') opts.env = av[++i];
+    else if (a === '--type') opts.type = av[++i];
+    else if (a === '--default') opts.default = av[++i];
     else if (a === '--check') opts.check = true;
     else if (a === '--assignee') opts.assignee = av[++i];
     else if (a === '--sprint') opts.sprint = av[++i];

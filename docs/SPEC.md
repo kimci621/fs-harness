@@ -253,7 +253,8 @@ fsh их не заполняет.
 `growthbook.baseUrl` в конфиге проекта — адрес **API**, а не веб-интерфейса (у self-hosted это
 разные хосты). Ключ читается из `~/.growthbook_apikey` третьим источником после env
 (`FS_HARNESS_GROWTHBOOK`) и keychain. `growthbook list` склеивает страницы и не показывает
-архивные флаги, `get <id>` — один флаг целиком, `create <id> [on|off]` заводит boolean-флаг,
+архивные флаги, `get <id>` — один флаг целиком, `create <id> [on|off]` заводит флаг (дефолт boolean;
+поддерживаются `--type <string|number|json|boolean>` и `--default <значение>`),
 `toggle <id> <on|off> [--env <окружение>]` включает или выключает его в окружении (дефолт —
 `growthbook.env`, обычно `production`). Обе записи спрашивают подтверждение и понимают `--dry-run`.
 После переключения флаг перечитывается: GrowthBook отвечает 200 и на окружение, которого у флага
