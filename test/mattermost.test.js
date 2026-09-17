@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createMattermost, reviewMessage } from '../src/mattermost.js';
 import { cmdMM, resolveChannel } from '../src/commands/mm.js';
 
@@ -103,4 +104,14 @@ test('mm post --dry-run: печатает план и не ходит в сет�
 
 test('mm: незнакомая подкоманда — usage, а не падение', async () => {
   await assert.rejects(() => cmdMM({ cfg: CFG }, ['send'], { asObject: true }), /Использование: fsh mm/);
+});
+
+// Пароль читается в отдельном процессе: подменить fd 0 у текущего node --test нельзя,
+// а именно чтение stdin здесь и ломалось (readSync в raw-режиме падал с EAGAIN).
+test('promptSecret: пароль из пайпа доходит целиком и не печатается', () => {
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e',
+    "const {promptSecret} = await import('./src/ui.js');"
+    + "process.stdout.write(JSON.stringify(await promptSecret('пароль: ')));",
+  ], { input: 'hunter2\n', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  assert.equal(out, '"hunter2"');
 });
