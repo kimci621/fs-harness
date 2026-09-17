@@ -2,7 +2,7 @@
 
 Персональный харнесс разработчика. `fsh` — это повседневная работа с merge request'ами и пайплайнами GitLab поверх [`glab`](https://gitlab.com/gitlab-org/cli) плюс запуск AI-агента на конфликтах с приёмкой результата судьёй: детерминированный вывод, режим `--json`, понятные ошибки, живой прогресс. Им одинаково удобно пользуются люди и AI-агенты.
 
-Куда растёт — в [PLAN.md](PLAN.md): движок «действие → контекстный промпт → запуск агента → проверка судьёй», TUI, Jira.
+Куда растёт — в [PLAN.md](PLAN.md): движок «действие → контекстный промпт → запуск агента → проверка судьёй» уже на месте, дальше по плану — демон-наблюдатель и работа с бэкендом.
 
 Зависимости ставятся через `npm ci`; из внешних программ нужны только `node` (≥22), `git` (≥2.38), `glab` и `claude` (агент и судья). `pi` и локальная LM Studio опциональны.
 Из системного используются `security` (ключи в keychain) и `cp -Rc` (клон `node_modules` в worktree через APFS clonefile) — то есть **macOS**.
@@ -14,7 +14,7 @@ git clone https://github.com/kimci621/fs-harness.git ~/Projects/FS-Harness
 cd ~/Projects/FS-Harness
 npm ci            # зависимости
 npm link          # ставит `fsh` в PATH
-npm test          # 80 тестов, сеть не нужна
+npm test          # 304 теста, сеть не нужна
 ```
 
 `glab` должен быть залогинен на нужный GitLab-хост:
@@ -32,11 +32,23 @@ fsh config show
 
 ```json
 {
-  "repo": "ваш-неймспейс/ваш-проект",
-  "host": "ваш.gitlab.example.com",
-  "projectDir": "~/Projects/ваш-проект",
-  "agent": "claude",
-  "agentArgs": { "claude": ["--dangerously-skip-permissions"], "pi": [] },
+  "version": 2,
+  "activeProject": "ваш-проект",
+  "projects": {
+    "ваш-проект": {
+      "repo": "ваш-неймспейс/ваш-проект",
+      "host": "ваш.gitlab.example.com",
+      "dir": "~/Projects/ваш-проект",
+      "agent": "cc",
+      "targetBranch": "dev",
+      "branchPattern": "feature/{key}",
+      "jira": { "baseUrl": "https://ваш.atlassian.net", "email": "вы@example.com", "projectKey": "FD" }
+    }
+  },
+  "mattermost": {
+    "baseUrl": "https://mm.example.com",
+    "channels": { "review": "frontend-merge-requests" }
+  },
   "judge": {
     "profiles": {
       "opus-cli": { "provider": "cli", "bin": "claude", "model": "opus", "effort": "xhigh" },
@@ -47,13 +59,18 @@ fsh config show
 }
 ```
 
+Старый плоский конфиг (v1: `repo`/`host`/`projectDir` в корне) продолжает работать — он мигрируется
+в память при каждом запуске. `fsh config migrate` записывает миграцию на диск, оставив рядом `.v1.bak`.
+
 - `repo` — дефолтный репозиторий (можно перебить флагом `-R` или env `GL_HELPER_REPO`).
 - `host` — **важно**: glab сам выбирает хост по git remote текущей директории. `fsh` всегда передаёт `--hostname` из конфига, чтобы команда работала из любой директории. Перебивается флагом `--host` или env `GL_HELPER_HOST`.
-- `projects` — проекты по имени: `repo`, `host`, `dir` (в нём `conflict` и `threads` создают временный worktree, а `review` и `analyze` читают его как есть), плюс необязательные `agent`, `buildJob`, `jira`, `deps`. Активный выбирается так: `-P <имя>` > `FS_HARNESS_PROJECT` > `activeProject` > единственный.
+- `projects` — проекты по имени: `repo`, `host`, `dir` (в нём `conflict` и `threads` создают временный worktree, а `review` и `analyze` читают его как есть), плюс необязательные `agent`, `buildJob`, `targetBranch` (куда `task push` открывает MR), `branchPattern` (дефолт `feature/{key}`), `checks`, `jira`, `growthbook`, `dict`. Активный выбирается так: `-P <имя>` > `FS_HARNESS_PROJECT` > `activeProject` > единственный.
 - `jira` — `baseUrl`, `email`, `projectKey`, `componentField` (имя checkbox-поля для `--component`, дефолт «Компонент»). Токен не в конфиге, а в keychain: `security add-generic-password -s fs-harness -a jira -w '<токен>'`. Без токена работает всё, кроме `jira` и `analyze`.
-- `agent` / `agentArgs` — какой агент решает конфликты и с какими флагами (`claude` или `pi`, headless `-p`).
+- `agents` — профили агентов: `bin`, `args`, `env`, `keyFile`. Встроенные — `cc` (Claude Code), `ccq`/`cco`/`ccd` (тот же Claude Code, но через Alibaba / OpenRouter / DeepSeek), `pi`, `agy`. Проект выбирает свой полем `agent`, разово перебивается флагом `--agent`.
+- `chat.agent` — каким профилем отвечает мастер `fsh ask`.
 - `judge` — профили судьи и назначение их на роли (см. раздел «Судья»).
 - `telegram` — `chat_id` и `bot_token` (опционально, можно задать в keychain или через `TELEGRAM_BOT_TOKEN`). Пустые — уведомления не шлются.
+- `mattermost` — `baseUrl` и `channels` (канал на сценарий). Токен не в конфиге: его кладёт в keychain `fsh mm login`.
 
 ## Команды
 
@@ -65,7 +82,10 @@ fsh config show
 | `threads <mr\|ветка>` | Разбирает нерешённые треды ревью: агент правит код и готовит ответы, fs-harness после `approve` пушит, отвечает и резолвит треды |
 | `review <mr\|ветка>` | Ревью диффа MR по правилам проекта. Читающее: ничего не правит и не комментирует MR |
 | `analyze <KEY>` | Разбор задачи Jira по коду проекта: что делать, где, что сломается, вопросы к постановщику. Читающее |
-| `jira [mine\|<KEY>\|move\|sprint\|comment]` | Задачи Jira: список с фильтрами (`--assignee`, `--sprint`, `--component`, `--status`, `--jql`), одна задача с комментариями, смена статуса и спринта, комментарий |
+| `jira [mine\|<KEY>\|move\|sprint\|comment\|field\|attach\|create\|delete]` | Задачи Jira: список с фильтрами (`--assignee`, `--sprint`, `--component`, `--status`, `--jql`), одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля из `editmeta`, вложения (список, аплоад, выгрузка), создание и удаление задачи |
+| `task start <KEY>\|push [KEY]\|judge [KEY]` | Взять задачу в работу (ветка по `branchPattern`), запушить с открытием MR в `targetBranch` (перебивается `--target`), показать приёмку судьи. `push --post` заодно пишет в Mattermost |
+| `growthbook [list\|get <id>\|create <id> <on\|off>\|toggle <id> <on\|off>\|delete <id>]` | Фича-флаги GrowthBook: список, один флаг, создание, включение и выключение в окружении (`--env`) |
+| `mm [login\|whoami\|channels\|post\|review]` | Сообщения в Mattermost от своего имени (см. «Сообщения в Mattermost») |
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id. Если пайплайна нет или он устарел, создаёт новый — чистым чтением команда не является |
 | `mr-comments <mr\|ветка>` | Комментарии MR по тредам: `--resolved` — только решённые, `-open` — только нерешённые |
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
@@ -74,13 +94,18 @@ fsh config show
 | `prompts list\|show <имя>\|check\|edit <имя>` | Промпты действий: где лежат, что внутри, всё ли цело (см. «Промпты») |
 | `doctor` | Самодиагностика: программы (`git` ≥ 2.38, `glab` + авторизация, `claude`), конфиг, доступ к API, git-репозиторий, ключи и бэкенды судьи |
 | `agent-guide` | Полная инструкция для AI-агента: команды, флаги, env, JSON-схемы, коды ошибок |
+| `flow [list\|show <имя>]` | Сценарии работы для агента: пошаговые протоколы «взять задачу», «запушить задачу», «заполнить Jira» |
+| `init [--check]` | Поставить в проект скилл `fsh` и разрешение на запуск; `--check` сверяет установленное с реестром, ничего не пишет |
+| `ask "<вопрос>" [--run <id>]` | Мастер по самому fsh: разбирает упавший ран и отвечает про инструмент. Диалог — клавиша `A` в TUI |
 | `mcp` | MCP-сервер (stdio): те же команды как типизированные инструменты для AI-клиентов |
 | `watch` | Один опрос: что изменилось в MR с прошлого раза, триаж судьёй, уведомление в Telegram. Действия не запускает |
 | `tui` | Полноэкранный режим: вкладки MR / задачи / процессы / промпты / флаги / словарь, действия и пайплайны с клавиши, живой лог агента и судьи |
 | `config init\|show\|migrate` | Конфиг: создать, показать активный проект, перевести старый файл на v2 (с бэкапом `.v1.bak`) |
 | `help` | Справка |
 
-Флаги: `-R/--repo`, `--host`, `-P/--project`, `--json` (read-команды), `--agent claude|pi`, `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show).
+Флаги: `-R/--repo`, `--host`, `-P/--project`, `--json` (read-команды), `--agent <профиль>` (`cc`, `ccq`, `cco`, `ccd`, `pi`, `agy` — живут в конфиге, `agents.<имя>`), `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit/jira/mm — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show), `--file <путь|->` и `--attach` (jira field), `--post` и `--channel` (task push, mm).
+
+Полный список — `fsh help`; он генерируется из того же реестра, что и сами команды.
 
 Примеры:
 
@@ -114,10 +139,21 @@ fsh jira comment FD-7647 "проверил на деве"
 Фильтры складываются в JQL, `--jql` перебивает их целиком. `--assignee` принимает `me` (дефолт),
 почту или `any`. `--sprint current` — открытые спринты, иначе имя спринта.
 
-`move` — единственная запись в Jira: переход ищется по имени перехода или целевого статуса среди
-доступных, после записи статус перечитывается. Переходы, которым workflow-валидатор требует
-заполненных полей (в FD это «В ревью»), fsh не чинит — показывает ответ Jira со списком полей,
-заполняет их скилл `jira-transitions` проекта. Комментарии и worklog по-прежнему только на чтение.
+Пишущих команд несколько, и каждая спрашивает подтверждение (отключается `-y`, план — `--dry-run`):
+
+```bash
+fsh jira field FD-7647 "Technical details for QA" --file notes.md   # любое поле из editmeta, значение можно дать файлом или из stdin (-)
+fsh jira attach FD-7647                        # список вложений
+fsh jira attach FD-7647 скрин.png              # аплоад
+fsh jira attach get FD-7647 --out ./вложения   # выгрузить всё (или одно по имени/id)
+fsh jira create FD Task "Починить оплату"      # создать задачу (тип ищется по createmeta)
+fsh jira delete FD-7999                        # удалить (спросит дважды)
+```
+
+`move` ищет переход по имени перехода или целевого статуса среди доступных, после записи статус
+перечитывается. Переходы, которым workflow-валидатор требует заполненных полей (в FD это «В ревью»),
+fsh не чинит — показывает ответ Jira со списком полей; заполняет их `jira field` или скилл
+`jira-transitions` проекта. Worklog остаётся только на чтение.
 
 ## Фильтры MR
 
@@ -158,9 +194,10 @@ fsh analyze FD-7647         # что делать, где в коде, что с
 fsh            # то же, что fsh tui
 ```
 
-Экран занимает окно целиком и переживает ресайз. Три вкладки на `1-3`: MR, задачи Jira, история
-запусков (что запускали раньше: вердикт, цена, каталог рана). `Tab` переносит фокус между списком,
-деталями и логом, `j`/`k` и стрелки двигают курсор в списке и прокручивают блок в фокусе.
+Экран занимает окно целиком и переживает ресайз. Шесть вкладок на `1-6`: MR, задачи Jira, процессы
+(история запусков — вердикт, цена, каталог рана), промпты, флаги GrowthBook, словарь. `Tab` переносит
+фокус между списком, деталями и логом, `j`/`k` и стрелки двигают курсор в списке и прокручивают блок
+в фокусе.
 
 Список MR выглядит как в самом GitLab: заголовок с бейджами справа (пайплайн, `✅Approved`,
 `💬2 of 4` по тредам, `⚠конфликт`), под ним `!2785 · создан 3 дн назад · автор · метки`.
@@ -177,7 +214,8 @@ fsh            # то же, что fsh tui
 
 Запуск становится карточкой с фазой, ценой и последней строкой агента, а полный вывод
 агента и судьи льётся в лог внизу. `x` прерывает все живые запуски, `o` открывает MR или задачу в браузере,
-`?` — помощь, `q` — выход (пока раны живы, нужно нажать дважды).
+`A` — диалог с мастером по fsh (то же, что `fsh ask`), `?` — помощь, `q` — выход (пока раны живы,
+нужно нажать дважды).
 
 ## Команда conflict
 
@@ -230,6 +268,35 @@ fsh watch          # один опрос: снимок → дифф с прош�
 уходит одна строка: что делали, чем кончилось, решение судьи, цена и ссылка на MR или задачу.
 Не ответил Telegram — ран это не ломает, в лог падает `⚠ Уведомление не ушло`.
 
+## Сообщения в Mattermost
+
+Уведомления Telegram приходят лично, а команде надо писать в общий чат и от своего имени — этим
+занимается `fsh mm`. Токен получается один раз логином и живёт в keychain; пароль не хранится нигде.
+
+```bash
+fsh mm login вы@example.com     # спросит пароль, положит токен сессии в keychain
+fsh mm whoami                   # под кем пишем
+fsh mm channels merge           # свои каналы с фильтром — отсюда берётся id
+fsh mm review FD-7655           # «задача уехала в ревью» в канал сценария review
+fsh task push --post            # то же самое сразу после пуша
+```
+
+Сообщение сценария `review` — ровно две строки:
+
+```
+• MR !2833: https://gitlab.example.com/ns/proj/-/merge_requests/2833
+• Jira FD-7655 https://ваш.atlassian.net/browse/FD-7655
+```
+
+Канал берётся из `mattermost.channels.<сценарий>` и может быть задан id (26 символов), именем канала
+из URL или `команда/имя`. `--channel <сценарий|id|имя>` подменяет его разово — удобно проверить
+формат в личке, не трогая общий чат. Перед отправкой спрашивается подтверждение (`-y` отключает),
+`--dry-run` показывает текст и канал, ничего не отправляя.
+
+На self-hosted инстансе с выключенными Personal Access Tokens сессионный токен — единственный способ
+писать от имени человека, а не приложения. Токен протухает при разлогине: `fsh mm login` заново.
+Инструмента MCP у `mm` нет намеренно — запись в общий чат подтверждает человек.
+
 ## Судья
 
 Приёмщик работы агента. Смотрит на результат до того, как он уедет в origin, и отвечает на один вопрос: слияние сделано правильно или нет. Главное, что он ищет, — «взята одна сторона целиком»: агент оставил свой вариант файла и выкинул то, что приехало из target.
@@ -253,7 +320,7 @@ fsh conflict --judge-only conflict-mtx2z-181g   # пересудить сохр�
 - `cli` — процесс `claude` (по подписке, ключ не нужен). Схему гарантировать не умеет, выпрашивает JSON текстом.
 - `openai` — всё OpenAI-совместимое одним адаптером: OpenRouter, DeepSeek, локальная LM Studio. Различаются `baseUrl`, `model` и именем ключа в `secret`. Схема — `json_schema` со `strict: true`, профиль может понизить её до `json_object` или `prompt`.
 
-**Ключи.** Лесенка: env → keychain → ошибка с готовой командой заведения. Имена: `openrouter`, `deepseek`, `jira`, `telegram`; уже настроенные `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `TELEGRAM_BOT_TOKEN` и прочие принимаются как алиасы.
+**Ключи.** Лесенка: env → keychain → ошибка с готовой командой заведения. Имена: `openrouter`, `deepseek`, `jira`, `telegram`, `mattermost`, `growthbook`; уже настроенные `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `TELEGRAM_BOT_TOKEN` и прочие принимаются как алиасы.
 
 ```bash
 security add-generic-password -s fs-harness -a openrouter -w '<ключ>'
@@ -280,7 +347,7 @@ feature/FD-5466 refactor(components): убрал дублирование лог
 
 ```bash
 fsh commit --agent pi      # в текущей директории
-gh commit -y                     # без подтверждения
+fsh commit -y                    # без подтверждения
 ```
 
 ## Режим агента
@@ -291,7 +358,7 @@ export GL_HELPER_YES=1    # не спрашивать подтверждение
 ```
 
 - `--json` на read-командах — данные; на side-effect (`run`, `deploy`, `conflict`, `commit`) — **финальный результат** в stdout, прогресс в stderr.
-- Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `job_timeout`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `workspace_failed`, `dirty_checkout`, `config_invalid`, `canceled`, `prompt_missing`, `prompt_var_missing`, `judge_rejected`, `judge_schema`, `judge_failed`, `judge_rubric_missing`, `secret_missing`, `run_not_found`, `run_incomplete`.
+- Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `job_timeout`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `workspace_failed`, `dirty_checkout`, `config_invalid`, `canceled`, `prompt_missing`, `prompt_var_missing`, `judge_rejected`, `judge_schema`, `judge_failed`, `judge_rubric_missing`, `secret_missing`, `run_not_found`, `run_incomplete`, `no_mr`, `not_found`, `telegram_failed`, `tui_requires_tty`.
 - Полная инструкция для агента встроена в CLI: `fsh agent-guide`.
 - Перед side-effect командами можно смотреть план: `--dry-run`.
 - Для нативного вызова инструментов из AI-клиентов: `fsh mcp` (см. раздел MCP-режим).
@@ -300,7 +367,11 @@ export GL_HELPER_YES=1    # не спрашивать подтверждение
 
 `fsh mcp` — stdio MCP-сервер: те же команды как типизированные инструменты. Агент вызывает их нативно, без shell и парсинга: аргументы валидируются JSON-Schema, результат — структурированный JSON, ожидание джоб — внутри сервера.
 
-**Инструменты:** `mrs`, `mr`, `mr-comments`, `jira`, `review`, `analyze` (только чтение) и `jobs`, `run`, `deploy`, `conflict`, `threads`, `commit` (меняют состояние; клиент спрашивает разрешение), плюс `doctor`, `agent_guide`.
+**Инструменты:** `mrs`, `mr`, `mr-comments`, `review`, `analyze`, `flow` (только чтение) и `jobs`, `run`, `deploy`, `conflict`, `threads`, `commit`, `jira`, `task`, `growthbook` (меняют состояние; клиент спрашивает разрешение), плюс `doctor`, `agent-guide`.
+
+Наружу отданы не все команды: `mm` (запись в общий чат), `init`, `prompts`, `config`, `watch` и `tui`
+доступны только из CLI. MCP-вызовы идут с `yes: true`, а сообщение в рабочий чат человек должен
+подтвердить сам.
 
 **Подключение:**
 

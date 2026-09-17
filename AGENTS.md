@@ -14,7 +14,6 @@ src/main.js             разбор argv, dispatch, help, обработка о
 src/glab.js             ВСЕ вызовы glab api. exec инжектируется (тесты)
 src/resolve.js          поиск MR: по номеру или части имени ветки (неточный)
 src/pipeline.js         ensureMRPipeline, findJob, deployJobName, mapLimit
-src/config.js           ~/.config/gl-helper/config.json
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
@@ -24,7 +23,9 @@ src/commands/task.js    ветка задачи и push с открытием MR
 src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/toggle/delete), fetch инжектируется (тесты)
 src/mattermost.js       Mattermost REST: вход по паролю, me, отправка в канал, fetch инжектируется (тесты)
 src/dict.js             REST словаря бэкенда (rest-token): CRUD + refresh кэша, fetch инжектируется (тесты)
-src/config.js           конфиг v1/v2, миграция v1 в памяти, выбор активного проекта
+src/config.js           конфиг v1/v2 (~/.config/gl-helper/config.json), миграция v1 в памяти, выбор активного проекта
+src/config-cmd.js       команда config: init/show/migrate (запись миграции на диск с .v1.bak)
+src/workspace.js        makeGit и режимы изоляции (checkout, одноразовый worktree, worktree задачи) + стратегии node_modules
 src/secrets.js          ключи: env → keychain (security) → файл (~/.growthbook_apikey, REST_TOKEN из .env бэкенда) → ошибка с командой заведения
 src/notify.js           уведомления в Telegram: runMessage + postTelegram (Bot API), fetch инжектируется
 src/watch.js            watcher: снимок MR, diffSnapshots, триаж ролью event-triage; состояние в ~/.local/state/fs-harness/watch
