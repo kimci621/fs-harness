@@ -45,7 +45,7 @@ async function login(ctx, [maybeLogin]) {
   const mm = createMattermost(ctx.cfg.mattermost);
   const loginId = maybeLogin || process.env.FS_HARNESS_MM_LOGIN || '';
   if (!loginId) throw new CliError('Использование: fsh mm login <логин или почта>.', 1, 'usage');
-  const password = process.env.FS_HARNESS_MM_PASSWORD || promptSecret(`Пароль Mattermost для ${loginId}: `);
+  const password = process.env.FS_HARNESS_MM_PASSWORD || await promptSecret(`Пароль Mattermost для ${loginId}: `);
   if (!password) throw new CliError('Пустой пароль.', 1, 'usage');
 
   const { token, user } = await mm.login({ loginId, password });

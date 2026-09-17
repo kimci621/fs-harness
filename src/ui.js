@@ -1,4 +1,5 @@
 import { readSync } from 'node:fs';
+import { createInterface } from 'node:readline';
 // Анимации и живой вывод. Всё пишется в stderr, чтобы stdout (--json) оставался чистым.
 import { statusIcon, fmtDuration } from './format.js';
 import { CliError } from './errors.js';
@@ -156,27 +157,37 @@ export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Пароль из терминала без эха. Читается так же посимвольно, как confirm выше.
-// Не терминал — читаем строку как есть: пароль пришёл пайпом, прятать нечего.
+// Пароль без эха. В терминале — через readline: посимвольный readSync(0) здесь не годится,
+// raw-режим переводит stdin в неблокирующий, и синхронное чтение падает с EAGAIN.
+// Не терминал — читаем строку из пайпа как есть, прятать нечего.
 export function promptSecret(msg) {
-  process.stderr.write(msg);
-  const raw = Boolean(process.stdin.isTTY);
-  if (raw) process.stdin.setRawMode(true);
+  if (!process.stdin.isTTY) return Promise.resolve(readPipedLine());
+  return new Promise((resolve, reject) => {
+    const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
+    process.stderr.write(msg);
+    rl._writeToOutput = () => {}; // эхо выключено: пароль не должен попасть ни на экран, ни в историю
+    rl.on('SIGINT', () => {
+      rl.close();
+      process.stderr.write('\n');
+      reject(new CliError('Отменено.', 0, 'canceled'));
+    });
+    rl.question('', (answer) => {
+      rl.close();
+      process.stderr.write('\n');
+      resolve(answer);
+    });
+  });
+}
+
+function readPipedLine() {
   const buf = Buffer.alloc(1);
   let line = '';
-  try {
-    while (true) {
-      const n = readSync(0, buf, 0, 1);
-      if (n === 0) break;
-      const ch = buf.toString('utf8');
-      if (ch === '\n' || ch === '\r' || ch === '') break;
-      if (ch === '') throw new CliError('Отменено.', 0, 'canceled');
-      if (ch === '') line = line.slice(0, -1); // backspace
-      else line += ch;
-    }
-  } finally {
-    if (raw) process.stdin.setRawMode(false);
-    process.stderr.write('\n');
+  while (true) {
+    const n = readSync(0, buf, 0, 1);
+    if (n === 0) break;
+    const ch = buf.toString('utf8');
+    if (ch === '\n') break;
+    line += ch;
   }
   return line;
 }
