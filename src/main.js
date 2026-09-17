@@ -25,6 +25,7 @@ const FLAGS_USAGE = `Флаги:
   --attach                В jira field: положить тот же --file ещё и вложением
   --out <каталог>         В jira attach get: куда сохранить (дефолт — текущий каталог)
   --post                  В task push: отписать в Mattermost, что задача уехала в ревью
+  --channel <сценарий|id> В mm review и task push --post: разовая подмена канала
   --run <runId>           В ask: разбирать этот ран, а не последний упавший
   --author me|<ник>       В mrs: чьи MR
   --reviewer me|<ник>     В mrs: где ты (или кто-то) ревьюер
@@ -139,7 +140,7 @@ function parseArgs(argv) {
     watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
     noJudge: false, judgeProfile: null, judgeOnly: null, for: null, file: null, env: null, check: false,
-    attach: false, out: null, run: null, post: false,
+    attach: false, out: null, run: null, post: false, channel: null,
     type: null, default: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
     author: null, reviewer: null, target: null, label: null, search: null,
@@ -172,6 +173,7 @@ function parseArgs(argv) {
     else if (a === '--file') opts.file = av[++i];
     else if (a === '--attach') opts.attach = true;
     else if (a === '--post') opts.post = true;
+    else if (a === '--channel') opts.channel = av[++i];
     else if (a === '--out') opts.out = av[++i];
     else if (a === '--run') opts.run = av[++i];
     else if (a === '--env') opts.env = av[++i];

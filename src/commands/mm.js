@@ -78,9 +78,10 @@ async function review(ctx, [maybeKey], opts) {
 }
 
 // Общая точка сценария: зовут и `fsh mm review`, и `fsh task push --post`.
+// --channel подменяет канал разово: проверить формат в личке, не трогая общий чат.
 export async function postReview(ctx, { iid, mrUrl, key }, opts = {}) {
   const text = reviewMessage({ iid, mrUrl, key, issueUrl: key ? issueUrl(ctx, key) : '' });
-  return send(ctx, resolveChannel(ctx.cfg, 'review'), text, opts);
+  return send(ctx, resolveChannel(ctx.cfg, opts.channel || 'review'), text, opts);
 }
 
 // Запись в общий чат: как и все записи в харнессе — dry-run показывает, подтверждение спрашивает.
