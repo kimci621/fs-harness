@@ -25,7 +25,7 @@ src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/to
 src/dict.js             REST словаря бэкенда (rest-token): CRUD + refresh кэша, fetch инжектируется (тесты)
 src/config.js           конфиг v1/v2, миграция v1 в памяти, выбор активного проекта
 src/secrets.js          ключи: env → keychain (security) → файл (~/.growthbook_apikey, REST_TOKEN из .env бэкенда) → ошибка с командой заведения
-src/notify.js           уведомления в Mattermost: runMessage + POST в incoming webhook, fetch инжектируется
+src/notify.js           уведомления в Telegram: runMessage + postTelegram (Bot API), fetch инжектируется
 src/watch.js            watcher: снимок MR, diffSnapshots, триаж ролью event-triage; состояние в ~/.local/state/fs-harness/watch
 src/agents.js           профили агента: имя → bin/args/env/keyFile, ключ читается при запуске
 src/agent/spawn.js      запуск агента процессом: промпт в stdin, стрим строк, abort, SIGTERM→SIGKILL

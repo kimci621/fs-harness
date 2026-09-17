@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueCard, wrapText, shiftLine, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, fieldsFor, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems, flowLines, boardColumns, boardLanes, onBoard, gbRow, dictRow } from '../src/tui/store.js';
+import { initialState, reduce, keyIntent, logLine, selected, activeRuns, totalCost, LOG_LIMIT, orderJobs, deploySlot, DEPLOY_JOB, mrRow, issueCard, wrapText, shiftLine, detailLines, toggleFilter, filterSummary, FILTER_FIELDS, fieldsFor, filterValueText, busyText, lineText, filterOptions, searchRows, visibleItems, processItems, flowLines, boardColumns, boardLanes, onBoard, gbRow, dictRow } from '../src/tui/store.js';
 
 const withItems = () =>
   reduce(reduce(initialState('app'), { type: 'items', tab: 'mr', items: [{ iid: 1 }, { iid: 2 }, { iid: 3 }] }), {
@@ -108,6 +108,20 @@ test('ран упал — карточка помнит почему', () => {
   let s = reduce(initialState(), { type: 'runStarted', id: 'threads-1', action: 'threads', target: '7' });
   s = reduce(s, { type: 'runEvent', id: 'threads-1', event: { t: 'error', code: 'judge_rejected', message: 'судья против' } });
   assert.deepEqual([s.runs['threads-1'].ok, s.runs['threads-1'].error], [false, 'судья против']);
+});
+
+test('процессы: активные процессы первыми, архивы ограничены 50', () => {
+  let s = reduce(initialState(), { type: 'runStarted', id: 'act-1', action: 'conflict', target: '!100' });
+  const archived = Array.from({ length: 60 }, (_, i) => ({ id: `old-${i}`, action: 'review' }));
+  s = reduce(s, { type: 'items', tab: 'runs', items: archived });
+  s = reduce(s, { type: 'tab', tab: 'runs' });
+
+  const items = processItems(s);
+  assert.equal(items.length, 51); // 1 активный + 50 архивных
+  assert.equal(items[0].id, 'act-1');
+  assert.equal(items[0].active, true);
+  assert.equal(items[1].id, 'old-0');
+  assert.equal(items[50].id, 'old-49');
 });
 
 test('лог: кольцевой буфер не растёт бесконечно', () => {

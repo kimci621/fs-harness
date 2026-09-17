@@ -103,10 +103,16 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
     }
   }
 
-  // Mattermost проверяется по форме адреса: doctor не шлёт сообщений в чужой канал.
-  if (cfg?.mattermost?.webhook) {
-    const ok = /^https?:\/\/.+\/hooks\/.+/.test(cfg.mattermost.webhook);
-    add('mattermost', ok, ok ? 'webhook задан' : 'webhook не похож на incoming webhook (…/hooks/<id>)');
+  // Telegram проверяется по наличию токена и chat_id.
+  const tg = cfg?.telegram;
+  const hasToken = tg?.bot_token || readSecret('telegram', { required: false });
+  const hasChatId = tg?.chat_id || process.env.TELEGRAM_CHAT_ID;
+  if (hasToken || hasChatId) {
+    const ok = Boolean(hasToken && hasChatId);
+    let msg = 'настроен (токен и chat_id заданы)';
+    if (!hasToken) msg = `есть chat_id, но нет токена бота. Заведи: ${addCommand('telegram')}`;
+    else if (!hasChatId) msg = 'есть токен, но не задан chat_id в конфиге (telegram.chat_id)';
+    add('telegram', ok, msg);
   }
 
   // Судью проверяем только по профилям, реально назначенным ролям: про остальные молчим.

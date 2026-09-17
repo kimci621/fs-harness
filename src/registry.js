@@ -355,7 +355,7 @@ export const COMMANDS = [
   {
     name: 'watch',
     usage: 'watch',
-    description: 'Что изменилось в MR с прошлого опроса: триаж судьёй и уведомление в Mattermost',
+    description: 'Что изменилось в MR с прошлого опроса: триаж судьёй и уведомление в Telegram',
     example: 'fsh watch',
     run: (ctx, args, opts) => withProject(ctx, () => cmdWatch(ctx, { json: opts.json })),
   },

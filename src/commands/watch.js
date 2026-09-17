@@ -1,5 +1,5 @@
 import { pollOnce, formatEvents } from '../watch.js';
-import { postMattermost } from '../notify.js';
+import { getTelegramTarget, postTelegram } from '../notify.js';
 
 // fsh watch — один опрос: что изменилось с прошлого раза, что из этого важно.
 // Действия не запускает (PLAN § «чего в v1 не делаем», п. 6): только смотрит и уведомляет.
@@ -10,11 +10,11 @@ export async function cmdWatch(ctx, { json, asObject } = {}) {
     cfg: ctx.cfg,
   });
 
-  const webhook = ctx.cfg?.mattermost?.webhook;
+  const target = getTelegramTarget(ctx.cfg);
   let notified = false;
-  if (webhook && kept.length) {
+  if (target && kept.length) {
     try {
-      await postMattermost(webhook, `**${ctx.repo}**\n${formatEvents(kept, { verdict })}`);
+      await postTelegram(target, `*${ctx.repo}*\n${formatEvents(kept, { verdict })}`);
       notified = true;
     } catch (err) {
       console.error(`⚠ Уведомление не ушло: ${err.message}`);
@@ -44,6 +44,6 @@ export async function cmdWatch(ctx, { json, asObject } = {}) {
   console.log(`${ctx.repo}: событий с прошлого опроса ${events.length}, важных ${kept.length}.`);
   if (triageError) console.log(`⚠ Триаж не сработал (${triageError}) — показываю всё.`);
   if (events.length) console.log(formatEvents(kept, { verdict }));
-  if (notified) console.log('Отправлено в Mattermost.');
+  if (notified) console.log('Отправлено в Telegram.');
   return result;
 }
