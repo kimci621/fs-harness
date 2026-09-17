@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createMattermost, reviewMessage } from '../src/mattermost.js';
-import { cmdMM, resolveChannel } from '../src/commands/mm.js';
+import { cmdMM, resolveChannel, channelId } from '../src/commands/mm.js';
 
 const CFG = { mattermost: { baseUrl: 'https://mm.example/', channels: { review: 'chan123' } } };
 
@@ -104,6 +104,65 @@ test('mm post --dry-run: печатает план и не ходит в сет�
 
 test('mm: незнакомая подкоманда — usage, а не падение', async () => {
   await assert.rejects(() => cmdMM({ cfg: CFG }, ['send'], { asObject: true }), /Использование: fsh mm/);
+});
+
+// Поддельный ctx: команды ходят в Mattermost только через ctx.mm().
+const ctxWith = (mm, cfg = CFG) => ({ cfg, mm: () => mm });
+
+test('channelId: id проходит насквозь, в сеть за ним не ходим', async () => {
+  const id = 'hn3e14mhebg9jmo5kmnzgbcque';
+  const ctx = ctxWith({ channelByName: () => assert.fail('запроса быть не должно') });
+  assert.equal(await channelId(ctx, id), id);
+});
+
+test('channelId: team/имя спрашивается напрямую, голое имя — по своим командам', async () => {
+  const asked = [];
+  const mm = {
+    teams: async () => [{ id: 't1', name: 'other' }, { id: 't2', name: 'fitstars' }],
+    channelByName: async (team, name) => {
+      asked.push(`${team}/${name}`);
+      return team === 'fitstars' ? { id: 'chan123', name } : null;
+    },
+  };
+  assert.equal(await channelId(ctxWith(mm), 'fitstars/frontend-merge-requests'), 'chan123');
+  assert.deepEqual(asked, ['fitstars/frontend-merge-requests']);
+
+  asked.length = 0;
+  assert.equal(await channelId(ctxWith(mm), 'frontend-merge-requests'), 'chan123');
+  // Первая команда ответила пустым — идём дальше, а не падаем.
+  assert.deepEqual(asked, ['other/frontend-merge-requests', 'fitstars/frontend-merge-requests']);
+});
+
+test('channelId: имени нет нигде — ошибка зовёт искать, а не гадать', async () => {
+  const mm = { teams: async () => [{ id: 't1', name: 'fitstars' }], channelByName: async () => null };
+  await assert.rejects(() => channelId(ctxWith(mm), 'нет-такого'), /fsh mm channels нет-такого/);
+});
+
+test('mm channels: свои каналы с фильтром, личные и групповые не показываем', async () => {
+  const mm = {
+    teams: async () => [{ id: 't1', name: 'fitstars' }],
+    myChannels: async () => [
+      { id: 'a'.repeat(26), name: 'frontend-merge-requests', display_name: 'Frontend Merge Requests', type: 'P' },
+      { id: 'b'.repeat(26), name: 'random', display_name: 'Random', type: 'O' },
+      { id: 'c'.repeat(26), name: 'dm', display_name: 'merge', type: 'D' },
+    ],
+  };
+  const out = await cmdMM(ctxWith(mm), ['channels', 'merge'], { asObject: true });
+  assert.deepEqual(out.channels, [
+    { id: 'a'.repeat(26), name: 'frontend-merge-requests', title: 'Frontend Merge Requests', team: 'fitstars', private: true },
+  ]);
+});
+
+test('mm post: имя канала разворачивается в id перед отправкой', async () => {
+  const sent = [];
+  const mm = {
+    teams: async () => [{ id: 't1', name: 'fitstars' }],
+    channelByName: async (team, name) => ({ id: 'chan123', name }),
+    post: async (channel, message) => { sent.push({ channel, message }); return { id: 'p1' }; },
+  };
+  const out = await cmdMM(ctxWith(mm), ['post', 'frontend-merge-requests', 'привет'], { asObject: true, yes: true });
+  assert.deepEqual(sent, [{ channel: 'chan123', message: 'привет' }]);
+  assert.equal(out.post_id, 'p1');
 });
 
 // Пароль читается в отдельном процессе: подменить fd 0 у текущего node --test нельзя,
