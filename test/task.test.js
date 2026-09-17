@@ -33,11 +33,16 @@ after(() => rmSync(root, { recursive: true, force: true }));
 const ISSUE = { key: 'FD-1', fields: { summary: 'Починить', status: { name: 'К выполнению' } } };
 
 // Контекст с поддельными Jira и GitLab: MR-ы живут в массиве, createMR в него добавляет.
-function ctxWith({ mrs = [], created = [] } = {}) {
+function ctxWith({ mrs = [], created = [], posts = [] } = {}) {
   return {
-    cfg: { projectDir: project, targetBranch: 'dev', branchPattern: 'feature/{key}', jira: { baseUrl: 'https://j.example' } },
+    cfg: {
+      projectDir: project, targetBranch: 'dev', branchPattern: 'feature/{key}',
+      jira: { baseUrl: 'https://j.example' },
+      mattermost: { baseUrl: 'https://mm.example', channels: { review: 'chan123' } },
+    },
     repo: 'g/p',
     jira: () => ({ issue: async () => ISSUE }),
+    mm: () => ({ post: async (channel, message) => { posts.push({ channel, message }); return { id: 'p1' }; } }),
     g: {
       listOpenMRs: async () => mrs,
       createMR: async (repo, fields) => { created.push(fields); return { iid: 42, title: fields.title, web_url: 'https://gl/mr/42' }; },
@@ -105,6 +110,26 @@ test('task push: пушит ветку и открывает MR в dev', async (
     remove_source_branch: true,
   });
   assert.equal(git(['rev-parse', 'origin/feature/FD-1']), git(['rev-parse', 'HEAD']));
+});
+
+test('task push --post: сообщение в Mattermost уходит только с флагом', async () => {
+  const posts = [];
+  const ctx = ctxWith({ mrs: [{ iid: 7, title: 'старый', web_url: 'https://gl/mr/7' }], posts });
+
+  const plan = await cmdTask(ctx, ['push'], { asObject: true, yes: true, post: true, dryRun: true });
+  assert.ok(plan.plan.some((l) => l.includes('Mattermost')));
+  assert.equal(posts.length, 0);
+
+  const quiet = await cmdTask(ctx, ['push'], { asObject: true, yes: true });
+  assert.equal(quiet.posted, undefined);
+  assert.equal(posts.length, 0);
+
+  const res = await cmdTask(ctx, ['push'], { asObject: true, yes: true, post: true });
+  assert.deepEqual(posts, [{
+    channel: 'chan123',
+    message: '• MR !7: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
+  }]);
+  assert.equal(res.posted.scenario, 'review');
 });
 
 test('task push: уже открытый MR не дублируется', async () => {

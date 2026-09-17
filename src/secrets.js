@@ -61,6 +61,26 @@ export function readSecret(name, { env = process.env, required = true, exec = ke
   );
 }
 
+// Запись ключа в keychain: нужна там, где ключ добывает сама команда (fsh mm login),
+// а не человек руками. -U перезаписывает существующую запись.
+// ponytail: значение уходит аргументом, то есть на секунду видно в `ps`. Машина личная,
+// ключ сессионный; если это перестанет устраивать — writeSecret переводится на файл-посредник.
+export function writeSecret(name, value, { exec = keychainWrite } = {}) {
+  if (!value) throw new CliError(`Нечего писать в keychain под именем "${name}": пустое значение.`, 1, 'usage');
+  exec(name, value);
+  return { service: KEYCHAIN_SERVICE, account: name };
+}
+
+function keychainWrite(name, value) {
+  try {
+    execFileSync('security', ['add-generic-password', '-U', '-s', KEYCHAIN_SERVICE, '-a', name, '-w', value], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+  } catch (err) {
+    throw new CliError(`Не удалось записать ключ "${name}" в keychain: ${err.message}`, 1, 'secret_missing');
+  }
+}
+
 function readFile(file) {
   try {
     return file ? readFileSync(file, 'utf8').trim() : null;

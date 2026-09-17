@@ -19,10 +19,12 @@ import { cmdGrowthBook } from './commands/growthbook.js';
 import { cmdFlow } from './commands/flow.js';
 import { cmdInit } from './commands/init.js';
 import { cmdWatch } from './commands/watch.js';
+import { cmdMM } from './commands/mm.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
 import { createGrowthBook } from './growthbook.js';
 import { createDict } from './dict.js';
+import { createMattermost } from './mattermost.js';
 import { readSecret } from './secrets.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdConfig } from './config-cmd.js';
@@ -53,6 +55,7 @@ export function createCtx({ g, cfg, notify }) {
     gb: () => createGrowthBook({ ...cfg.growthbook, token: readSecret('growthbook') }),
     // Лениво: словарь нужен только TUI, у него нет CLI-команд.
     dict: () => createDict({ ...cfg.dict, token: readSecret('dict') }),
+    mm: () => createMattermost({ ...cfg.mattermost, token: readSecret('mattermost') }),
   };
 }
 
@@ -104,7 +107,7 @@ export const COMMANDS = [
     name: 'mr-comments',
     usage: 'mr-comments <mr|ветка>',
     description: 'Комментарии MR (--resolved / --open)',
-    example: 'fsh mr-comments fix/main-banner -open',
+    example: 'fsh mr-comments fix/main-banner --open',
     run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMRComments(ctx.g, ctx.repo, args, { json: opts.json, resolved: opts.resolved, open: opts.open })),
     mcp: {
       description: 'Комментарии MR, сгруппированные по тредам. filter: all — все, resolved — только решённые, open — нерешённые. Только чтение.',
@@ -328,6 +331,15 @@ export const COMMANDS = [
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       call: (ctx) => cmdDoctor({ repo: ctx.cfg.repo, host: ctx.cfg.host, projectDir: ctx.cfg.projectDir, json: true, asObject: true, commands: COMMANDS }),
     },
+  },
+  {
+    name: 'mm',
+    usage: 'mm [login <логин>|whoami|post <сценарий|id канала> "<текст>"|review [KEY]]',
+    description: 'Сообщения в Mattermost от своего имени: вход по паролю, проверка сессии, отправка в канал, сценарий «задача уехала в ревью»',
+    example: 'fsh mm review FD-7655 --dry-run',
+    run: (ctx, args, opts) => cmdMM(ctx, args, opts),
+    // MCP-инструмента намеренно нет: запись в общий чат не должна уходить мимо человека,
+    // а вызовы из MCP идут с yes: true.
   },
   {
     name: 'ask',

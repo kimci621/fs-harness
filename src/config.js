@@ -82,6 +82,9 @@ export const DEFAULTS = {
   },
   // Пустой chat_id / bot_token — уведомления просто не шлются: интеграция необязательная.
   telegram: { chat_id: '', bot_token: '' },
+  // Сообщения в рабочие чаты от имени человека. channels — канал на сценарий: ключ сценария
+  // (review) → id канала. Пусто — команда mm просто не настроена.
+  mattermost: { baseUrl: '', channels: {} },
   // Судья сменный, и профиль выбирается на каждую роль отдельно: роли различаются
   // по цене на порядки. Список у роли — фолбэк: первый ответивший выигрывает.
   judge: {
@@ -189,6 +192,13 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
       deps: { ...DEFAULTS.workspace.deps, ...(v2.workspace?.deps || {}), ...(p.deps || {}) },
     },
     telegram: { ...DEFAULTS.telegram, ...(v2.telegram || {}), ...(p.telegram || {}) },
+    mattermost: {
+      ...DEFAULTS.mattermost,
+      ...(v2.mattermost || {}),
+      ...(p.mattermost || {}),
+      // Каналы сливаем, а не перекрываем: у проекта свой review поверх общих сценариев.
+      channels: { ...(v2.mattermost?.channels || {}), ...(p.mattermost?.channels || {}) },
+    },
     judge: {
       ...DEFAULTS.judge,
       ...(v2.judge || {}),

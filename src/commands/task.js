@@ -1,5 +1,5 @@
 import { expandHome } from '../config.js';
-import { ISSUE_KEY, fieldByName, fieldText } from '../jira.js';
+import { ISSUE_KEY, fieldByName, fieldText, keyFromBranch } from '../jira.js';
 import { judge, formatVerdict } from '../judge/index.js';
 import { buildAcceptancePayload } from '../judge/payload.js';
 import { makeGit } from '../workspace.js';
@@ -7,6 +7,7 @@ import { finish } from '../output.js';
 import { confirm } from '../ui.js';
 import { CliError } from '../errors.js';
 import { issueUrl } from './jira.js';
+import { postReview } from './mm.js';
 
 // Ветки, в которые нельзя ни переключаться работой, ни пушить задачу.
 // targetBranch проекта добавляется к списку на месте.
@@ -18,8 +19,7 @@ export const isProtected = (branch, targetBranch = '') =>
 // Имя ветки задачи: шаблон из конфига проекта, {key} — ключ задачи.
 export const branchFor = (key, pattern = 'feature/{key}') => pattern.replace('{key}', key);
 
-// Ключ задачи из имени ветки: feature/FD-7719 → FD-7719.
-export const keyFromBranch = (branch) => branch.match(/[A-Z][A-Z0-9]+-\d+/)?.[0] ?? null;
+export { keyFromBranch };
 
 const dirOf = (ctx, opts) => {
   const dir = expandHome(opts.projectDir || ctx.cfg.projectDir || '');
@@ -113,14 +113,22 @@ async function push(ctx, [maybeKey], opts) {
 
   const info = { ok: true, branch, target, commits_ahead: ahead, key: key ?? null, dir };
   if (opts.dryRun) {
-    return { ...info, dry_run: true, plan: [`git push -u origin ${branch}`, existing ? `MR !${existing.iid} уже есть` : `POST /merge_requests ${JSON.stringify(fields)}`] };
+    return { ...info, dry_run: true, plan: [
+      `git push -u origin ${branch}`,
+      existing ? `MR !${existing.iid} уже есть` : `POST /merge_requests ${JSON.stringify(fields)}`,
+      ...(opts.post ? ['сообщение в Mattermost (сценарий review)'] : []),
+    ] };
   }
   if (!opts.yes && !opts.asObject && !confirm(`Запушить ${branch} и ${existing ? `оставить MR !${existing.iid}` : `открыть MR в ${target}`}? [y/N] `)) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   git(['push', '-u', 'origin', branch]);
   const mr = existing ?? (await ctx.g.createMR(ctx.repo, fields));
-  return { ...info, pushed: true, mr: { iid: mr?.iid ?? null, title: mr?.title ?? title, web_url: mr?.web_url ?? null }, mr_created: !existing };
+  const out = { ...info, pushed: true, mr: { iid: mr?.iid ?? null, title: mr?.title ?? title, web_url: mr?.web_url ?? null }, mr_created: !existing };
+  // --post: отписать в рабочий чат, что задача уехала в ревью. Без флага молчим:
+  // запись в общий канал не должна быть побочным эффектом пуша.
+  if (opts.post) out.posted = await postReview(ctx, { iid: out.mr.iid, mrUrl: out.mr.web_url, key }, opts);
+  return out;
 }
 
 // Приёмка: судья сверяет дифф ветки с тем, что написано в задаче. Совет, а не гейт —

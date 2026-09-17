@@ -187,6 +187,9 @@ const backoff = (attempt, unit) => unit * 2 ** (attempt - 1); // 1с, 2с, 4с
 
 export const ISSUE_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
 
+// Ключ задачи из имени ветки: feature/FD-7719 → FD-7719.
+export const keyFromBranch = (branch) => branch.match(/[A-Z][A-Z0-9]+-\d+/)?.[0] ?? null;
+
 // Кастомные поля ищем по названию: id вида customfield_10341 в каждом проекте свой,
 // а expand=names отдаёт карту id → имя ровно для этой задачи.
 export function fieldByName(issue, name) {
