@@ -493,3 +493,39 @@ test('доска: колонки из Jira, пустые скрыты, курс�
   const list = reduce(s, { type: 'boardToggle' });
   assert.deepEqual(keyIntent('j', {}, list), { type: 'move', by: 1 });
 });
+
+test('раскладка: @ открывает вложения только на задачах, a внутри окна — ввод пути', () => {
+  const issues = reduce(initialState(), { type: 'tab', tab: 'issues' });
+  assert.deepEqual(keyIntent('@', {}, issues), { type: 'attach' });
+  assert.equal(keyIntent('@', {}, reduce(initialState(), { type: 'tab', tab: 'mr' })), null);
+
+  const open = reduce(issues, { type: 'modalOpen', kind: 'attach', title: 'FD-1: вложения', items: [] });
+  assert.deepEqual(keyIntent('a', {}, open), { type: 'attachAdd' });
+  assert.deepEqual(keyIntent('', { return: true }, open), { type: 'modalApply' });
+  // пока набирают путь, клавиши принадлежат полю ввода
+  assert.equal(keyIntent('a', {}, reduce(open, { type: 'modalEdit', editing: 'path', value: '' })), null);
+});
+
+test('раскладка: A зовёт мастера с любой вкладки, но не поверх открытого окна', () => {
+  for (const tab of ['mr', 'issues', 'runs', 'prompts', 'gb', 'dict']) {
+    const s = reduce(initialState(), { type: 'tab', tab });
+    assert.deepEqual(keyIntent('A', {}, s), { type: 'ask' }, `вкладка ${tab}`);
+  }
+  const withModal = reduce(initialState(), { type: 'modalOpen', kind: 'transition', title: 'т', items: [] });
+  assert.equal(keyIntent('A', {}, withModal), null);
+});
+
+test('чат: реплики копятся, поток ответа склеивается и уезжает в историю', () => {
+  const open = reduce(initialState(), { type: 'modalOpen', kind: 'chat', title: 'мастер fsh', items: [], editing: 'chat' });
+  const asked = reduce(open, { type: 'chatSay', role: 'me', text: 'почему упало' });
+  assert.deepEqual(asked.modal.lines, [{ role: 'me', text: 'почему упало' }]);
+  assert.equal(asked.modal.busy, true);
+
+  const streaming = reduce(reduce(asked, { type: 'chatDelta', text: 'Судья ' }), { type: 'chatDelta', text: 'завернул' });
+  assert.equal(streaming.modal.stream, 'Судья завернул');
+
+  const done = reduce(streaming, { type: 'chatDone', text: 'Судья завернул: остались маркеры' });
+  assert.equal(done.modal.stream, '', 'поток гасится, иначе ответ задвоится');
+  assert.equal(done.modal.busy, false);
+  assert.deepEqual(done.modal.lines.at(-1), { role: 'мастер', text: 'Судья завернул: остались маркеры' });
+});

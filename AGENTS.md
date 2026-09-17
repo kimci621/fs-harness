@@ -18,8 +18,8 @@ src/config.js           ~/.config/gl-helper/config.json
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init
-src/jira.js             Jira REST: чтение и записи (статус, спринт, комментарий, поле), fetch инжектируется (тесты)
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init
+src/jira.js             Jira REST: чтение и записи (статус, спринт, комментарий, поле, вложения), fetch инжектируется (тесты)
 src/commands/task.js    ветка задачи и push с открытием MR: гарды защищённых веток и грязного дерева
 src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/toggle/delete), fetch инжектируется (тесты)
 src/dict.js             REST словаря бэкенда (rest-token): CRUD + refresh кэша, fetch инжектируется (тесты)
@@ -30,7 +30,9 @@ src/watch.js            watcher: снимок MR, diffSnapshots, триаж ро
 src/agents.js           профили агента: имя → bin/args/env/keyFile, ключ читается при запуске
 src/agent/spawn.js      запуск агента процессом: промпт в stdin, стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
-src/agent/stream.js     разбор stream-json агента claude: активность шагами, отчёт из result
+src/agent/stream.js     разбор stream-json: claude (type) и agy (event) — активность, дельты, отчёт
+src/chat.js             многоходовый чат с агентом: живой процесс на NDJSON (claude, agy) либо процесс на ход (pi)
+src/commands/ask.js     мастер по самому fsh: бриф об упавшем ране, выбор профиля, read-only из CLI
 src/agent/journal.js    раны в ~/.local/state/fs-harness/runs/<id>/
 src/judge/index.js      judge(): рубрика + профиль → вердикт, фолбэк, ремонтный round-trip
 src/judge/schema.js     zod-схема вердикта, VERDICT_SHAPE, extractJson
@@ -45,7 +47,7 @@ src/prompts.js          шаблоны: loadTemplate/renderTemplate/listTemplate
 src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
 src/mcp.js              MCP-сервер (stdio): обработка JSON-RPC, инструменты берёт из registry
 src/tui/store.js        TUI: чистое состояние и раскладка клавиш (reduce, keyIntent) — без ink
-src/tui/app.js          TUI: экран на ink + htm (вкладки MR/задачи/история/промпты/флаги/словарь, лог, карточки ранов, панель пайплайна, CRUD-модалки флагов и словаря)
+src/tui/app.js          TUI: экран на ink + htm (вкладки MR/задачи/история/промпты/флаги/словарь, лог, карточки ранов, панель пайплайна, CRUD-модалки флагов и словаря, вложения задачи, окно мастера)
 src/tui/index.js        startTUI: проверка живого терминала, ленивый импорт ink/react
 test/*.test.js          node --test, мокнутый exec — без сети
 ```
@@ -185,6 +187,28 @@ resolve target → precheck → (skip?) → context → isolate → prompt
 `run`/`deploy`/`conflict`/`threads`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков. У `conflict` дополнительно `conflict_files: string[]` и `has_conflicts` — посчитанные `git merge-tree`, а не взятые из GitLab, `run` (id рана) и `judge: {decision, confidence, summary, profile, cost}` либо `{skipped: true}` при `--no-judge`. У `threads` — `threads_open`, `replied: string[]`, `resolved: string[]`, `commits_ahead` (ноль — норма: тред мог требовать только ответа).
 
 Ошибки: `{ok:false, error:{code, message}}`; коды перечислены в `agent-guide`.
+
+## Мастер по самому fsh (chat.js + commands/ask.js)
+
+Диалог с агентом, который работает в каталоге **харнесса**, а не проекта: он читает `CLAUDE.md`,
+`AGENTS.md`, `PLAN.md`, `docs/SPEC.md` и `src/` сам и правит их же.
+
+- Вызов: клавиша `A` в TUI (окно поверх экрана, многоходовый разговор) и `fsh ask "<вопрос>"
+  [--run <id>]` в CLI (один ход, только чтение). В хвосте любой ошибки, кроме `usage` и `canceled`,
+  печатается `разобраться: fsh ask`.
+- Транспорт выбирается по семейству профиля, а не по нашему вкусу: `claude` и `agy` держат
+  `--input-format stream-json` — **один живой процесс, NDJSON-строка на реплику**, контекст держит
+  сам агент, id сессии не нужен. `pi` потокового входа не умеет — у него ход это отдельный процесс с
+  тем же `--session-id`. Отсюда `keepStdin` и `write()` в `spawnAgent`.
+- Профиль: `--agent` > `chat.agent` в конфиге > `agy` > `cc`. **`agy` опционален как `pi`**: нет в
+  PATH — `pickChatAgent` молча берёт `cc`, дефолтный конфиг без него рабочий. Это и есть условие, на
+  котором `agy` не нарушает ограничение №1.
+- Права: окно в TUI работает профилем как есть (гейт — человек за клавиатурой, он видит каждый шаг),
+  `fsh ask` без TTY снимает `--dangerously-skip-permissions` и ставит режим плана. У `pi`
+  read-only-режима нет — `startChat` бросает `usage`, а не делает вид, что режим есть.
+- **В бриф не попадает конфиг ни в каком виде**: в `telegram.bot_token` живой секрет. Кладутся
+  только рантайм-факты рана (id, `code`, текст ошибки, 40 строк хвоста журнала, имена артефактов) —
+  файлы репозитория агент читает сам и видит свежее.
 
 ## Чеклист перед коммитом
 

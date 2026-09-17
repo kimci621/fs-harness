@@ -43,3 +43,33 @@ export function parseClaudeLine(line) {
   }
   return { activity: null, result: null };
 }
+
+// Разбор потока agy (antigravity): конверт другой — {"event": ...} вместо {"type": ...},
+// а текст приходит кусками в step_update.text_delta, а не целым сообщением.
+// Форма ответа та же, что у parseClaudeLine, плюс delta: чат рисует ответ по мере набора.
+export function parseAgyLine(line) {
+  const text = String(line ?? '').trim();
+  if (!text.startsWith('{')) return { activity: null, result: null, passthrough: text || null };
+  let ev;
+  try {
+    ev = JSON.parse(text);
+  } catch {
+    return { activity: null, result: null, passthrough: text };
+  }
+  if (ev.event === 'init') return { activity: null, result: null, session: ev.conversation_id ?? null };
+  if (ev.event === 'step_update') {
+    const step = ev.step_update ?? {};
+    if (step.text_delta) return { activity: null, result: null, delta: step.text_delta };
+    // Шаг инструмента приходит дважды (ACTIVE и DONE) — берём только начало, иначе всё двоится.
+    // Имена параметров у agy с большой буквы и свои, поэтому сводим их к виду toolBrief.
+    if (step.step_type !== 'tool' || step.state !== 'ACTIVE') return { activity: null, result: null };
+    const p = step.tool_info?.parameters ?? {};
+    const arg = p.CommandLine ?? p.Pattern ?? p.AbsolutePath ?? p.TargetFile ?? p.Query ?? p.Url ?? '';
+    return { activity: `🔧 ${toolBrief(step.tool_name ?? 'tool', { command: arg })}`, result: null };
+  }
+  if (ev.event === 'result') {
+    const r = ev.result ?? {};
+    return { activity: null, result: String(r.response ?? ''), error: r.status === 'ERROR' ? (r.error ?? 'agy ответил ошибкой') : null, envelope: ev };
+  }
+  return { activity: null, result: null };
+}

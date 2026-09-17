@@ -12,12 +12,14 @@ import { createEventStream } from './events.js';
 //
 // input — промпт в stdin. Аргументом он не идёт: дифф в задании судьи бывает в сотни
 // килобайт, а argv на macOS ограничен мегабайтом на весь вызов.
-export function spawnAgent({ bin, args = [], cwd, env, signal, input = null, killGraceMs = 5000 }) {
+export function spawnAgent({ bin, args = [], cwd, env, signal, input = null, keepStdin = false, killGraceMs = 5000 }) {
   const events = createEventStream();
   const child = spawn(bin, args, { cwd, env, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
   if (input !== null) {
     child.stdin.on('error', () => {}); // агент мог закрыться раньше, чем дочитал: это не наша авария
-    child.stdin.end(input);
+    // keepStdin — чат: ходов много, поток ввода закрывать нельзя, реплики дописываются write().
+    if (keepStdin) { if (input) child.stdin.write(input); }
+    else child.stdin.end(input);
   }
 
   const pipe = (stream, name) =>
@@ -56,5 +58,5 @@ export function spawnAgent({ bin, args = [], cwd, env, signal, input = null, kil
     });
   });
 
-  return { events, result, abort };
+  return { events, result, abort, write: (text) => child.stdin?.write(text), end: () => child.stdin?.end() };
 }

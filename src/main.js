@@ -22,6 +22,9 @@ const FLAGS_USAGE = `Флаги:
   --judge <профиль>       В действиях: разовая подмена профиля судьи
   --judge-only <runId>    В действиях: прогнать судью по сохранённому рану
   --for <mr|ветка>        В prompts show: отрендерить промпт на реальных данных MR
+  --attach                В jira field: положить тот же --file ещё и вложением
+  --out <каталог>         В jira attach get: куда сохранить (дефолт — текущий каталог)
+  --run <runId>           В ask: разбирать этот ран, а не последний упавший
   --author me|<ник>       В mrs: чьи MR
   --reviewer me|<ник>     В mrs: где ты (или кто-то) ревьюер
   --target <ветка>        В mrs: только MR в эту целевую ветку; в task push: куда открыть MR
@@ -119,6 +122,11 @@ export async function main(argv) {
       console.log(formatErrorJSON(cliErr));
     } else {
       console.error(`\n❌ ${cliErr.message}`);
+      // Про мастера вспоминают только если о нём напомнить — и ровно там, где упало.
+      // usage и canceled это не ошибки инструмента, по ним спрашивать нечего.
+      if (!['usage', 'canceled'].includes(cliErr.code) && cmd !== 'ask') {
+        console.error('   разобраться: fsh ask "почему упало"');
+      }
     }
     return cliErr.exitCode ?? 1;
   }
@@ -130,6 +138,7 @@ function parseArgs(argv) {
     watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
     noJudge: false, judgeProfile: null, judgeOnly: null, for: null, file: null, env: null, check: false,
+    attach: false, out: null, run: null,
     type: null, default: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
     author: null, reviewer: null, target: null, label: null, search: null,
@@ -160,6 +169,9 @@ function parseArgs(argv) {
     else if (a === '--judge-only') opts.judgeOnly = av[++i];
     else if (a === '--for') opts.for = av[++i];
     else if (a === '--file') opts.file = av[++i];
+    else if (a === '--attach') opts.attach = true;
+    else if (a === '--out') opts.out = av[++i];
+    else if (a === '--run') opts.run = av[++i];
     else if (a === '--env') opts.env = av[++i];
     else if (a === '--type') opts.type = av[++i];
     else if (a === '--default') opts.default = av[++i];

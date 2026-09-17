@@ -28,6 +28,9 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
   add('claude', Boolean(tryExec('which', ['claude'])), tryExec('which', ['claude']) || 'не найден в PATH: без него не работают ни агент, ни судья', true);
   const pi = tryExec('which', ['pi']);
   add('pi', Boolean(pi), pi || 'не найден — недоступны только действия с agent: "pi"');
+  // agy опционален так же, как pi: без него мастер (fsh ask, клавиша A) берёт профиль cc.
+  const agy = tryExec('which', ['agy']);
+  add('agy', Boolean(agy), agy || 'не найден — мастер fsh будет работать на профиле cc');
 
   let cfg = null;
   try {

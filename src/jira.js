@@ -15,15 +15,22 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
   // Какой поиск понял инстанс, запоминаем: пробовать обе ветки на каждый вызов незачем.
   let searchPath = null;
 
-  async function api(path, { method = 'GET', body, retries = 4, allow404 = false } = {}) {
+  // form — тело отдаётся fetch как есть (multipart сам проставит boundary), raw — вернуть ответ
+  // целиком, не разбирая в JSON: у скачивания вложения тело двоичное.
+  async function api(path, { method = 'GET', body, form, headers: extra, raw = false, retries = 4, allow404 = false } = {}) {
     let lastErr;
     for (let attempt = 1; attempt <= retries; attempt++) {
       let res;
       try {
-        res = await fetchImpl(`${root}${path}`, {
+        res = await fetchImpl(/^https?:\/\//.test(path) ? path : `${root}${path}`, {
           method,
-          headers: { authorization: auth, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
-          ...(body ? { body: JSON.stringify(body) } : {}),
+          headers: {
+            authorization: auth,
+            accept: 'application/json',
+            ...(body ? { 'content-type': 'application/json' } : {}),
+            ...extra,
+          },
+          ...(form ? { body: form } : body ? { body: JSON.stringify(body) } : {}),
         });
       } catch (err) {
         lastErr = err;
@@ -31,7 +38,7 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
         await sleep(backoff(attempt, sleepMs));
         continue;
       }
-      if (res.ok) return res.status === 204 ? null : res.json();
+      if (res.ok) return raw ? res : res.status === 204 ? null : res.json();
       if (allow404 && (res.status === 404 || res.status === 410)) return { gone: true };
       if (res.status === 401 || res.status === 403) {
         throw new CliError(`Jira отклонила токен (${res.status}). Проверь ключ: security find-generic-password -s fs-harness -a jira -w`, 1, 'api_failed');
@@ -140,6 +147,28 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     // Запись 6. Удаление необратимо, 204 = удалена.
     deleteIssue: (key) =>
       api(`/rest/api/2/issue/${encodeURIComponent(key)}`, { method: 'DELETE', retries: 1, allow404: true }),
+
+    // Вложения задачи: id, имя, размер и ссылка на содержимое.
+    attachments: (key) =>
+      api(`/rest/api/2/issue/${encodeURIComponent(key)}?fields=attachment`).then((r) => r?.fields?.attachment ?? []),
+
+    // Запись 7. Аплоад — единственное место, где тело не JSON: multipart и обязательный
+    // X-Atlassian-Token, без него Jira считает запрос XSRF и отвечает 403.
+    // files: [{name, data}] — читать с диска дело команды, здесь только сеть.
+    addAttachment: (key, files) => {
+      const form = new FormData();
+      for (const f of files) form.append('file', new Blob([f.data]), f.name);
+      return api(`/rest/api/2/issue/${encodeURIComponent(key)}/attachments`, {
+        method: 'POST',
+        form,
+        headers: { 'x-atlassian-token': 'no-check' },
+        retries: 1,
+      });
+    },
+
+    // Содержимое вложения. url берём из самого вложения (поле content): на Cloud и на
+    // Server пути разные, а абсолютную ссылку Jira отдаёт сама.
+    attachmentData: (url) => api(url, { raw: true, headers: { accept: '*/*' } }).then((r) => r.arrayBuffer()),
   };
 }
 

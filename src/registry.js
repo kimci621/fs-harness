@@ -11,6 +11,7 @@ import { analyzeAction } from './actions/analyze.js';
 import { runActionCLI } from './engine.js';
 import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
+import { cmdAsk } from './commands/ask.js';
 import { cmdPrompts } from './commands/prompts.js';
 import { cmdJira } from './commands/jira.js';
 import { cmdTask } from './commands/task.js';
@@ -191,8 +192,8 @@ export const COMMANDS = [
   fromAction(analyzeAction),
   {
     name: 'jira',
-    usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|field <KEY> "<поле>" <значение>|create <ПРОЕКТ> <тип> <summary>|delete <KEY>]',
-    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля, создание и удаление задачи',
+    usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|field <KEY> "<поле>" <значение>|attach <KEY> [файл...]|attach get <KEY> [имя]|create <ПРОЕКТ> <тип> <summary>|delete <KEY>]',
+    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля, вложения (список, аплоад, выгрузка), создание и удаление задачи',
     example: 'fsh jira mine --sprint current --component Frontend',
     run: (ctx, args, opts) => cmdJira(ctx, args, opts),
     mcp: {
@@ -327,6 +328,14 @@ export const COMMANDS = [
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       call: (ctx) => cmdDoctor({ repo: ctx.cfg.repo, host: ctx.cfg.host, projectDir: ctx.cfg.projectDir, json: true, asObject: true, commands: COMMANDS }),
     },
+  },
+  {
+    name: 'ask',
+    usage: 'ask "<вопрос>" [--run <id>]',
+    description: 'Мастер по самому fsh: разбирает упавший ран и отвечает на вопросы об инструменте',
+    example: 'fsh ask "почему conflict упал на judge_rejected"',
+    // Без withProject намеренно: спрашивают как раз тогда, когда repo/host могли и не настроиться.
+    run: (ctx, args, opts) => cmdAsk(ctx, args, opts),
   },
   {
     name: 'agent-guide',
