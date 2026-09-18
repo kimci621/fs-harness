@@ -5,6 +5,7 @@ import { cmdJobs } from './commands/jobs.js';
 import { cmdRun } from './commands/run.js';
 import { cmdDeploy } from './commands/deploy.js';
 import { conflictAction } from './actions/conflict.js';
+import { ciFixAction } from './actions/ci-fix.js';
 import { threadsAction } from './actions/threads.js';
 import { reviewAction } from './actions/review.js';
 import { analyzeAction } from './actions/analyze.js';
@@ -191,6 +192,7 @@ export const COMMANDS = [
     },
   },
   fromAction(conflictAction),
+  fromAction(ciFixAction),
   fromAction(threadsAction),
   fromAction(reviewAction),
   fromAction(analyzeAction),
@@ -372,9 +374,9 @@ export const COMMANDS = [
   },
   {
     name: 'config',
-    usage: 'config init|show|migrate',
-    description: 'Настроить/показать конфиг, перевести его на v2 (проекты)',
-    example: 'fsh config show',
+    usage: 'config init|show|migrate|agent [имя]',
+    description: 'Настроить/показать конфиг, перевести на v2 или выбрать активного агента',
+    example: 'fsh config agent agy',
     run: (ctx, args, opts) => cmdConfig(args, opts),
   },
   {

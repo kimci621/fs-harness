@@ -136,3 +136,16 @@ test('api: /user идёт мимо projects/', () => {
   createGlab(run).me();
   assert.equal(calls[0].args[1], 'user');
 });
+
+test('apiRaw: не-JSON ответ отдаётся как есть, а api на нём возвращает null', async () => {
+  const trace = 'Running with gitlab-runner\n$ npm run lint\n✖ 1 problem\n';
+  const calls = [];
+  const run = (bin, args) => {
+    calls.push(args);
+    return trace;
+  };
+  const g = createGlab(run, { sleepMs: 0 });
+  assert.equal(await g.getJobTrace('r/repo', 42), trace);
+  assert.equal(calls[0][1], 'projects/r%2Frepo/jobs/42/trace');
+  assert.equal(await g.api('r/repo', '/jobs/42/trace'), null);
+});

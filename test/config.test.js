@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { loadConfig, migrateConfig, pickProject, writeMigrated } from '../src/config.js';
+import { loadConfig, migrateConfig, pickProject, writeMigrated, setConfigAgent } from '../src/config.js';
+import { cmdConfig } from '../src/config-cmd.js';
 
 const V1 = {
   repo: 'group/app',
@@ -109,3 +110,40 @@ test('config migrate: пишет v2 и оставляет .v1.bak рядом', (
     assert.equal(writeMigrated(file).already, true); // повторный вызов — no-op
   });
 });
+
+test('setConfigAgent: обновляет v1 и v2 конфиг', () => {
+  withFile(V1, (file) => {
+    setConfigAgent('agy', { file });
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    assert.equal(raw.agent, 'agy');
+  });
+
+  withFile(V2, (file) => {
+    setConfigAgent('agy', { file });
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    assert.equal(raw.agent, 'agy');
+    assert.equal(raw.projects.app.agent, 'agy');
+  });
+});
+
+test('cmdConfig agent: просмотр и смена активного агента', () => {
+  withFile(V2, (file) => {
+    const list = cmdConfig(['agent'], { file, asObject: true });
+    assert.equal(list.ok, true);
+    assert.ok(list.agents.includes('agy'));
+    assert.ok(list.agents.includes('claude'));
+
+    const changed = cmdConfig(['agent', 'agy'], { file, asObject: true });
+    assert.equal(changed.ok, true);
+    assert.equal(changed.agent, 'agy');
+
+    const cfg = loadConfig({}, { file });
+    assert.equal(cfg.agent, 'agy');
+
+    assert.throws(
+      () => cmdConfig(['agent', 'nonexistent_agent'], { file }),
+      (e) => e.code === 'usage',
+    );
+  });
+});
+

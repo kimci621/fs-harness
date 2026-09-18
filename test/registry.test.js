@@ -1,5 +1,8 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { COMMANDS, ACTIONS, findCommand, mcpTools, createCtx, withProject, withRepoHost } from '../src/registry.js';
 import { ISOLATION_MODES, JUDGE_GATES } from '../src/engine.js';
 import { DEFAULTS } from '../src/config.js';
@@ -85,8 +88,19 @@ test('registry: декларации действий валидны и синт
 
 // Заглушки под каждое действие: нового действия без них тест не пропустит.
 const MR = { iid: 7, title: 'MR', web_url: 'https://example.invalid/7', source_branch: 's', target_branch: 't' };
+// ci-fix пишет счётчик попыток перед запуском агента — даём ему временный файл.
+const stateDir = mkdtempSync(path.join(tmpdir(), 'fs-harness-registry-'));
+after(() => rmSync(stateDir, { recursive: true, force: true }));
+
 const STUBS = {
   conflict: { pre: { conflictFiles: ['src/a.ts'] } },
+  'ci-fix': {
+    pre: {
+      pipeline: { id: 9, web_url: 'https://example.invalid/p/9' },
+      failed: [{ id: 5, name: 'lint', stage: 'test', url: 'https://example.invalid/j/5', errors: 'error: ой', tail: 'лог' }],
+      attempts: { file: path.join(stateDir, 'repo.json'), key: '7:lint', sha: 'sha1', max: 2, done: 0 },
+    },
+  },
   threads: { pre: { threads: [{ id: 'aaa1', file: 'src/a.ts', line: 3, notes: [{ author: 'rev', body: 'тут утечка' }] }] } },
   review: { pre: { projectDir: '/tmp/p', files: [{ path: 'src/a.ts', kind: 'изменён' }], diff: 'diff', rules: { source: 'встроенные', text: 'правила' } } },
   analyze: {
@@ -108,7 +122,7 @@ test('registry: у промпта действия есть шаблон, и о�
       opts: { agent: 'claude' },
       target: stub.target ?? MR,
       pre: stub.pre,
-      ws: { dir: '/tmp/wt', deps: { available: true } },
+      ws: { dir: '/tmp/wt', deps: { available: true }, git: () => 'diff --git a/app.ts b/app.ts' },
       run: { id: 'run-1', dir: '/tmp/run-1' },
       say: () => {},
     });

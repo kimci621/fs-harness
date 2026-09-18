@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { threadsAction } from '../src/actions/threads.js';
 import { conflictAction } from '../src/actions/conflict.js';
+import { ciFixAction } from '../src/actions/ci-fix.js';
 import { runAction, runActionCLI, judgeRun } from '../src/engine.js';
 import { readEvents } from '../src/agent/journal.js';
 import { CliError } from '../src/errors.js';
@@ -59,6 +60,15 @@ before(() => {
   // мерж, и без отдельной ветки следующие conflict-тесты уйдут в skip.
   git(['branch', 'conflict-stage', 'source'], project);
   git(['push', 'origin', 'conflict-stage'], project);
+  // `ci-src` — ветка для ci-fix: он в неё пушит фикс.
+  git(['branch', 'ci-src', 'source'], project);
+  git(['push', 'origin', 'ci-src'], project);
+  // `conflict-agy-src` — ветка для теста conflict с агентом agy.
+  git(['branch', 'conflict-agy-src', 'source'], project);
+  git(['push', 'origin', 'conflict-agy-src'], project);
+  // ci-fix без зависимостей падает до агента, так что в фикстуре они должны быть.
+  mkdirSync(path.join(project, 'node_modules'), { recursive: true });
+  writeFileSync(path.join(project, 'node_modules', '.keep'), '');
 
   // Скрипты фейковых агентов: claude в headless-режиме — stream-json в stdout.
   const agent = (name, body) => {
@@ -103,8 +113,21 @@ before(() => {
     'git merge --no-edit origin/target >/dev/null 2>&1 || true',
     'echo \'{"type":"result","subtype":"success","result":"конфликт решён"}\'',
   ].join('\n'));
+  agent('cifix-bot', [
+    "printf 'source\\nбез any\\n' > app.txt",
+    'git add -A && git commit -m "fix: убран any" >/dev/null',
+    'echo \'{"type":"result","subtype":"success","result":"линт починен"}\'',
+  ].join('\n'));
   agent('conflict-idle', [
     'echo \'{"type":"result","subtype":"success","result":"я ничего не делал"}\'',
+  ].join('\n'));
+  agent('conflict-agy', [
+    'git merge --no-edit origin/target >/dev/null 2>&1 || true',
+    "printf 'source\\ntarget\\nрешено через agy\\n' > app.txt",
+    'git add -A && git commit -m "merge: решён конфликт через agy" >/dev/null',
+    'echo \'{"event":"init","conversation_id":"conv-agy-42"}\'',
+    'echo \'{"event":"step_update","step_update":{"step_type":"tool","state":"ACTIVE","tool_name":"bash","tool_info":{"parameters":{"CommandLine":"git commit"}}}}\'',
+    'echo \'{"event":"result","result":{"response":"конфликт успешно закрыт agy","status":"SUCCESS"}}\'',
   ].join('\n'));
 });
 
@@ -153,9 +176,12 @@ const opts = (over = {}) => ({
       'conflict-bot': { bin: path.join(bin, 'conflict-bot') },
       'conflict-noop': { bin: path.join(bin, 'conflict-noop') },
       'conflict-idle': { bin: path.join(bin, 'conflict-idle') },
+      'conflict-agy': { bin: path.join(bin, 'conflict-agy'), family: 'agy' },
+      'cifix-bot': { bin: path.join(bin, 'cifix-bot') },
     },
     workspace: { root: path.join(root, 'worktrees'), deps: { strategy: 'none' } },
-    judge: { enabled: true, maxRevise: 1, profiles: { fake: { provider: 'fake' } }, roles: { acceptance: ['fake'] } },
+    judge: { enabled: true, maxRevise: 1, profiles: { fake: { provider: 'fake' } }, roles: { acceptance: ['fake'], 'ci-acceptance': ['fake'] } },
+    ci: { maxRetries: 2 },
     checks: [],
   },
   ...over,
@@ -318,6 +344,33 @@ test('conflict: конфликтов нет — skip, агент не запус
   assert.equal(res.has_conflicts, false);
 });
 
+test('conflict: агент agy (family agy) — NDJSON stream, захват сессии, коммит и push', async () => {
+  let jobsCalled = 0;
+  const { g, calls } = makeG({
+    getMR: async (_repo, iid) => ({
+      iid: Number(iid), title: 'MR с agy', web_url: 'http://x/mr', sha: 'abc',
+      source_branch: 'conflict-agy-src', target_branch: 'target', head_pipeline: null,
+    }),
+    getJobs: async () => {
+      const status = jobsCalled++ === 0 ? 'manual' : 'success';
+      return [{ id: 5, name: 'build_image', stage: 'build', status, web_url: 'http://x/j5' }];
+    },
+  });
+  const res = await runActionCLI(conflictAction, { g, repo: 'r/r' }, ['7'], opts({
+    agent: 'conflict-agy', makeProvider: fakeJudge('approve'),
+  }));
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.conflict_files, ['app.txt']);
+  assert.ok(res.commits_ahead >= 1);
+  assert.equal(originSha('conflict-agy-src'), res.head_sha, 'push не дошёл до origin');
+  assert.equal(calls.played.length, 1);
+  const agentText = readFileSync(path.join(runsRoot, res.run, 'agent.txt'), 'utf8');
+  assert.match(agentText, /конфликт успешно закрыт agy/);
+  const meta = JSON.parse(readFileSync(path.join(runsRoot, res.run, 'meta.json'), 'utf8'));
+  assert.equal(meta.agent, 'conflict-agy');
+  assert.equal(meta.session_id, 'conv-agy-42');
+});
+
 test('judgeRun: приёмка по сохранённым артефактам рана, без worktree', async () => {
   const { g } = makeG();
   const run = await runActionCLI(threadsAction, { g, repo: 'r/r' }, ['7'], opts({ makeProvider: fakeJudge('approve') }));
@@ -326,4 +379,87 @@ test('judgeRun: приёмка по сохранённым артефактам 
   assert.equal(res.judge_only, true);
   assert.equal(res.verdict.decision, 'approve');
   assert.ok(existsSync(path.join(runsRoot, run.run, 'verdict.json')));
+});
+
+// ci-fix: тот же движок, свой фейковый GitLab — упавшая джоба lint, после ретрая зелёная.
+const makeCiG = (over = {}) => {
+  const calls = { retried: [], traces: [] };
+  const g = {
+    me: async () => ({ username: 'a.latipov' }),
+    getMR: async (_repo, iid) => ({
+      iid: Number(iid), title: 'MR с красным линтом', web_url: 'http://x/mr', sha: 'abc',
+      source_branch: 'ci-src', target_branch: 'target', author: { username: 'a.latipov' },
+      head_pipeline: { id: 11, sha: 'abc', status: 'failed', web_url: 'http://x/p11' },
+    }),
+    getJobs: async () => [{ id: 5, name: 'lint', stage: 'test', status: 'failed', web_url: 'http://x/j5' }],
+    getJobTrace: async (_repo, id) => {
+      calls.traces.push(id);
+      return 'section_start:1:step\r\x1b[0K$ npm run lint\napp.txt\n  1:1  error  Unexpected any\n\x1b[31m✖ 1 problem\x1b[0m\n';
+    },
+    retryJob: async (_repo, id) => { calls.retried.push(id); return { id: id + 1, status: 'running' }; },
+    getJob: async (_repo, id) => ({ id, name: 'lint', status: 'success', web_url: 'http://x/j6' }),
+    createMRPipeline: async () => ({ id: 12, status: 'created', web_url: 'http://x/p12' }),
+    ...over,
+  };
+  return { g, calls };
+};
+
+const ciOpts = (attemptsFile, over = {}) => {
+  const o = opts({ agent: 'cifix-bot', makeProvider: fakeJudge('approve'), attemptsFile, ...over });
+  o.cfg.workspace.deps = { strategy: 'clone' }; // без зависимостей ci-fix не судится
+  o.cfg.checks = ['true'];                      // проверка, которая правда гоняется и зелёная
+  return o;
+};
+
+test('ci-fix: полный цикл — логи, агент, судья approve, push, ретрай джобы', async () => {
+  const file = path.join(root, 'attempts-full.json');
+  const { g, calls } = makeCiG();
+  const res = await runActionCLI(ciFixAction, { g, repo: 'r/r' }, ['7'], ciOpts(file));
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.failed_jobs, ['lint']);
+  assert.equal(res.attempt, 1);
+  assert.deepEqual(calls.traces, [5], 'лог упавшей джобы не прочитан');
+  assert.deepEqual(calls.retried, [5], 'упавшая джоба не перезапущена');
+  assert.deepEqual(res.jobs.map((j) => j.status), ['success']);
+  assert.equal(originSha('ci-src'), res.head_sha, 'фикс не дошёл до origin');
+
+  // Лог падения должен доехать и до агента, и до фактов с проверками.
+  const prompt = readFileSync(path.join(runsRoot, res.run, 'prompt.md'), 'utf8');
+  assert.match(prompt, /Unexpected any/);
+  assert.doesNotMatch(prompt, /section_start|\x1b\[/, 'ANSI и маркеры секций не вычищены');
+  assert.match(prompt, /diff --git a\/app\.txt/, 'дифф ветки против target не доехал до промпта');
+  const meta = JSON.parse(readFileSync(path.join(runsRoot, res.run, 'meta.json'), 'utf8'));
+  assert.deepEqual(meta.facts.checks.map((c) => c.exit_code), [0]);
+
+  // Тот же sha второй раз — попытки останавливаются, агент не запускается.
+  const again = await runActionCLI(ciFixAction, { g, repo: 'r/r' }, ['7'], ciOpts(file));
+  assert.equal(again.skipped, true);
+  assert.equal(again.hand_to_human, true);
+  assert.deepEqual(calls.retried, [5], 'второй заход всё-таки дёрнул джобу');
+});
+
+test('ci-fix: чужой MR не чиним', async () => {
+  const { g } = makeCiG({
+    getMR: async (_repo, iid) => ({
+      iid: Number(iid), title: 'чужой', web_url: 'http://x/mr', sha: 'abc',
+      source_branch: 'ci-src', target_branch: 'target', author: { username: 'other.dev' },
+      head_pipeline: { id: 11, sha: 'abc', status: 'failed', web_url: 'http://x/p11' },
+    }),
+  });
+  await assert.rejects(
+    () => runActionCLI(ciFixAction, { g, repo: 'r/r' }, ['7'], ciOpts(path.join(root, 'attempts-alien.json'))),
+    (e) => e instanceof CliError && e.code === 'not_author',
+  );
+});
+
+test('ci-fix: судья reject — фикс не запушен, джоба не перезапущена', async () => {
+  const before = originSha('ci-src');
+  const { g, calls } = makeCiG();
+  await assert.rejects(
+    () => runActionCLI(ciFixAction, { g, repo: 'r/r' }, ['7'], ciOpts(path.join(root, 'attempts-reject.json'), { makeProvider: fakeJudge('reject') })),
+    (e) => e instanceof CliError && e.code === 'judge_rejected',
+  );
+  assert.equal(originSha('ci-src'), before, 'push прошёл без approve');
+  assert.deepEqual(calls.retried, []);
 });

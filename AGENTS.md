@@ -11,7 +11,7 @@ CLI над `glab api` для работы с MR и пайплайнами GitLab
 ```
 bin/fsh.js        точка входа: import + main()
 src/main.js             разбор argv, dispatch, help, обработка ошибок
-src/glab.js             ВСЕ вызовы glab api. exec инжектируется (тесты)
+src/glab.js             ВСЕ вызовы glab api. exec инжектируется (тесты). apiRaw — ответы не-JSON (лог джобы)
 src/resolve.js          поиск MR: по номеру или части имени ветки (неточный)
 src/pipeline.js         ensureMRPipeline, findJob, deployJobName, mapLimit
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
@@ -46,7 +46,8 @@ src/judge/providers/    cli (процесс claude) и openai (всё OpenAI-с�
 src/prompts/judge/*.md  рубрики по ролям — файл на роль
 src/prompts/flows/*.md  сценарии работы для агента: протокол на файл, description во front-matter
 src/engine.js           runAction: фазы действия, события, изоляция, гейт судьи; runActionCLI, judgeRun
-src/actions/*.js        декларации действий (conflict, threads, review, analyze): precheck/context/verify/publish и блок action
+src/actions/*.js        декларации действий (conflict, ci-fix, threads, review, analyze): precheck/context/verify/publish и блок action
+src/actions/ci-fix.js   починка упавших джоб: выжимка из логов, счётчик попыток в ~/.local/state/fs-harness/ci-fix
 src/prompts.js          шаблоны: loadTemplate/renderTemplate/listTemplates/checkTemplates
 src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
 src/mcp.js              MCP-сервер (stdio): обработка JSON-RPC, инструменты берёт из registry
@@ -78,6 +79,7 @@ test/*.test.js          node --test, мокнутый exec — без сети
 | `getJob(repo, jid)` | `GET /jobs/{jid}` |
 | `playJob(repo, jid)` | `POST /jobs/{jid}/play` |
 | `retryJob(repo, jid)` | `POST /jobs/{jid}/retry` — retry создаёт НОВУЮ джобу (новый id) |
+| `getJobTrace(repo, jid)` | `GET /jobs/{jid}/trace` — **не JSON**: идёт через `apiRaw`, обычный `api()` вернул бы `null` |
 | `createMRPipeline(repo, iid)` | `POST /merge_requests/{iid}/pipelines` |
 
 Каждый вызов идёт с `--hostname <host из конфига>` (иначе glab выберет хост по git remote cwd — источник загадочных 404) и ретраями GET до 5 раз (флапающий GitLab).

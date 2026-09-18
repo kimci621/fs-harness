@@ -1,11 +1,22 @@
-import { loadConfig, configInit, configPath, expandHome, migrateConfig, readRawConfig, writeMigrated } from './config.js';
+import { loadConfig, configInit, configPath, expandHome, migrateConfig, readRawConfig, writeMigrated, setConfigAgent } from './config.js';
 import { agentNames } from './agents.js';
 import { confirm } from './ui.js';
+import { finish } from './output.js';
 import { CliError } from './errors.js';
 
-// fsh config init|show|migrate
+const AGENT_DESCRIPTIONS = {
+  agy: 'Antigravity CLI (Google DeepMind / Antigravity)',
+  claude: 'Claude Code (Anthropic по подписке / OAuth)',
+  cc: 'Claude Code (алиас claude)',
+  cco: 'Claude Code через OpenRouter (~/.openrouter_key)',
+  ccd: 'Claude Code через DeepSeek (~/.deepseek_key)',
+  ccq: 'Claude Code через Alibaba Qwen (~/.alibaba_key)',
+  pi: 'Pi CLI (inflection)',
+};
+
+// fsh config init|show|migrate|agent [имя]
 export function cmdConfig(args, opts = {}) {
-  const [sub] = args;
+  const [sub, ...rest] = args;
   if (sub === 'init') {
     const p = configInit();
     console.log(`Создан ${p}.\nЗаполни projects.<имя>: repo, host, dir, и укажи activeProject.`);
@@ -16,7 +27,47 @@ export function cmdConfig(args, opts = {}) {
     return 0;
   }
   if (sub === 'migrate') return migrate(opts);
-  console.log(`Использование: fsh config init|show|migrate\nКонфиг: ${configPath()}`);
+  if (sub === 'agent') {
+    return handleAgent(rest[0], opts);
+  }
+  if (sub === 'set' && rest[0] === 'agent') {
+    return handleAgent(rest[1], opts);
+  }
+  console.log(`Использование: fsh config init|show|migrate|agent [имя]\nКонфиг: ${configPath()}`);
+  return 0;
+}
+
+function handleAgent(name, opts = {}) {
+  const cfg = loadConfig(process.env, opts);
+  const names = agentNames(cfg);
+  if (!name) {
+    const result = { ok: true, agent: cfg.agent, agents: names };
+    if (opts.asObject) return result;
+    if (opts.json) {
+      finish(true, result);
+      return 0;
+    }
+    console.log(`Текущий агент: ${cfg.agent}${cfg.activeProject ? ` (проект ${cfg.activeProject})` : ''}\n`);
+    console.log('Доступные профили:');
+    for (const n of names) {
+      const active = n === cfg.agent ? '*' : ' ';
+      const desc = AGENT_DESCRIPTIONS[n] ? ` - ${AGENT_DESCRIPTIONS[n]}` : '';
+      console.log(`  ${active} ${n}${desc}`);
+    }
+    console.log('\nЧтобы сменить: fsh config agent <имя>');
+    return 0;
+  }
+  if (!names.includes(name)) {
+    throw new CliError(`Неизвестный агент "${name}". Доступны: ${names.join(', ')}.`, 1, 'usage');
+  }
+  setConfigAgent(name, { file: opts.file, project: opts.project });
+  const result = { ok: true, agent: name, previous: cfg.agent };
+  if (opts.asObject) return result;
+  if (opts.json) {
+    finish(true, result);
+    return 0;
+  }
+  console.log(`Агент изменён на "${name}".`);
   return 0;
 }
 
