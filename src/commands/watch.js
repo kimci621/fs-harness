@@ -164,20 +164,24 @@ function startupIssues(names, { env, loadCfg }) {
 
 const defaultCtx = (cfg) => createCtx({ g: createGlab(undefined, { host: cfg.host }), cfg });
 
-const sleepFor = (ms) => new Promise((r) => setTimeout(r, ms).unref?.());
+// Таймер сна — единственное, что держит демон живым между опросами: с unref() цикл событий
+// пустеет и node молча выходит с кодом 13 сразу после первого круга.
+export const sleepFor = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
 // fsh watch install — печатаем юнит, а не ставим: ~/Library/LaunchAgents это глобальный
 // конфиг, и трогать его сами мы не должны (CLAUDE.md).
-export function serviceText(cfg = {}, { platform = process.platform, node = process.execPath, script = process.argv[1], home = homedir() } = {}) {
+export function serviceText(cfg = {}, { platform = process.platform, node = process.execPath, script = process.argv[1], home = homedir(), path: envPath = process.env.PATH } = {}) {
   const label = 'com.fitstars.fs-harness.watch';
   const logDir = path.join(home, '.local', 'state', 'fs-harness', 'watch');
   // В юнит попадают только секреты: chat_id и остальное демон и так читает из конфига.
   const secrets = [...new Set(daemonSecretIssues(cfg, {}).map((i) => i.envName))];
+  // PATH обязателен: launchd даёт /usr/bin:/bin:/usr/sbin:/sbin, а glab лежит в homebrew —
+  // без него демон на каждом опросе получает spawn glab ENOENT.
+  const vars = [['PATH', envPath ?? ''], ...secrets.map((n) => [n, '<значение>'])];
+  const xml = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   if (platform === 'darwin') {
-    const envBlock = secrets.length
-      ? `  <key>EnvironmentVariables</key>\n  <dict>\n${secrets.map((n) => `    <key>${n}</key><string>&lt;значение&gt;</string>`).join('\n')}\n  </dict>\n`
-      : '';
+    const envBlock = `  <key>EnvironmentVariables</key>\n  <dict>\n${vars.map(([k, v]) => `    <key>${k}</key><string>${xml(v)}</string>`).join('\n')}\n  </dict>\n`;
     return {
       file: path.join(home, 'Library', 'LaunchAgents', `${label}.plist`),
       text: `<?xml version="1.0" encoding="UTF-8"?>
@@ -211,7 +215,7 @@ Description=fsh watch — фоновый опрос MR
 ExecStart=${node} ${script} watch --daemon
 Restart=always
 RestartSec=30
-${secrets.map((n) => `Environment=${n}=<значение>`).join('\n')}
+${vars.map(([k, v]) => `Environment=${k}=${v}`).join('\n')}
 
 [Install]
 WantedBy=default.target`,
