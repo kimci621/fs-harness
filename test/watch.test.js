@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { diffSnapshots, keepEvents, triagePayload, formatEvents, pollOnce, stateFile } from '../src/watch.js';
+import { diffSnapshots, keepEvents, triagePayload, formatEvents, pollOnce, stateFile, daemonSecretIssues, daemonKeychainJudges } from '../src/watch.js';
+import { cmdWatch, cmdWatchDaemon, serviceText } from '../src/commands/watch.js';
+import { listJobs } from '../src/queue.js';
 
 const mr = (over) => ({
   iid: 1, title: 'MR', source_branch: 'f', target_branch: 'dev', has_conflicts: false,
@@ -91,4 +93,117 @@ test('pollOnce: первый опрос только пишет снимок, в
 
 test('stateFile: слеш в имени репозитория не создаёт вложенных каталогов', () => {
   assert.equal(path.basename(stateFile('a/b', '/tmp/x')), 'a%2Fb.json');
+});
+
+test('событие несёт sha: ключ идемпотентности собирается из снимка', () => {
+  const events = diffSnapshots(snap([mr({ sha: 'aaa' })]), snap([mr({ sha: 'bbb', has_conflicts: true })]));
+  assert.deepEqual(events.map((e) => [e.kind, e.sha]), [['conflict', 'bbb']]);
+});
+
+test('watch кладёт важные события в очередь и не плодит дубли на повторном опросе', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-watch-'));
+  const file = path.join(dir, 'state.json');
+  const queueRoot = path.join(dir, 'queue');
+  let mrs = [mr({ sha: 'aaa' })];
+  const g = {
+    listOpenMRs: async () => mrs.map((m) => ({ ...m })),
+    listMRPipelines: async () => [],
+    getDiscussions: async () => [],
+  };
+  const cfg = {
+    activeProject: 'front',
+    watch: { ttlSeconds: 3600 },
+    judge: { enabled: false },
+    telegram: { chat_id: '', bot_token: '' },
+  };
+  const ctx = { g, repo: 'a/b', cfg };
+
+  await cmdWatch(ctx, { asObject: true, file, queueRoot });
+  mrs = [mr({ sha: 'aaa', has_conflicts: true })];
+  const second = await cmdWatch(ctx, { asObject: true, file, queueRoot });
+  assert.deepEqual(second.queued, ['gitlab:conflict:mr1:aaa']);
+  assert.equal(listJobs({ root: queueRoot })[0].action, 'conflict');
+
+  // Тот же конфликт на том же коммите виден и следующим опросом, но задание уже есть.
+  mrs = [mr({ sha: 'aaa' })];
+  await cmdWatch(ctx, { asObject: true, file, queueRoot });
+  mrs = [mr({ sha: 'aaa', has_conflicts: true })];
+  const fourth = await cmdWatch(ctx, { asObject: true, file, queueRoot });
+  assert.deepEqual(fourth.kept.map((e) => e.kind), ['conflict']);
+  assert.deepEqual(fourth.queued, []);
+  assert.equal(listJobs({ root: queueRoot }).length, 1);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('демон: обходит все проекты, уважает свой интервал и выключатель, падение опроса не роняет цикл', async () => {
+  const projects = { front: {}, back: {}, off: {} };
+  const watchOf = { front: { enabled: true, intervalSeconds: 10 }, back: { enabled: true, intervalSeconds: 3600 }, off: { enabled: false, intervalSeconds: 10 } };
+  const loadCfg = (env, { project } = {}) => ({
+    projects,
+    activeProject: project ?? '',
+    repo: project ? `org/${project}` : '',
+    watch: watchOf[project] ?? { enabled: true, intervalSeconds: 60 },
+    judge: { roles: {}, profiles: {} },
+    telegram: {},
+  });
+
+  const polled = [];
+  let clock = 0;
+  const res = await cmdWatchDaemon({}, {
+    env: {},
+    loadCfg,
+    makeCtx: (cfg) => ({ cfg, repo: cfg.repo }),
+    poll: async (ctx) => {
+      polled.push(`${ctx.repo}@${clock}`);
+      if (ctx.repo === 'org/back') throw new Error('сеть моргнула');
+      return { events: [], kept: [], queued: [] };
+    },
+    sleep: async (ms) => { clock += ms; },
+    now: () => clock,
+    cycles: 3,
+    log: () => {},
+  });
+
+  assert.equal(res.cycles, 3);
+  // off выключен и не опрашивается; back с часовым интервалом — только раз; front — каждый цикл.
+  assert.deepEqual(polled, ['org/front@0', 'org/back@0', 'org/front@10000', 'org/front@20000']);
+});
+
+test('демон: без секретов в env не стартует, а без проектов — тем более', async () => {
+  const cfgWithSecret = {
+    projects: { front: {} },
+    telegram: { chat_id: '1', bot_token: '' },
+    judge: { roles: { 'event-triage': ['remote'] }, profiles: { remote: { provider: 'openai', secret: 'openrouter' } } },
+  };
+  const loadCfg = () => cfgWithSecret;
+  await assert.rejects(
+    cmdWatchDaemon({}, { env: {}, loadCfg, cycles: 1, log: () => {} }),
+    (err) => err.code === 'secret_missing' && /FS_HARNESS_TELEGRAM/.test(err.message) && /FS_HARNESS_OPENROUTER/.test(err.message),
+  );
+
+  // Те же ключи в env — претензий нет.
+  const env = { FS_HARNESS_TELEGRAM: 't', FS_HARNESS_OPENROUTER: 'k' };
+  assert.deepEqual(daemonSecretIssues(cfgWithSecret, env), []);
+  // Токен бота лежит в конфиге — keychain не при делах, env не требуется.
+  assert.deepEqual(daemonSecretIssues({ telegram: { chat_id: '1', bot_token: 'x' } }, {}), []);
+  assert.deepEqual(daemonKeychainJudges({ judge: { roles: { 'event-triage': ['opus-cli'] }, profiles: { 'opus-cli': { provider: 'cli' } } } }), ['opus-cli']);
+
+  await assert.rejects(
+    cmdWatchDaemon({}, { env: {}, loadCfg: () => ({ projects: {} }), cycles: 1, log: () => {} }),
+    (err) => err.code === 'config_invalid',
+  );
+});
+
+test('watch install: юнит зовёт fsh watch --daemon и просит секреты в env', () => {
+  const cfg = { telegram: { chat_id: '1' }, judge: { roles: { 'event-triage': ['r'] }, profiles: { r: { secret: 'openrouter' } } } };
+  const mac = serviceText(cfg, { platform: 'darwin', node: '/n', script: '/s/fsh.js', home: '/h' });
+  assert.match(mac.file, /LaunchAgents\/com\.fitstars\.fs-harness\.watch\.plist$/);
+  assert.match(mac.text, /<string>watch<\/string>\s*<string>--daemon<\/string>/);
+  assert.match(mac.text, /FS_HARNESS_TELEGRAM/);
+  assert.match(mac.text, /FS_HARNESS_OPENROUTER/);
+  assert.match(mac.hint[0], /launchctl bootstrap/);
+
+  const linux = serviceText(cfg, { platform: 'linux', node: '/n', script: '/s/fsh.js', home: '/h' });
+  assert.match(linux.text, /ExecStart=\/n \/s\/fsh\.js watch --daemon/);
+  assert.match(linux.text, /Environment=FS_HARNESS_TELEGRAM=/);
 });

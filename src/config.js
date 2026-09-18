@@ -80,6 +80,11 @@ export const DEFAULTS = {
     root: '~/.local/state/fs-harness/worktrees',
     deps: { strategy: 'clone' },
   },
+  // Watcher: опрос по команде и фоновый демон (fsh watch --daemon). enabled и intervalSeconds
+  // можно переопределить на проект, ttlSeconds — окно дедупликации заданий в очереди.
+  // 300 с, а не 60: один опрос большого репозитория занимает под минуту, и на 60 демон
+  // опрашивал бы непрерывно.
+  watch: { enabled: true, intervalSeconds: 300, ttlSeconds: 86400 },
   // Пустой chat_id / bot_token — уведомления просто не шлются: интеграция необязательная.
   telegram: { chat_id: '', bot_token: '' },
   // Сообщения в рабочие чаты от имени человека. channels — канал на сценарий: ключ сценария
@@ -191,6 +196,7 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
       ...(v2.workspace || {}),
       deps: { ...DEFAULTS.workspace.deps, ...(v2.workspace?.deps || {}), ...(p.deps || {}) },
     },
+    watch: { ...DEFAULTS.watch, ...(v2.watch || {}), ...(p.watch || {}) },
     telegram: { ...DEFAULTS.telegram, ...(v2.telegram || {}), ...(p.telegram || {}) },
     mattermost: {
       ...DEFAULTS.mattermost,

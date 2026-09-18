@@ -7,12 +7,13 @@ import { createGrowthBook } from '../growthbook.js';
 import { createMattermost } from '../mattermost.js';
 import { loadConfig, CONFIG_PATH, expandHome } from '../config.js';
 import { readSecret, addCommand } from '../secrets.js';
+import { daemonSecretIssues, daemonKeychainJudges } from '../watch.js';
 import { cmdInit } from './init.js';
 
 // fsh doctor — самодиагностика окружения: программы, конфиг, API, git, судья.
 // Критично то, без чего fsh не работает вообще. Опциональное пишет, что из-за него недоступно.
 // asObject — вернуть {ok, checks} без печати (MCP-режим).
-export async function cmdDoctor({ repo, host, projectDir, json, asObject, commands } = {}) {
+export async function cmdDoctor({ repo, host, projectDir, json, asObject, commands, daemon } = {}) {
   const checks = [];
   const add = (name, ok, detail, critical = false) => checks.push({ name, ok: Boolean(ok), critical, detail: detail ?? (ok ? 'ok' : '') });
 
@@ -149,6 +150,27 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
     } else if (p.provider === 'openai') {
       const up = await reachable(p.baseUrl);
       add(`судья ${name}`, up, up ? p.baseUrl : `${p.baseUrl} не отвечает — роли с этим профилем уедут на следующий в списке`);
+    }
+  }
+
+  // --daemon: отдельный блок про фоновый режим. Ключ из keychain на залоченном экране
+  // не достать, поэтому демону нужны те же секреты в env.
+  if (daemon && cfg) {
+    const names = Object.keys(cfg.projects ?? {});
+    const watched = names.filter((name) => loadConfig(process.env, { project: name }).watch?.enabled !== false);
+    add('демон: проекты', watched.length > 0, watched.length ? `опрашиваются: ${watched.join(', ')}` : 'ни одного проекта с watch.enabled — демону нечего делать', true);
+
+    const issues = [];
+    for (const name of names) {
+      for (const i of daemonSecretIssues(loadConfig(process.env, { project: name }), process.env)) {
+        if (!issues.some((x) => x.envName === i.envName)) issues.push(i);
+      }
+    }
+    add('демон: секреты', issues.length === 0, issues.length ? `нет в env: ${issues.map((i) => `${i.envName} (${i.why})`).join(', ')}` : 'всё нужное читается из env', true);
+
+    const cliJudges = daemonKeychainJudges(cfg);
+    if (cliJudges.length) {
+      add('демон: триаж', false, `профиль ${cliJudges.join(', ')} берёт OAuth-токен claude из keychain — на залоченном экране триаж молчит, события уйдут в канал без разбора`);
     }
   }
 

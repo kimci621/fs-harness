@@ -18,7 +18,8 @@ import { cmdTask } from './commands/task.js';
 import { cmdGrowthBook } from './commands/growthbook.js';
 import { cmdFlow } from './commands/flow.js';
 import { cmdInit } from './commands/init.js';
-import { cmdWatch } from './commands/watch.js';
+import { cmdWatch, cmdWatchDaemon, cmdWatchInstall } from './commands/watch.js';
+import { cmdQueue } from './commands/queue.js';
 import { cmdMM } from './commands/mm.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
@@ -324,6 +325,7 @@ export const COMMANDS = [
       host: opts.host || ctx.cfg.host,
       projectDir: opts.projectDir || ctx.cfg.projectDir,
       json: opts.json,
+      daemon: opts.daemon,
       commands: COMMANDS,
     }),
     mcp: {
@@ -377,10 +379,22 @@ export const COMMANDS = [
   },
   {
     name: 'watch',
-    usage: 'watch',
-    description: 'Что изменилось в MR с прошлого опроса: триаж судьёй и уведомление в Telegram',
-    example: 'fsh watch',
-    run: (ctx, args, opts) => withProject(ctx, () => cmdWatch(ctx, { json: opts.json })),
+    usage: 'watch [install] [--daemon]',
+    description: 'Что изменилось в MR с прошлого опроса: триаж судьёй, уведомление в Telegram, важное — в очередь заданий; --daemon крутит опрос по всем проектам, install печатает юнит автозапуска',
+    example: 'fsh watch --daemon',
+    // Демон ходит по всем проектам конфига сам, поэтому withProject ему не нужен.
+    run: (ctx, args, opts) => (args[0] === 'install'
+      ? cmdWatchInstall(ctx, opts)
+      : opts.daemon
+        ? cmdWatchDaemon(opts)
+        : withProject(ctx, () => cmdWatch(ctx, { json: opts.json }))),
+  },
+  {
+    name: 'queue',
+    usage: 'queue [list|clear]',
+    description: 'Очередь заданий watcher: что требует работы (исполнителя пока нет — запускает человек)',
+    example: 'fsh queue',
+    run: (ctx, args, opts) => cmdQueue(ctx, args, opts),
   },
   {
     name: 'tui',

@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { cmdMRS } from './commands/mrs.js';
 import { judge } from './judge/index.js';
 import { statusIcon } from './format.js';
+import { envNames } from './secrets.js';
 
 const STATE_ROOT = path.join(homedir(), '.local', 'state', 'fs-harness', 'watch');
 
@@ -35,7 +36,8 @@ export function diffSnapshots(prev, next) {
   if (!prev) return [];
   const was = new Map(prev.mrs.map((m) => [m.iid, m]));
   const events = [];
-  const push = (mr, kind, detail) => events.push({ id: `e${events.length + 1}`, source: 'gitlab', kind, mr: mr.iid, title: mr.title, url: mr.web_url, detail, age: mr.updated_at });
+  // sha нужен ключу идемпотентности очереди: одно и то же событие на одном и том же коммите — одно задание.
+  const push = (mr, kind, detail) => events.push({ id: `e${events.length + 1}`, source: 'gitlab', kind, mr: mr.iid, sha: mr.sha ?? null, title: mr.title, url: mr.web_url, detail, age: mr.updated_at });
 
   for (const mr of next.mrs) {
     const old = was.get(mr.iid);
@@ -103,4 +105,30 @@ export async function pollOnce({ g, repo, cfg, file = stateFile(repo), makeProvi
     }
   }
   return { first: !prev, events, kept: keepEvents(events, verdict), verdict, triageError, snapshot: next };
+}
+
+// Демон работает и ночью, а на залоченном экране `security` ключей не отдаёт: секреты обязаны
+// читаться из env, иначе он будет молча падать до утра. Возвращает то, чего в env не хватает.
+export function daemonSecretIssues(cfg = {}, env = process.env) {
+  const needed = [];
+  const tg = cfg.telegram ?? {};
+  // Токен в конфиге keychain не трогает — тогда и требовать его из env незачем.
+  if ((tg.chat_id || env.TELEGRAM_CHAT_ID) && !tg.bot_token) needed.push({ name: 'telegram', why: 'уведомления watcher' });
+  for (const profile of cfg.judge?.roles?.['event-triage'] ?? []) {
+    const p = cfg.judge?.profiles?.[profile];
+    if (p?.secret) needed.push({ name: p.secret, why: `триаж событий (профиль ${profile})` });
+  }
+  return needed
+    .filter(({ name }) => !envNames(name).some((n) => env[n]))
+    .map((n) => ({ ...n, envName: envNames(n.name)[0] }));
+}
+
+// Профили судьи, которые ходят за токеном в keychain сами (claude по OAuth). Запретить их
+// нельзя — под подпиской другого пути нет, но знать про это надо: на залоченном экране
+// триаж отвалится, и события уйдут в канал без разбора.
+export function daemonKeychainJudges(cfg = {}) {
+  return (cfg.judge?.roles?.['event-triage'] ?? []).filter((name) => {
+    const p = cfg.judge?.profiles?.[name];
+    return p?.provider === 'cli' && !p.secret;
+  });
 }
