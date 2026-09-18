@@ -28,7 +28,9 @@ src/config-cmd.js       команда config: init/show/migrate (запись �
 src/workspace.js        makeGit и режимы изоляции (checkout, одноразовый worktree, worktree задачи) + стратегии node_modules
 src/secrets.js          ключи: env → keychain (security) → файл (~/.growthbook_apikey, REST_TOKEN из .env бэкенда) → ошибка с командой заведения
 src/notify.js           уведомления в Telegram: runMessage + postTelegram (Bot API), fetch инжектируется
-src/watch.js            watcher: снимок MR, diffSnapshots, триаж ролью event-triage; состояние в ~/.local/state/fs-harness/watch
+src/watch.js            watcher: снимок MR, diffSnapshots, триаж ролью event-triage; состояние в ~/.local/state/fs-harness/watch; проверка секретов демона
+src/queue.js            очередь заданий watcher: ключ идемпотентности (source:kind:mr:sha), TTL, чтение и уборка; ~/.local/state/fs-harness/queue
+src/commands/watch.js   fsh watch: один опрос, --daemon (цикл по всем проектам), install (печать launchd/systemd-юнита)
 src/agents.js           профили агента: имя → bin/args/env/keyFile, ключ читается при запуске
 src/agent/spawn.js      запуск агента процессом: промпт в stdin, стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
