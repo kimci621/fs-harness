@@ -18,6 +18,7 @@ const FLAGS_USAGE = `Флаги:
   --keep-worktree         В действиях: не удалять временный worktree
   --rebuild               В deploy: перезапустить build и deploy, даже если они уже success
   --dry-run               План без запусков (run, deploy, действия, commit)
+  --daemon                В watch: фоновый цикл по всем проектам; в doctor: проверки демона
   --no-judge              В действиях: пушить без приёмки судьёй
   --judge <профиль>       В действиях: разовая подмена профиля судьи
   --judge-only <runId>    В действиях: прогнать судью по сохранённому рану
@@ -137,7 +138,7 @@ export async function main(argv) {
 function parseArgs(argv) {
   const opts = {
     json: false, repo: null, host: null, project: null, agent: null, projectDir: null, buildJob: null,
-    watch: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
+    watch: false, daemon: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
     noJudge: false, judgeProfile: null, judgeOnly: null, for: null, file: null, env: null, check: false,
     attach: false, out: null, run: null, post: false, channel: null,
@@ -166,6 +167,7 @@ function parseArgs(argv) {
     else if (a === '--keep-worktree') opts.keepWorktree = true;
     else if (a === '--rebuild') opts.rebuild = true;
     else if (a === '--dry-run') opts.dryRun = true;
+    else if (a === '--daemon') opts.daemon = true;
     else if (a === '--no-judge') opts.noJudge = true;
     else if (a === '--judge') opts.judgeProfile = av[++i];
     else if (a === '--judge-only') opts.judgeOnly = av[++i];

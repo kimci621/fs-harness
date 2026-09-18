@@ -99,6 +99,7 @@ export function toJSON({ mr, stats, approved = null }) {
     labels: mr.labels ?? [],
     approved,
     created_at: mr.created_at,
+    sha: mr.sha ?? null,
     source_branch: mr.source_branch,
     target_branch: mr.target_branch,
     has_conflicts: mr.has_conflicts,
