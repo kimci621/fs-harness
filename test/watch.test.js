@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { diffSnapshots, keepEvents, triagePayload, formatEvents, pollOnce, stateFile, daemonSecretIssues, daemonKeychainJudges } from '../src/watch.js';
-import { cmdWatch, cmdWatchDaemon, serviceText } from '../src/commands/watch.js';
+import { cmdWatch, cmdWatchDaemon, serviceText, sleepFor } from '../src/commands/watch.js';
 import { listJobs } from '../src/queue.js';
 
 const mr = (over) => ({
@@ -194,16 +194,27 @@ test('демон: без секретов в env не стартует, а бе�
   );
 });
 
-test('watch install: юнит зовёт fsh watch --daemon и просит секреты в env', () => {
+test('сон демона держит цикл событий: с unref процесс молча выходил с кодом 13', async () => {
+  const timers = () => process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length;
+  const before = timers();
+  const p = sleepFor(20);
+  assert.equal(timers(), before + 1);
+  await p;
+});
+
+test('watch install: юнит зовёт fsh watch --daemon, несёт PATH и просит секреты в env', () => {
   const cfg = { telegram: { chat_id: '1' }, judge: { roles: { 'event-triage': ['r'] }, profiles: { r: { secret: 'openrouter' } } } };
-  const mac = serviceText(cfg, { platform: 'darwin', node: '/n', script: '/s/fsh.js', home: '/h' });
+  const mac = serviceText(cfg, { platform: 'darwin', node: '/n', script: '/s/fsh.js', home: '/h', path: '/opt/homebrew/bin:/usr/bin' });
   assert.match(mac.file, /LaunchAgents\/com\.fitstars\.fs-harness\.watch\.plist$/);
   assert.match(mac.text, /<string>watch<\/string>\s*<string>--daemon<\/string>/);
   assert.match(mac.text, /FS_HARNESS_TELEGRAM/);
   assert.match(mac.text, /FS_HARNESS_OPENROUTER/);
   assert.match(mac.hint[0], /launchctl bootstrap/);
+  // Без PATH launchd не найдёт glab: /usr/bin:/bin:/usr/sbin:/sbin — это всё, что он даёт.
+  assert.match(mac.text, /<key>PATH<\/key><string>\/opt\/homebrew\/bin:\/usr\/bin<\/string>/);
 
-  const linux = serviceText(cfg, { platform: 'linux', node: '/n', script: '/s/fsh.js', home: '/h' });
+  const linux = serviceText(cfg, { platform: 'linux', node: '/n', script: '/s/fsh.js', home: '/h', path: '/usr/local/bin' });
   assert.match(linux.text, /ExecStart=\/n \/s\/fsh\.js watch --daemon/);
+  assert.match(linux.text, /Environment=PATH=\/usr\/local\/bin/);
   assert.match(linux.text, /Environment=FS_HARNESS_TELEGRAM=/);
 });

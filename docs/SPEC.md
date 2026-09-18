@@ -294,7 +294,9 @@ v1 (плоские `repo`, `host`, `projectDir`) мигрируется **в п�
 
 `fsh watch install` печатает готовый launchd-plist (macOS) или systemd-unit (Linux) и команды
 `launchctl bootstrap` / `systemctl --user enable --now`. **Печатает, не ставит:** `~/Library/LaunchAgents`
-это глобальный конфиг, его правит человек.
+это глобальный конфиг, его правит человек. В юнит кладётся текущий `PATH`: launchd даёт
+`/usr/bin:/bin:/usr/sbin:/sbin`, а `glab` живёт в homebrew — без этого демон на каждом опросе
+получал бы `spawn glab ENOENT`.
 
 ## Очередь заданий
 
