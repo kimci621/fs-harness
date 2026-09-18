@@ -231,12 +231,14 @@ export function cmdWatchInstall(ctx, { json } = {}) {
     console.log(JSON.stringify(result, null, 2));
     return result;
   }
-  console.log(`Сохрани в ${unit.file}:\n`);
+  // Сам юнит — в stdout, пояснения — в stderr: тогда `fsh watch install > <файл>` кладёт
+  // ровно файл, а человек всё равно видит, что с ним делать.
+  console.error(`Сохрани в ${unit.file}:\n`);
   console.log(unit.text);
-  console.log(`\nПотом:\n${unit.hint.map((h) => `  ${h}`).join('\n')}`);
-  if (unit.text.includes('значение')) console.log('\nЗначения <значение> подставь сам: демон читает секреты только из env.');
+  console.error(`\nПотом:\n${unit.hint.map((h) => `  ${h}`).join('\n')}`);
+  if (unit.text.includes('значение')) console.error('\nЗначения <значение> подставь сам: демон читает секреты только из env.');
   if (keychainJudges.length) {
-    console.log(`Судья ${keychainJudges.join(', ')} ходит за токеном в keychain сам — на залоченном экране триаж молчит и события уйдут без разбора.`);
+    console.error(`Судья ${keychainJudges.join(', ')} ходит за токеном в keychain сам — на залоченном экране триаж молчит и события уйдут без разбора.`);
   }
   return result;
 }
