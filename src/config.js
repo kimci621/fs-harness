@@ -85,6 +85,8 @@ export const DEFAULTS = {
   // 300 с, а не 60: один опрос большого репозитория занимает под минуту, и на 60 демон
   // опрашивал бы непрерывно.
   watch: { enabled: true, intervalSeconds: 300, ttlSeconds: 86400 },
+  // Починка CI: сколько раз ci-fix возьмётся за один и тот же MR, прежде чем отдать его человеку.
+  ci: { maxRetries: 2 },
   // Пустой chat_id / bot_token — уведомления просто не шлются: интеграция необязательная.
   telegram: { chat_id: '', bot_token: '' },
   // Сообщения в рабочие чаты от имени человека. channels — канал на сценарий: ключ сценария
@@ -104,6 +106,7 @@ export const DEFAULTS = {
       acceptance: ['opus-cli'],
       'task-acceptance': ['opus-cli'],
       'mr-review': ['opus-cli'],
+      'ci-acceptance': ['opus-cli'],
       'model-pick': ['local', 'opus-cli'],
       'event-triage': ['local', 'opus-cli'],
     },
@@ -140,11 +143,12 @@ export function migrateConfig(user) {
 }
 
 export function readRawConfig(file = configPath()) {
-  if (!existsSync(file)) return null;
+  const target = file || configPath();
+  if (!target || !existsSync(target)) return null;
   try {
-    return JSON.parse(readFileSync(file, 'utf8'));
+    return JSON.parse(readFileSync(target, 'utf8'));
   } catch (err) {
-    throw new CliError(`Конфиг ${file} повреждён (${err.message}). Поправь или удали файл.`, 1, 'config_invalid');
+    throw new CliError(`Конфиг ${target} повреждён (${err.message}). Поправь или удали файл.`, 1, 'config_invalid');
   }
 }
 
@@ -166,14 +170,15 @@ export function pickProject(cfgV2, { project, env = process.env } = {}) {
 
 // Плоские поля (repo, host, projectDir, jira) — алиасы активного проекта:
 // команды про мультипроектность не знают и знать не должны.
-export function loadConfig(env = process.env, { project, file = configPath() } = {}) {
-  const raw = readRawConfig(file);
+export function loadConfig(env = process.env, { project, file } = {}) {
+  const targetFile = file || configPath();
+  const raw = readRawConfig(targetFile);
   const v2 = migrateConfig(raw ?? {});
   const { name, project: p } = pickProject(v2, { project, env });
 
   const cfg = {
     version: 2,
-    configPath: file,
+    configPath: targetFile,
     activeProject: name,
     projects: v2.projects ?? {},
     project: p,
@@ -197,6 +202,7 @@ export function loadConfig(env = process.env, { project, file = configPath() } =
       deps: { ...DEFAULTS.workspace.deps, ...(v2.workspace?.deps || {}), ...(p.deps || {}) },
     },
     watch: { ...DEFAULTS.watch, ...(v2.watch || {}), ...(p.watch || {}) },
+    ci: { ...DEFAULTS.ci, ...(v2.ci || {}), ...(p.ci || {}) },
     telegram: { ...DEFAULTS.telegram, ...(v2.telegram || {}), ...(p.telegram || {}) },
     mattermost: {
       ...DEFAULTS.mattermost,
@@ -242,3 +248,21 @@ export function writeMigrated(file = configPath()) {
   writeFileSync(file, JSON.stringify(migrateConfig(raw), null, 2) + '\n');
   return { file, backup: `${file}.v1.bak` };
 }
+
+// Запись выбранного агента в рабочий конфиг (поддерживает v1 и v2).
+export function setConfigAgent(name, { file = configPath(), project } = {}) {
+  const raw = readRawConfig(file);
+  if (!raw) throw new CliError(`Конфига нет: ${file}. Сначала fsh config init.`, 1, 'config_invalid');
+  if (raw.version === 2) {
+    const projName = project || raw.activeProject || Object.keys(raw.projects ?? {})[0];
+    if (projName && raw.projects?.[projName]) {
+      raw.projects[projName].agent = name;
+    }
+    raw.agent = name;
+  } else {
+    raw.agent = name;
+  }
+  writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
+  return { file, agent: name };
+}
+

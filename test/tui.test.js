@@ -151,6 +151,7 @@ test('клавиши: запуск действия только на своей
   const s = withItems();
   assert.deepEqual(keyIntent('a', {}, s), { type: 'launch', action: 'conflict' });
   assert.deepEqual(keyIntent('r', {}, s), { type: 'launch', action: 'review' });
+  assert.deepEqual(keyIntent('C', {}, s), { type: 'launch', action: 'ci-fix' });
   assert.equal(keyIntent('n', {}, s), null); // analyze живёт на вкладке задач
   const onIssues = reduce(s, { type: 'tab', tab: 'issues' });
   assert.deepEqual(keyIntent('n', {}, onIssues), { type: 'launch', action: 'analyze' });

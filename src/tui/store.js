@@ -5,7 +5,7 @@ import { statusIcon, humanize, cleanTitle, hhmmss } from '../format.js';
 import { fieldByName, fieldText, openSprints } from '../jira.js';
 
 export const TABS = [
-  { key: 'mr', title: 'MR', hint: 'a решить конфликт · t разобрать треды · r локальное ревью · p пайплайн · E поле · f фильтры' },
+  { key: 'mr', title: 'MR', hint: 'a решить конфликт · t разобрать треды · r локальное ревью · C починить CI · p пайплайн · E поле · f фильтры' },
   { key: 'issues', title: 'Задачи', hint: 'v доска · n проанализировать · s статус · S спринт · E поле · p родитель · c коммент · f фильтры' },
   { key: 'runs', title: 'Процессы', hint: 'активные процессы и архив запусков (до 50): вердикт, цена, каталог' },
   { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
@@ -18,6 +18,7 @@ export const LAUNCH = {
   a: { action: 'conflict', tab: 'mr' },
   t: { action: 'threads', tab: 'mr' },
   r: { action: 'review', tab: 'mr' },
+  C: { action: 'ci-fix', tab: 'mr' },
   n: { action: 'analyze', tab: 'issues' },
 };
 

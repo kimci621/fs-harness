@@ -3,7 +3,7 @@ import { CliError } from './errors.js';
 
 // Все обращения к GitLab идут через `glab api` (JSON). exec инжектируется для тестов.
 export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
-  const api = async (repo, path, { method = 'GET', retries = method === 'GET' ? 5 : 2, input } = {}) => {
+  const api = async (repo, path, { method = 'GET', retries = method === 'GET' ? 5 : 2, input, raw = false } = {}) => {
     const args = ['api'];
     if (host) args.push('--hostname', host);
     // repo=null — путь не проектный (например /user): подставлять projects/ туда нельзя.
@@ -31,6 +31,9 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
         const hint = stderr ? `\n  glab: ${stderr.split('\n').slice(-3).join('\n  ')}` : '';
         throw new CliError(`glab api ${method} ${path.replace(/\?.*$/, '')} не удался${hint}`, 1, 'api_failed');
       }
+      // Не всё в API — JSON: /jobs/:id/trace отдаёт text/plain, и JSON.parse съел бы
+      // весь лог, вернув null. raw отдаёт тело как есть.
+      if (raw) return out;
       try {
         return JSON.parse(out);
       } catch {
@@ -43,6 +46,9 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
 
   return {
     api,
+
+    // Сырой ответ, без JSON.parse.
+    apiRaw: (repo, path, opts = {}) => api(repo, path, { ...opts, raw: true }),
 
     // Фильтры уходят в API как есть: серверная фильтрация дешевле выкачивания сотни MR.
     listOpenMRs: (repo, params = {}) => {
@@ -75,6 +81,9 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
     playJob: (repo, jid) => api(repo, `/jobs/${jid}/play`, { method: 'POST' }),
 
     retryJob: (repo, jid) => api(repo, `/jobs/${jid}/retry`, { method: 'POST' }),
+
+    // Лог джобы: text/plain, поэтому только через raw.
+    getJobTrace: (repo, jid) => api(repo, `/jobs/${jid}/trace`, { raw: true }),
 
     createMRPipeline: (repo, iid) => api(repo, `/merge_requests/${iid}/pipelines`, { method: 'POST' }),
 

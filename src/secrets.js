@@ -15,9 +15,12 @@ const ALIASES = {
   telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_TOKEN'],
 };
 
-// Ключ, который на машине уже лежит файлом и используется другими инструментами владельца.
-// Заводить ему вторую копию в keychain — значит развести две правды.
-const FILES = { growthbook: path.join(homedir(), '.growthbook_apikey') };
+const FILES = {
+  growthbook: path.join(homedir(), '.growthbook_apikey'),
+  openrouter: path.join(homedir(), '.openrouter_key'),
+  deepseek: path.join(homedir(), '.deepseek_key'),
+  alibaba: path.join(homedir(), '.alibaba_key'),
+};
 
 // Токен словаря и так лежит в .env бэкенда: читаем его оттуда, а не заводим вторую правду.
 const ENV_FILES = { dict: path.join(homedir(), 'Projects', 'fitstars-api4', '.env') };

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createEventStream } from './agent/events.js';
-import { parseClaudeLine } from './agent/stream.js';
+import { parseClaudeLine, parseAgyLine } from './agent/stream.js';
 import { createRun, saveArtifact, readRun, appendEvent } from './agent/journal.js';
 import { spawnAgent } from './agent/spawn.js';
 import { renderTemplate } from './prompts.js';
@@ -29,6 +29,7 @@ export const JUDGE_GATES = ['pre-push', 'advisory', 'none'];
 export const SESSION_ARGS = {
   claude: { start: (id) => ['--session-id', id], resume: (id) => ['--resume', id] },
   pi: { start: (id) => ['--session-id', id], resume: (id) => ['--session-id', id] },
+  agy: { start: () => [], resume: (id) => ['--conversation', id] },
 };
 
 // Что агент получает вместе с просьбой доделать: решение судьи, находки и границы.
@@ -194,6 +195,7 @@ export function runAction(spec, ctx, input, opts = {}) {
     x.extra = a.judgeExtra ? a.judgeExtra(x) : '';
     saveArtifact(runDir, 'meta.json', {
       ...meta,
+      session_id: x.sessionId ?? null,
       head_sha: x.facts.head_sha,
       facts: { ...x.facts, diff: undefined },
       goal: x.goal,
@@ -262,20 +264,28 @@ export function runAction(spec, ctx, input, opts = {}) {
   async function runAgent(x, resume = null) {
     const agent = resolveAgent(opts.cfg, opts.agent);
     const session = SESSION_ARGS[agent.family];
-    if (session && !x.sessionId) x.sessionId = randomUUID();
-    const sessionArgs = session ? (resume ? session.resume(x.sessionId) : session.start(x.sessionId)) : [];
-    // stream-json у claude: без него headless-агент молчит до самого конца, и долгая работа
-    // неотличима от зависания (живой случай: 21 минута тишины и прерванный ран). Профиль со
-    // своим --output-format не трогаем.
-    const streamJson = agent.family === 'claude' && !agent.args.includes('--output-format');
-    const extraArgs = streamJson ? ['--output-format', 'stream-json', '--verbose'] : [];
+    if (session && !x.sessionId && agent.family !== 'agy') x.sessionId = randomUUID();
+    const sessionArgs = session ? (resume && x.sessionId ? session.resume(x.sessionId) : session.start(x.sessionId)) : [];
+    // stream-json: без него headless-агент молчит до самого конца, и долгая работа
+    // неотличима от зависания. claude и agy держат стрим со своими флагами и разбором.
+    const isAgy = agent.family === 'agy';
+    const streamJson = isAgy || (agent.family === 'claude' && !agent.args.includes('--output-format'));
+    const extraArgs =
+      isAgy ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '-p=']
+      : streamJson ? ['--output-format', 'stream-json', '--verbose', '-p']
+      : ['-p'];
+    const input =
+      isAgy
+        ? `${JSON.stringify({ event: 'user', message: { role: 'user', content: resume ?? x.prompt } })}\n`
+        : (resume ?? x.prompt);
+
     x.phase('agent', 'start', agent.name);
     x.say(`🤖 ${resume ? 'Возвращаю задачу' : 'Запускаю'} ${agent.name}…`);
     const startedAt = Date.now();
     const proc = spawnAgent({
       bin: agent.bin,
-      args: [...agent.args, ...sessionArgs, ...extraArgs, '-p'],
-      input: resume ?? x.prompt, // промпт в stdin: в argv он упирается в ARG_MAX
+      args: [...agent.args, ...sessionArgs, ...extraArgs],
+      input,
       cwd: ws.dir,
       env: { ...process.env, ...agent.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo },
       signal: ac.signal,
@@ -285,7 +295,8 @@ export function runAction(spec, ctx, input, opts = {}) {
     proc.events.on((ev) => {
       if (ev.t !== 'log') return;
       if (ev.stream === 'stdout' && streamJson) {
-        const { activity, result, passthrough } = parseClaudeLine(ev.text);
+        const { activity, result, passthrough, session: sess } = isAgy ? parseAgyLine(ev.text) : parseClaudeLine(ev.text);
+        if (sess && !x.sessionId) x.sessionId = sess;
         if (result !== null) {
           resultText = result;
           return;
