@@ -1,4 +1,4 @@
-import { readSync } from 'node:fs';
+import { closeSync, openSync, readSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 // Анимации и живой вывод. Всё пишется в stderr, чтобы stdout (--json) оставался чистым.
 import { statusIcon, fmtDuration } from './format.js';
@@ -199,15 +199,27 @@ export function confirm(msg) {
     process.stderr.write('\nstdin не терминал — подтвердить некому. Повтори с -y.\n');
     return false;
   }
-  const buf = Buffer.alloc(1);
-  let line = '';
-  while (true) {
-    const n = readSync(0, buf, 0, 1);
-    if (n === 0) break;
-    const ch = buf.toString('utf8');
-    if (ch === '\n') break;
-    line += ch;
+  let fd;
+  try {
+    fd = openSync('/dev/tty', 'rs');
+  } catch {
+    process.stderr.write('\nтерминал недоступен для чтения. Повтори с -y.\n');
+    return false;
   }
-  process.stderr.write('\n');
-  return ['y', 'yes', 'д', 'да'].includes(line.trim().toLowerCase());
+  try {
+    const buf = Buffer.alloc(1);
+    let line = '';
+    while (true) {
+      const n = readSync(fd, buf, 0, 1);
+      if (n === 0) break;
+      const ch = buf.toString('utf8');
+      if (ch === '\n') break;
+      line += ch;
+    }
+    process.stderr.write('\n');
+    return ['y', 'yes', 'д', 'да'].includes(line.trim().toLowerCase());
+  } finally {
+    try { closeSync(fd); } catch {}
+  }
 }
+
