@@ -195,6 +195,10 @@ function readPipedLine() {
 // Простое подтверждение из stdin (при неинтерактивном запуске — отказ).
 export function confirm(msg) {
   process.stderr.write(msg);
+  if (!process.stdin.isTTY) {
+    process.stderr.write('\nstdin не терминал — подтвердить некому. Повтори с -y.\n');
+    return false;
+  }
   const buf = Buffer.alloc(1);
   let line = '';
   while (true) {

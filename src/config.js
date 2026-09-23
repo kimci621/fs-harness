@@ -49,7 +49,7 @@ export const DEFAULTS = {
       args: ['--dangerously-skip-permissions'],
       keyFile: '~/.openrouter_key',
       env: {
-        ANTHROPIC_BASE_URL: 'https://openrouter.ai/api/v1',
+        ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
         ANTHROPIC_MODEL: 'z-ai/glm-5.3-flash',
         ANTHROPIC_DEFAULT_HAIKU_MODEL: 'z-ai/glm-5.3-flash',
         ANTHROPIC_DEFAULT_SONNET_MODEL: 'z-ai/glm-5.3-flash',
