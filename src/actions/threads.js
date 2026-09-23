@@ -79,7 +79,7 @@ export const threadsAction = {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'номер MR или часть имени ветки' },
-        agent: { type: 'string', description: 'какой агент разбирает треды (имя профиля из конфига: cc, ccq, cco, ccd, pi)' },
+        agent: { type: 'string', description: 'какой агент разбирает треды (имя профиля из конфига: cc, ccq, cco, ccd, agy)' },
       },
       required: ['query'],
     },

@@ -98,6 +98,12 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
 
     branches: (repo) => api(repo, '/repository/branches?per_page=100'),
 
+    // Создание треда (дискуссии) в MR. С position — inline к строке диффа, без него — общий тред.
+    createDiscussion: (repo, iid, fields) => api(repo, `/merge_requests/${iid}/discussions`, { method: 'POST', input: JSON.stringify(fields) }),
+
+    // Заметка (комментарий) к MR.
+    createNote: (repo, iid, body) => api(repo, `/merge_requests/${iid}/notes`, { method: 'POST', input: JSON.stringify({ body }) }),
+
     // Ответ в тред. Read-back обязателен: тихо потерянный ответ хуже явной ошибки.
     async replyDiscussion(repo, iid, discussionId, body) {
       const note = await api(repo, `/merge_requests/${iid}/discussions/${discussionId}/notes`, {

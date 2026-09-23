@@ -28,9 +28,7 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
   add('glab', Boolean(glabVersion), glabVersion?.split('\n')[0] || 'не найден в PATH. Установка: brew install glab', true);
 
   add('claude', Boolean(tryExec('which', ['claude'])), tryExec('which', ['claude']) || 'не найден в PATH: без него не работают ни агент, ни судья', true);
-  const pi = tryExec('which', ['pi']);
-  add('pi', Boolean(pi), pi || 'не найден — недоступны только действия с agent: "pi"');
-  // agy опционален так же, как pi: без него мастер (fsh ask, клавиша A) берёт профиль cc.
+  // agy опционален: без него мастер (fsh ask, клавиша A) берёт профиль cc.
   const agy = tryExec('which', ['agy']);
   add('agy', Boolean(agy), agy || 'не найден — мастер fsh будет работать на профиле cc');
 
@@ -112,12 +110,22 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
   const tg = cfg?.telegram;
   const hasToken = tg?.bot_token || readSecret('telegram', { required: false });
   const hasChatId = tg?.chat_id || process.env.TELEGRAM_CHAT_ID;
-  if (hasToken || hasChatId) {
+  if (hasToken || hasChatId || tg?.approvals || (tg?.allowed_user_ids ?? []).length) {
     const ok = Boolean(hasToken && hasChatId);
     let msg = 'настроен (токен и chat_id заданы)';
     if (!hasToken) msg = `есть chat_id, но нет токена бота. Заведи: ${addCommand('telegram')}`;
     else if (!hasChatId) msg = 'есть токен, но не задан chat_id в конфиге (telegram.chat_id)';
     add('telegram', ok, msg);
+  }
+
+  // Кнопки аппрува бесполезны без allowlist: ран встанет в pending_approval, а нажать никто не сможет.
+  if (tg?.approvals || (tg?.allowed_user_ids ?? []).length) {
+    const allowed = (tg?.allowed_user_ids ?? []).filter((x) => x !== null && x !== undefined && x !== '');
+    add('telegram bot', allowed.length > 0,
+      allowed.length
+        ? `allowlist: ${allowed.join(', ')} · approvals: ${tg?.approvals ? 'вкл' : 'выкл'}`
+        : 'telegram.allowed_user_ids пуст — fsh bot не стартует, кнопки нажать нечем. Узнай id у @userinfobot',
+      Boolean(tg?.approvals));
   }
 
   // Mattermost опционален: не настроен — молчим. Токен сессионный и протухает при разлогине,

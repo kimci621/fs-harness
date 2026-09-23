@@ -6,7 +6,7 @@ import { makeGit } from '../workspace.js';
 import { finish } from '../output.js';
 import { confirm } from '../ui.js';
 import { CliError } from '../errors.js';
-import { issueUrl } from './jira.js';
+import { issueUrl, pickTransition } from './jira.js';
 import { postReview } from './mm.js';
 
 // Ветки, в которые нельзя ни переключаться работой, ни пушить задачу.
@@ -32,8 +32,9 @@ export async function cmdTask(ctx, args, opts = {}) {
   const result =
     sub === 'start' ? await start(ctx, rest, opts)
       : sub === 'push' ? await push(ctx, rest, opts)
-        : sub === 'judge' ? await review(ctx, rest, opts)
-          : (() => { throw new CliError('Использование: fsh task start <KEY> | fsh task push [KEY] [--target <ветка>] | fsh task judge [KEY].', 1, 'usage'); })();
+        : sub === 'submit' ? await submit(ctx, rest, opts)
+          : sub === 'judge' ? await review(ctx, rest, opts)
+            : (() => { throw new CliError('Использование: fsh task start <KEY> | fsh task push [KEY] [--target <ветка>] | fsh task submit [KEY] [--status <имя>] | fsh task judge [KEY].', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -127,8 +128,82 @@ async function push(ctx, [maybeKey], opts) {
   const out = { ...info, pushed: true, mr: { iid: mr?.iid ?? null, title: mr?.title ?? title, web_url: mr?.web_url ?? null }, mr_created: !existing };
   // --post: отписать в рабочий чат, что задача уехала в ревью. Без флага молчим:
   // запись в общий канал не должна быть побочным эффектом пуша.
-  if (opts.post) out.posted = await postReview(ctx, { iid: out.mr.iid, mrUrl: out.mr.web_url, key }, opts);
+  if (opts.post) out.posted = await postReview(ctx, { iid: out.mr.iid, mrUrl: out.mr.web_url, key, title: out.mr.title }, opts);
   return out;
+}
+
+// Отправить задачу в ревью команде: снять черновик с MR, перевести Jira в статус ревью
+// и отписать в Mattermost. Шаг человека: implement оставляет MR черновиком и не двигает Jira.
+async function submit(ctx, [maybeKey], opts) {
+  const dir = dirOf(ctx, opts);
+  const git = makeGit(dir);
+  const head = git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const key = maybeKey && ISSUE_KEY.test(maybeKey) ? maybeKey : keyFromBranch(head);
+  if (!key) throw new CliError(`Из ветки "${head}" ключ задачи не читается. Использование: fsh task submit FD-7719.`, 1, 'usage');
+
+  // Ветку задачи знаем по ключу: implement пушит именно в branchFor(key), а основной чекаут
+  // может стоять на dev. Ищем MR по ней, текущую ветку пробуем как запасной вариант.
+  const taskBranch = branchFor(key, ctx.cfg.branchPattern);
+  const candidates = [...new Set([taskBranch, head].filter(Boolean))];
+  let mr = null;
+  let branch = taskBranch;
+  for (const b of candidates) {
+    const open = await ctx.g.listOpenMRs(ctx.repo, { source_branch: b });
+    if (open?.[0]) { mr = open[0]; branch = b; break; }
+  }
+  if (!mr) throw new CliError(`Нет открытого MR ни в "${taskBranch}", ни в "${head}": сначала fsh implement ${key} или fsh task push.`, 1, 'no_mr');
+
+  const j = ctx.jira();
+  const statusName = opts.status || 'Ревью';
+  const { transitions } = (await j.transitions(key)) ?? {};
+  const t = pickTransition(transitions, statusName);
+  const before = await j.issue(key);
+  const from = before.fields?.status?.name ?? '—';
+  const wasDraft = /^\s*(draft|wip):/i.test(String(mr.title ?? ''));
+  const title = String(mr.title ?? '').replace(/^\s*(draft|wip):\s*/i, '');
+
+  // Обязательные поля перехода проверяем сами: иначе отказ Jira хуже читается, а submit —
+  // ровно то место, где человеку нужно сказать, чего не хватает.
+  const missing = missingRequired(t, before);
+  if (missing.length) {
+    const hint = missing.map((n) => `fsh jira field ${key} "${n}" <значение>`).join('\n   ');
+    throw new CliError(
+      `Переход "${t.name}" требует заполнить поля: ${missing.join(', ')}.\n   Заполни и повтори:\n   ${hint}`,
+      1,
+      'jira_fields_missing',
+    );
+  }
+
+  const info = { ok: true, key, branch, mr: { iid: mr.iid, web_url: mr.web_url }, jira: { from, to: t.to?.name ?? t.name } };
+  if (opts.dryRun) {
+    return { ...info, dry_run: true, plan: [
+      `Jira ${key}: ${from} → ${t.to?.name ?? t.name}`,
+      wasDraft ? `PUT /merge_requests/${mr.iid}: снять черновик (title: ${title})` : `MR !${mr.iid} уже не черновик`,
+      'сообщение в Mattermost (сценарий review)',
+    ] };
+  }
+  if (!opts.yes && !opts.asObject && !confirm(`${key}: ${from} → ${t.to?.name ?? t.name}, MR !${mr.iid} в ревью, отписать в Mattermost? [y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+
+  // Jira первой: не переводится — MR остаётся черновиком, и повторить безопасно.
+  await j.transition(key, t.id);
+  const after = await j.issue(key);
+  const to = after.fields?.status?.name ?? '—';
+  if (to === from) throw new CliError(`Jira приняла переход "${t.name}", но статус ${key} остался "${from}". Проверь права и условия перехода.`, 1, 'api_failed');
+
+  const updated = wasDraft ? await ctx.g.updateMR(ctx.repo, mr.iid, { title }) : mr;
+  const posted = await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
+  return { ...info, title: updated?.title ?? title, draft_removed: wasDraft, jira: { from, to, transition: t.name }, posted };
+}
+
+// Поля экрана перехода, помеченные обязательными и пустые у задачи. hasDefaultValue Jira
+// заполняет сама — такие не считаем нехваткой.
+function missingRequired(transition, issue) {
+  return Object.entries(transition?.fields ?? {})
+    .filter(([, f]) => f.required && !f.hasDefaultValue)
+    .filter(([id]) => !fieldText(issue.fields?.[id]))
+    .map(([, f]) => f.name || '?');
 }
 
 // Приёмка: судья сверяет дифф ветки с тем, что написано в задаче. Совет, а не гейт —
@@ -176,7 +251,12 @@ function render(r) {
     console.log(r.verdict ? formatVerdict(r.verdict) : r.payload);
     return;
   }
-  if (r.issue) {
+  if (r.jira && r.mr && !r.issue) {
+    console.log(`${r.key} · ${r.branch} · MR !${r.mr.iid}: ${r.mr.web_url}`);
+    console.log(`Jira: ${r.jira.from} → ${r.jira.to}${r.draft_removed ? ' · черновик снят' : ''}`);
+    if (r.posted) console.log(`Mattermost: ${r.posted.scenario || r.posted.channel}`);
+    if (r.dry_run) for (const line of r.plan) console.log(`  ${line}`);
+  } else if (r.issue) {
     console.log(`${r.issue.key} · ${r.issue.status} · ${r.issue.summary}`);
     console.log(`${r.issue.url}`);
     console.log(`Ветка ${r.branch}: ${r.dry_run ? 'план' : STATE_TEXT[r.state]}${r.base ? ` от ${r.base}` : ''}`);

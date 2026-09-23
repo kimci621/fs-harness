@@ -23,7 +23,6 @@ export const DEFAULTS = {
   projects: {},
   agentArgs: {
     claude: ['--dangerously-skip-permissions'],
-    pi: [],
   },
   // Агент — это программа плюс провайдер в env. Claude Code один и тот же, меняются
   // baseUrl, модели и ключ; keyFile читается в момент запуска, в конфиге ключей нет.
@@ -70,9 +69,12 @@ export const DEFAULTS = {
         CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-flash',
       },
     },
-    pi: { bin: 'pi', family: 'pi', args: [] },
-    // agy (Antigravity CLI) — опционален, как pi: нет в PATH, мастер молча берёт cc.
+    // Планировщик задач: claude на opus с максимальным reasoning effort.
+    opus: { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'xhigh'] },
+    // agy (Antigravity CLI) — опционален: нет в PATH, мастер молча берёт cc.
     agy: { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions'] },
+    // Исполнитель задач: gemini flash high через agy.
+    gemini: { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-high'] },
   },
   // Мастер по самому fsh (fsh ask, клавиша A в TUI). Профиль из agents.
   chat: { agent: 'agy' },
@@ -88,7 +90,9 @@ export const DEFAULTS = {
   // Починка CI: сколько раз ci-fix возьмётся за один и тот же MR, прежде чем отдать его человеку.
   ci: { maxRetries: 2 },
   // Пустой chat_id / bot_token — уведомления просто не шлются: интеграция необязательная.
-  telegram: { chat_id: '', bot_token: '' },
+  // approvals — гейт pre-push ждёт кнопку в Telegram, а не пушит сам.
+  // allowed_user_ids пуст — бот не стартует: пустой список это «никто», не «все».
+  telegram: { chat_id: '', bot_token: '', allowed_user_ids: [], approvals: false },
   // Сообщения в рабочие чаты от имени человека. channels — канал на сценарий: ключ сценария
   // (review) → id канала. Пусто — команда mm просто не настроена.
   mattermost: { baseUrl: '', channels: {} },
@@ -100,15 +104,15 @@ export const DEFAULTS = {
     profiles: {
       'opus-cli': { provider: 'cli', bin: 'claude', model: 'opus', effort: 'xhigh' },
       'haiku-cli': { provider: 'cli', bin: 'claude', model: 'haiku', effort: 'medium' },
-      local: { provider: 'openai', baseUrl: 'http://127.0.0.1:1234/v1', model: 'local-model' },
     },
     roles: {
       acceptance: ['opus-cli'],
       'task-acceptance': ['opus-cli'],
+      'task-review': ['opus-cli'],
       'mr-review': ['opus-cli'],
       'ci-acceptance': ['opus-cli'],
-      'model-pick': ['local', 'opus-cli'],
-      'event-triage': ['local', 'opus-cli'],
+      'model-pick': ['haiku-cli', 'opus-cli'],
+      'event-triage': ['haiku-cli', 'opus-cli'],
     },
   },
 };

@@ -149,3 +149,21 @@ test('apiRaw: не-JSON ответ отдаётся как есть, а api на
   assert.equal(calls[0][1], 'projects/r%2Frepo/jobs/42/trace');
   assert.equal(await g.api('r/repo', '/jobs/42/trace'), null);
 });
+
+test('createDiscussion: отправляет POST с телом и position в stdin', async () => {
+  const ok = fake([{ id: 'disc1' }]);
+  const res = await ok.g.createDiscussion('r/repo', 7, { body: 'коммент', position: { new_line: 10 } });
+  assert.equal(res.id, 'disc1');
+  assert.ok(ok.calls[0].args.includes('POST'));
+  assert.ok(ok.calls[0].args[1].endsWith('/merge_requests/7/discussions'));
+  assert.equal(ok.calls[0].opts.input, JSON.stringify({ body: 'коммент', position: { new_line: 10 } }));
+});
+
+test('createNote: отправляет POST с body в stdin', async () => {
+  const ok = fake([{ id: 99, body: 'саммари' }]);
+  const res = await ok.g.createNote('r/repo', 7, 'саммари');
+  assert.equal(res.id, 99);
+  assert.ok(ok.calls[0].args.includes('POST'));
+  assert.ok(ok.calls[0].args[1].endsWith('/merge_requests/7/notes'));
+  assert.equal(ok.calls[0].opts.input, JSON.stringify({ body: 'саммари' }));
+});

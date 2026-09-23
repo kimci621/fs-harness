@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createMattermost, reviewMessage } from '../src/mattermost.js';
-import { cmdMM, resolveChannel, channelId } from '../src/commands/mm.js';
+import { cmdMM, resolveChannel, channelId, postReview } from '../src/commands/mm.js';
 
 const CFG = { mattermost: { baseUrl: 'https://mm.example/', channels: { review: 'chan123' } } };
 
@@ -14,21 +14,36 @@ const res = (body, { status = 200, headers = {} } = {}) => ({
   json: async () => body,
 });
 
-test('reviewMessage: формат ровно тот, что читают в канале', () => {
+test('reviewMessage: первой строчкой заголовок задачи, затем ссылки', () => {
   const text = reviewMessage({
-    iid: 2833,
-    mrUrl: 'https://gl/fitstars/fitstars-nuxt/-/merge_requests/2833',
-    key: 'FD-7655',
-    issueUrl: 'https://fitstars.atlassian.net/browse/FD-7655',
+    title: 'FD-7785: FE: якорные кнопки на лендинге сбрасывают ?promo и utm_*',
+    iid: 2886,
+    mrUrl: 'https://gl/fitstars/fitstars-nuxt/-/merge_requests/2886',
+    key: 'FD-7884',
+    issueUrl: 'https://fitstars.atlassian.net/browse/FD-7884',
   });
   assert.equal(
     text,
-    '• MR !2833: https://gl/fitstars/fitstars-nuxt/-/merge_requests/2833\n'
-    + '• Jira FD-7655 https://fitstars.atlassian.net/browse/FD-7655',
+    'FD-7785: FE: якорные кнопки на лендинге сбрасывают ?promo и utm_*\n'
+    + '• MR !2886: https://gl/fitstars/fitstars-nuxt/-/merge_requests/2886\n'
+    + '• Jira FD-7884 https://fitstars.atlassian.net/browse/FD-7884',
   );
 });
 
-test('reviewMessage: без задачи остаётся одна строка, без всего — ошибка', () => {
+test('reviewMessage: Draft/WIP в начале заголовка срезается', () => {
+  const text = reviewMessage({
+    title: 'Draft: FD-7655: FE: исправить кнопку',
+    iid: 2833,
+    mrUrl: 'https://gl/fitstars/fitstars-nuxt/-/merge_requests/2833',
+  });
+  assert.equal(
+    text,
+    'FD-7655: FE: исправить кнопку\n'
+    + '• MR !2833: https://gl/fitstars/fitstars-nuxt/-/merge_requests/2833',
+  );
+});
+
+test('reviewMessage: без заголовка и без задачи остаётся одна строка, без всего — ошибка', () => {
   assert.equal(reviewMessage({ iid: 7, mrUrl: 'https://gl/mr/7' }), '• MR !7: https://gl/mr/7');
   assert.throws(() => reviewMessage({}), /Нечего отправлять/);
 });
@@ -163,6 +178,26 @@ test('mm post: имя канала разворачивается в id пере
   const out = await cmdMM(ctxWith(mm), ['post', 'frontend-merge-requests', 'привет'], { asObject: true, yes: true });
   assert.deepEqual(sent, [{ channel: 'chan123', message: 'привет' }]);
   assert.equal(out.post_id, 'p1');
+});
+
+test('postReview: отправляет заголовок первой строкой, без переданного title берёт из getMR', async () => {
+  const sent = [];
+  const mm = { post: async (channel, message) => { sent.push({ channel, message }); return { id: 'p1' }; } };
+  const ctx = {
+    cfg: { mattermost: { baseUrl: 'https://mm.example/', channels: { review: 'a'.repeat(26) } } },
+    repo: 'ns/proj',
+    mm: () => mm,
+    g: { getMR: async (repo, iid) => ({ iid, title: 'FD-7785: FE: заголовок из GitLab' }) },
+  };
+
+  // С явным title
+  await postReview(ctx, { iid: 10, mrUrl: 'https://gl/mr/10', title: 'FD-1: Явный заголовок' }, { asObject: true, yes: true });
+  assert.equal(sent[0].message, 'FD-1: Явный заголовок\n• MR !10: https://gl/mr/10');
+
+  // Без title — подтягивает через getMR
+  sent.length = 0;
+  await postReview(ctx, { iid: 20, mrUrl: 'https://gl/mr/20' }, { asObject: true, yes: true });
+  assert.equal(sent[0].message, 'FD-7785: FE: заголовок из GitLab\n• MR !20: https://gl/mr/20');
 });
 
 // Пароль читается в отдельном процессе: подменить fd 0 у текущего node --test нельзя,

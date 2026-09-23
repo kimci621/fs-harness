@@ -90,29 +90,10 @@ test('read-only снимает обход разрешений и ставит �
   assert.ok(!calls[0].args.includes('--dangerously-skip-permissions'), 'иначе флаг режима ничего не значит');
   assert.ok(calls[0].args.join(' ').includes('--mode plan'));
 
-  // pi режима «только чтение» не умеет — молчать об этом нельзя
   assert.throws(
-    () => startChat({ agent: { name: 'pi', bin: 'pi', family: 'pi', args: [] }, cwd: '/repo', readOnly: true, spawnImpl: impl }),
+    () => startChat({ agent: { name: 'unknown', bin: 'unknown', family: 'unknown', args: [] }, cwd: '/repo', spawnImpl: impl }),
     (e) => e.code === 'usage',
   );
-});
-
-test('чат pi: ход = отдельный процесс, промпт в stdin, ответ обычным текстом', async () => {
-  const { impl, calls } = fakeSpawn();
-  const chat = startChat({ agent: { name: 'pi', bin: 'pi', family: 'pi', args: [] }, cwd: '/repo', spawnImpl: impl });
-  const q = chat.send('вопрос');
-  assert.equal(calls[0].input, 'вопрос');
-  assert.equal(calls[0].keepStdin, false);
-  calls[0].out('обычный текст ответа');
-  calls[0].emit({ t: 'done', ok: true, code: 0 });
-  assert.equal(await q, 'обычный текст ответа');
-
-  const q2 = chat.send('второй');
-  assert.equal(calls.length, 2, 'у pi каждый ход — новый процесс');
-  assert.ok(calls[1].args.includes('--session-id'), 'сессия держится id, а не живым процессом');
-  calls[1].out('и второй ответ');
-  calls[1].emit({ t: 'done', ok: true, code: 0 });
-  assert.equal(await q2, 'и второй ответ');
 });
 
 test('parseAgyLine: конверт event, дельты текста и ошибка результата', () => {

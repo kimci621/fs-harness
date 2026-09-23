@@ -71,7 +71,7 @@ export const conflictAction = {
   kind: 'action',
   usage: 'conflict <mr|ветка>',
   description: 'Решить конфликт силами AI-агента и запустить build',
-  example: 'fsh conflict !2547 --agent pi',
+  example: 'fsh conflict !2547 --agent cco',
   action: {
     title: 'Решить конфликт с target',
     target: 'mr',
@@ -85,7 +85,7 @@ export const conflictAction = {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'номер MR или часть имени ветки' },
-        agent: { type: 'string', description: 'какой агент решает конфликт (имя профиля из конфига: cc, ccq, cco, ccd, pi)' },
+        agent: { type: 'string', description: 'какой агент решает конфликт (имя профиля из конфига: cc, ccq, cco, ccd, agy)' },
       },
       required: ['query'],
     },

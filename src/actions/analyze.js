@@ -30,7 +30,7 @@ export const analyzeAction = {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'ключ задачи Jira, например FD-7647' },
-        agent: { type: 'string', description: 'какой агент разбирает (имя профиля из конфига: cc, ccq, cco, ccd, pi)' },
+        agent: { type: 'string', description: 'какой агент разбирает (имя профиля из конфига: cc, ccq, cco, ccd, agy)' },
       },
       required: ['query'],
     },

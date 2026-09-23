@@ -16,9 +16,19 @@ export function makeGit(defaultCwd) {
       return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: GIT_MAX_BUFFER }).trim();
     } catch (err) {
       if (allowFail) return String(err.stdout ?? '').trim();
-      throw new CliError(`git ${args.join(' ')} не удался: ${String(err.stderr || err.message).trim()}`, 1, 'git_failed');
+      const detail = String(err.stderr || err.message).trim();
+      throw new CliError(`git ${args.join(' ')} не удался: ${detail}${authHint(args, detail)}`, 1, 'git_failed');
     }
   };
+}
+
+// Отказ доступа к origin выглядит одинаково и в push, и в fetch: подсказываем, что чинить.
+// Другие git-ошибки (non-fast-forward, ENOBUFS) не трогаем.
+const ACCESS_DENIED = /HTTP Basic: Access denied|Authentication failed|could not read Username|Permission denied \(publickey\)/i;
+export function authHint(args, detail) {
+  if (!['push', 'fetch', 'ls-remote', 'clone'].includes(args[0])) return '';
+  if (!ACCESS_DENIED.test(detail)) return '';
+  return '\nПохоже, нет доступа к origin. Проверь: glab auth login, credential helper (git config --global credential.helper) или SSH-remote (git remote -v).';
 }
 
 export const MODES = ['checkout', 'ephemeral-worktree', 'task-worktree'];
@@ -46,7 +56,7 @@ export async function acquireWorkspace({
   const base = ref ? `origin/${ref}` : 'HEAD';
 
   if (mode === 'checkout') {
-    return workspace({ dir: project, branch: null, base, created: false, git, deps: { available: true, strategy: 'checkout' }, cleanup: () => {} });
+    return workspace({ dir: project, branch: null, base, baseSha: revSha(git, base, project), created: false, git, deps: { available: true, strategy: 'checkout' }, cleanup: () => {} });
   }
 
   if (refs.length) git(['fetch', 'origin', ...refs.map((r) => `${r}:refs/remotes/origin/${r}`)]);
@@ -69,6 +79,7 @@ export async function acquireWorkspace({
     dir,
     branch,
     base,
+    baseSha: revSha(git, base, project),
     created: true,
     git,
     deps: { ...resolved, available: resolved.available && lockMatches(git, project, dir) },
@@ -78,12 +89,67 @@ export async function acquireWorkspace({
         onEvent(`📁 Worktree сохранён: ${dir}`);
         return;
       }
-      try { git(['worktree', 'remove', '--force', dir]); } catch { /* уже удалён */ }
-      try { git(['worktree', 'prune']); } catch { /* не критично */ }
-      try { git(['branch', '-D', branch]); } catch { /* не критично */ }
-      onEvent('🧹 Временный worktree и ветка удалены.');
+      removeWorktree(git, dir, branch, onEvent);
     },
   });
+}
+
+// Уборка worktree и ветки: одна на acquireWorkspace и на доигрывание упавшего рана.
+export function removeWorktree(git, dir, branch, onEvent = () => {}) {
+  try { git(['worktree', 'remove', '--force', dir]); } catch { /* уже удалён */ }
+  try { git(['worktree', 'prune']); } catch { /* не критично */ }
+  try { git(['branch', '-D', branch]); } catch { /* не критично */ }
+  onEvent('🧹 Временный worktree и ветка удалены.');
+}
+
+// Переподключиться к worktree сохранённого рана: resume не создаёт изоляцию заново,
+// а возвращает тот же объект, что acquireWorkspace. Ноль новых git-команд.
+export function reopenWorkspace({
+  mode = 'ephemeral-worktree',
+  project,
+  dir,
+  branch,
+  base,
+  git = makeGit(project),
+  deps = {},
+  onEvent = () => {},
+}) {
+  return workspace({
+    dir,
+    branch,
+    base,
+    created: mode !== 'checkout',
+    git,
+    deps,
+    cleanup: mode === 'checkout'
+      ? () => {}
+      : (keep) => {
+          // task-worktree живёт дольше рана (AGENTS.md): resume/publish не сносит ветку задачи.
+          if (keep || mode === 'task-worktree') {
+            onEvent(`📁 Worktree сохранён: ${dir}`);
+            return;
+          }
+          removeWorktree(git, dir, branch, onEvent);
+        },
+  });
+}
+
+// Переподключение к worktree сохранённого рана по его meta: одно место маппинга полей
+// для resume и publish, чтобы они не разъехались.
+export function reopenRunWorkspace(meta, action, { onEvent = () => {}, deps } = {}) {
+  return reopenWorkspace({
+    mode: meta.isolation ?? action.isolation,
+    project: meta.project_dir,
+    dir: meta.worktree,
+    branch: meta.branch,
+    base: meta.base,
+    onEvent,
+    deps: deps ?? { available: meta.facts?.deps_available ?? true },
+  });
+}
+
+function revSha(git, ref, cwd) {
+  try { return git(['rev-parse', ref], cwd); } catch { return null; }
 }
 
 function workspace(w) {

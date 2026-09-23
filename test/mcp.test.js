@@ -20,7 +20,7 @@ function fakeCtx() {
     host: 'fitstars.gitlab.yandexcloud.net',
     projectDir: '~/Projects/fitstars-frontend',
     agent: 'claude',
-    agentArgs: { claude: [], pi: [] },
+    agentArgs: { claude: [] },
   };
   return createMCPContext({ cfg, g, notify: () => {} });
 }
@@ -43,7 +43,7 @@ test('mcp: tools/list — все инструменты с inputSchema', async (
   const ctx = fakeCtx();
   const r = await handleMessage('tools/list', {}, ctx);
   const names = r.tools.map((t) => t.name);
-  assert.deepEqual(names, ['mrs', 'mr', 'mr-comments', 'jobs', 'run', 'deploy', 'conflict', 'ci-fix', 'threads', 'review', 'analyze', 'jira', 'task', 'growthbook', 'commit', 'flow', 'doctor', 'agent-guide']);
+  assert.deepEqual(names, ['mrs', 'mr', 'mr-comments', 'jobs', 'run', 'deploy', 'conflict', 'ci-fix', 'threads', 'review', 'analyze', 'implement', 'jira', 'task', 'growthbook', 'commit', 'flow', 'doctor', 'agent-guide', 'runs', 'retry']);
   for (const t of r.tools) assert.equal(t.inputSchema.type, 'object');
 });
 

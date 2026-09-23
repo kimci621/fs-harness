@@ -124,6 +124,23 @@ test('процессы: активные процессы первыми, арх
   assert.equal(items[50].id, 'old-49');
 });
 
+test('процессы: t повторить и c продолжить — только на вкладке ранов', () => {
+  const onRuns = reduce(initialState(), { type: 'tab', tab: 'runs' });
+  assert.deepEqual(keyIntent('t', {}, onRuns), { type: 'retry' });
+  assert.deepEqual(keyIntent('c', {}, onRuns), { type: 'resume' });
+  const onMr = reduce(initialState(), { type: 'tab', tab: 'mr' });
+  assert.deepEqual(keyIntent('t', {}, onMr), { type: 'launch', action: 'threads' }); // на MR t по-прежнему треды
+  assert.equal(keyIntent('c', {}, onMr), null);
+});
+
+test('карточка упавшего рана: код ошибки, worktree и подсказки', () => {
+  const item = { id: 'conflict-1', action: 'conflict', mr: 7, state: 'failed', error_code: 'agent_failed', error_message: 'агент упал', worktree: '/tmp/wt', dir: '/tmp/run' };
+  const text = detailLines('runs', item).map(lineText).join('\n');
+  assert.match(text, /agent_failed/);
+  assert.match(text, /\/tmp\/wt/);
+  assert.match(text, /t повторить/);
+});
+
 test('лог: кольцевой буфер не растёт бесконечно', () => {
   const lines = Array.from({ length: LOG_LIMIT + 50 }, (_, i) => `строка ${i}`);
   const s = reduce(initialState(), { type: 'log', lines });
@@ -155,7 +172,11 @@ test('клавиши: запуск действия только на своей
   assert.equal(keyIntent('n', {}, s), null); // analyze живёт на вкладке задач
   const onIssues = reduce(s, { type: 'tab', tab: 'issues' });
   assert.deepEqual(keyIntent('n', {}, onIssues), { type: 'launch', action: 'analyze' });
+  assert.deepEqual(keyIntent('i', {}, onIssues), { type: 'launch', action: 'implement' });
+  assert.deepEqual(keyIntent('u', {}, onIssues), { type: 'submitReview' });
   assert.equal(keyIntent('a', {}, onIssues), null);
+  assert.equal(keyIntent('i', {}, s), null); // implement живёт на вкладке задач
+  assert.equal(keyIntent('u', {}, s), null);
 
   assert.deepEqual(keyIntent('x', {}, s), { type: 'abort' });
   assert.deepEqual(keyIntent('q', {}, s), { type: 'quit' });

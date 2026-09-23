@@ -107,7 +107,7 @@ test('TUI: рисует MR, переключает вкладку и показ�
     assert.match(issues, /FD-1 · В работе · нету/); // ключ, статус и исполнитель первой строкой
     assert.match(issues, /│\s+Починить/); // название отдельной строкой под ключом
     assert.match(issues, /─{10}/); // бледная линия между строками списка
-    assert.match(issues, /n проанализировать · s статус/);
+    assert.match(issues, /n проанализировать · i выполнить · u в ревью · s статус/);
     assert.match(issues, /Assignee {2}Амир/);
     assert.match(issues, /Ответственный разработчик {2}Амир/);
     assert.match(issues, /Sprint {4}Спринт 18 \(active\)/);

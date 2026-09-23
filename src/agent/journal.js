@@ -7,6 +7,7 @@ export const RUNS_DIR = path.join(homedir(), '.local', 'state', 'fs-harness', 'r
 export const MAX_ARCHIVES = 50;
 
 // Удаляет старые архивы ранов сверх лимита keep (все архивы максимум 50 шт).
+// pending_approval не трогаем: ран ждёт кнопку, ретеншн его съесть не должен.
 export function pruneRuns({ root = RUNS_DIR, keep = MAX_ARCHIVES } = {}) {
   if (!existsSync(root)) return [];
   const entries = readdirSync(root)
@@ -16,11 +17,13 @@ export function pruneRuns({ root = RUNS_DIR, keep = MAX_ARCHIVES } = {}) {
         const stat = statSync(dir);
         if (!stat.isDirectory()) return null;
         let createdAt = stat.birthtimeMs;
+        let state = null;
         try {
           const meta = JSON.parse(readFileSync(path.join(dir, 'meta.json'), 'utf8'));
           if (meta.created_at) createdAt = new Date(meta.created_at).getTime();
+          state = meta.state ?? null;
         } catch {}
-        return { id, dir, createdAt };
+        return { id, dir, createdAt, state };
       } catch {
         return null;
       }
@@ -28,7 +31,7 @@ export function pruneRuns({ root = RUNS_DIR, keep = MAX_ARCHIVES } = {}) {
     .filter(Boolean)
     .sort((a, b) => b.createdAt - a.createdAt);
 
-  const excess = entries.slice(keep);
+  const excess = entries.filter((e) => e.state !== 'pending_approval').slice(keep);
   const deleted = [];
   for (const item of excess) {
     try {
@@ -37,6 +40,31 @@ export function pruneRuns({ root = RUNS_DIR, keep = MAX_ARCHIVES } = {}) {
     } catch {}
   }
   return deleted;
+}
+
+const APPROVAL_TTL_MS = 24 * 3600 * 1000;
+
+// Просроченный аппрув гасим сами: сутки без кнопки — state expired, worktree убирает onExpired.
+export function sweepExpiredApprovals({ root = RUNS_DIR, now = Date.now(), ttlMs = APPROVAL_TTL_MS, onExpired } = {}) {
+  if (!existsSync(root)) return [];
+  const expired = [];
+  for (const id of readdirSync(root)) {
+    const dir = path.join(root, id);
+    let meta;
+    try {
+      meta = JSON.parse(readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (meta.state !== 'pending_approval') continue;
+    const issued = new Date(meta.approval?.issued_at ?? 0).getTime();
+    if (!Number.isFinite(issued) || now - issued < ttlMs) continue;
+    const run = { id, dir };
+    patchRunMeta(run, { state: 'expired' });
+    try { onExpired?.(run); } catch { /* уборка не должна ронять обход */ }
+    expired.push(id);
+  }
+  return expired;
 }
 
 // Каталог рана. meta.json не для красоты: без него --judge-only не на чем работать.
@@ -52,6 +80,47 @@ export function createRun(action, { root = RUNS_DIR, keep = MAX_ARCHIVES } = {})
 export function saveArtifact(run, name, content) {
   const body = typeof content === 'string' ? content : JSON.stringify(content, null, 2) + '\n';
   writeFileSync(path.join(run.dir, name), body);
+}
+
+// Дописать поля в meta.json, не переписывая ран целиком. На этом держится состояние
+// рана (running/failed/done) и хвост resume/retry: без него упавший ран неотличим от живого.
+export function patchRunMeta(run, patch) {
+  const dir = run?.dir ?? (run?.id ? path.join(run.root ?? RUNS_DIR, run.id) : null);
+  if (!dir) return;
+  const file = path.join(dir, 'meta.json');
+  let meta = {};
+  try {
+    meta = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    // нет или битый meta — пишем только патч, ран всё равно нечитаем
+  }
+  writeFileSync(file, JSON.stringify({ ...meta, ...patch }, null, 2) + '\n');
+}
+
+export function setRunState(run, state) {
+  patchRunMeta(run, { state });
+}
+
+// Живой ли процесс рана. pid может переиспользоваться, поэтому вместе с ним смотрим
+// свежесть events.jsonl: молчащий ран без новых событий считаем завершённым.
+// ponytail: окно 5 минут; если понадобится точнее — сверять start time процесса.
+export function pidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function runIsActive(meta, dir, { now = Date.now(), staleMs = 300_000 } = {}) {
+  if (!meta?.pid || !pidAlive(meta.pid)) return false;
+  try {
+    return now - statSync(path.join(dir, 'events.jsonl')).mtimeMs < staleMs;
+  } catch {
+    return false;
+  }
 }
 
 // Поток событий на диск: по строке JSON на событие. На этом держатся и вкладка
@@ -95,9 +164,16 @@ export function listRuns({ root = RUNS_DIR, limit = MAX_ARCHIVES } = {}) {
           mr: meta.mr ?? null,
           issue: meta.issue ?? null,
           created_at: meta.created_at ?? statSync(dir).birthtime.toISOString(),
-          state: result ? 'done' : 'прерван',
+          // Явное состояние из meta, а не догадка по файлам: нужно, чтобы отличить
+          // живой ран от упавшего и показать код ошибки.
+          state: meta.state ?? (result ? 'done' : 'прерван'),
           decision: verdict?.decision ?? null,
           cost: verdict?.meta?.cost ?? 0,
+          error_code: meta.error?.code ?? null,
+          error_message: meta.error?.message ?? null,
+          worktree: meta.worktree ?? null,
+          pid: meta.pid ?? null,
+          resumable: Boolean(meta.session_id || meta.pre),
         };
       } catch {
         return null; // каталог без meta.json — ещё не ран

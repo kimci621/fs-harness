@@ -5,10 +5,8 @@ import { CliError } from './errors.js';
 
 // Чат с агентом: многоходовый диалог без своей машинерии сессий.
 //
-// Два транспорта, разница не в нашем удобстве, а в том, что умеют сами CLI:
-//   stream — claude и agy принимают --input-format stream-json: один живой процесс,
-//            NDJSON-строка на реплику, контекст держит сам агент. Id сессии не нужен.
-//   spawn  — pi потокового ввода не умеет: ход = отдельный процесс с тем же --session-id.
+// stream — claude и agy принимают --input-format stream-json: один живой процесс,
+//          NDJSON-строка на реплику, контекст держит сам агент. Id сессии не нужен.
 //
 // readOnly — режим «объясни, не трогай»: у каждого семейства свой флаг, общего нет.
 export const WIRE = {
@@ -29,13 +27,6 @@ export const WIRE = {
     line: (text) => `${JSON.stringify({ event: 'user', message: { role: 'user', content: text } })}\n`,
     parse: parseAgyLine,
   },
-  pi: {
-    mode: 'spawn',
-    args: ['-p'],
-    readOnly: null,
-    resume: (id) => ['--session-id', id],
-    parse: parseClaudeLine,
-  },
 };
 
 // Живой чат. onEvent получает {t:'activity'|'delta'|'answer'|'error', text}.
@@ -55,8 +46,8 @@ export function startChat({ agent, cwd, env, readOnly = false, onEvent = () => {
   let started = false; // была ли уже реплика: только со второй нужен resume
   let proc = null;
   let pending = null;
-  let turnText = ''; // текст хода для семейств без события result (pi печатает просто текстом)
-
+  let turnText = ''; // текст хода без события result
+ 
   const settle = (fn, value) => {
     const p = pending;
     pending = null;
@@ -91,7 +82,7 @@ export function startChat({ agent, cwd, env, readOnly = false, onEvent = () => {
       // Процесс умер, не ответив: реплика висла бы вечно, поэтому обрываем явно.
       if (e.t === 'done' || e.t === 'error') {
         if (wire.mode === 'stream') proc = null;
-        // Семейство без события result (pi) отвечает просто текстом — он и есть ответ хода.
+        // Ответ без события result (обычный текст) — он и есть ответ хода.
         if (e.ok && turnText) return void settle('resolve', turnText);
         settle('reject', new CliError(`Агент ${agent.name} закрылся, не ответив${e.code ? ` (код ${e.code})` : ''}.`, 1, 'agent_failed'));
       }

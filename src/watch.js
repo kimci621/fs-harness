@@ -113,7 +113,9 @@ export function daemonSecretIssues(cfg = {}, env = process.env) {
   const needed = [];
   const tg = cfg.telegram ?? {};
   // Токен в конфиге keychain не трогает — тогда и требовать его из env незачем.
-  if ((tg.chat_id || env.TELEGRAM_CHAT_ID) && !tg.bot_token) needed.push({ name: 'telegram', why: 'уведомления watcher' });
+  if ((tg.chat_id || env.TELEGRAM_CHAT_ID) && !tg.bot_token) {
+    needed.push({ name: 'telegram', why: tg.approvals ? 'бот и уведомления' : 'уведомления watcher' });
+  }
   for (const profile of cfg.judge?.roles?.['event-triage'] ?? []) {
     const p = cfg.judge?.profiles?.[profile];
     if (p?.secret) needed.push({ name: p.secret, why: `триаж событий (профиль ${profile})` });

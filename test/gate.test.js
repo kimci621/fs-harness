@@ -29,6 +29,8 @@ before(() => {
 
 after(() => rmSync(root, { recursive: true, force: true }));
 
+const metaOf = (run) => JSON.parse(readFileSync(path.join(root, 'runs', run.id, 'meta.json'), 'utf8'));
+
 const verdict = (decision) => ({
   decision, confidence: 0.9, summary: 'тест', findings: [], checks: [], next: { action: 'push', hint: '' },
 });
@@ -73,6 +75,10 @@ test('гейт: reject — publish не зовётся, worktree остаётс�
   await assert.rejects(() => run.result, (e) => e instanceof CliError && e.code === 'judge_rejected');
   assert.deepEqual(published, []);
   assert.ok(existsSync(dir), 'worktree снесён вместе с работой агента');
+  const meta = metaOf(run);
+  assert.equal(meta.state, 'failed');
+  assert.equal(meta.error.code, 'judge_rejected');
+  assert.equal(meta.pid, null);
 });
 
 test('гейт: approve — publish зовётся, worktree убран, события легли в журнал', async () => {
@@ -82,6 +88,9 @@ test('гейт: approve — publish зовётся, worktree убран, соб�
   assert.deepEqual(published, ['push']);
   assert.equal(res.decision, 'approve');
   assert.equal(existsSync(res.dir), false);
+  const meta = metaOf(run);
+  assert.equal(meta.state, 'done');
+  assert.equal(meta.pid, null);
 
   // Журнал рана переживает и уборку worktree, и закрытие процесса.
   const events = readEvents({ dir: path.join(root, 'runs', run.id) });
@@ -115,9 +124,18 @@ test('agent_failed: worktree с работой агента сохранён', a
   const run = runAction(spec(published), {}, {}, o);
   let dir;
   run.on((ev) => { if (ev.t === 'phase' && ev.phase === 'isolate' && ev.status === 'done') dir = ev.detail; });
-  await assert.rejects(() => run.result, (e) => e instanceof CliError && e.code === 'agent_failed');
+  let thrown;
+  await assert.rejects(() => run.result, (e) => { thrown = e; return e instanceof CliError && e.code === 'agent_failed'; });
   assert.deepEqual(published, []);
   assert.ok(existsSync(dir), 'worktree снесён вместе с работой агента');
+  // Ошибка несёт id рана: по нему CLI печатает resume/retry/ask в хвосте.
+  assert.equal(thrown.run, run.id);
+  assert.equal(thrown.runDir, path.join(root, 'runs', run.id));
+  const meta = metaOf(run);
+  assert.equal(meta.state, 'failed');
+  assert.equal(meta.error.code, 'agent_failed');
+  assert.equal(meta.error.phase, 'agent');
+  assert.equal(meta.pid, null);
 });
 
 // Судья по очереди: сначала revise, потом что скажут. Заодно считает свои заходы.

@@ -70,7 +70,7 @@ CLI-обёртка над `glab` для повседневной работы с
    **Коды выхода проверок.** `projects.<имя>.checks` — список команд проекта (например `["npm run lint", "npm run test"]`). После агента fsh прогоняет их сам в worktree и кладёт в факты `{cmd, exit_code, tail}` — судья по рубрике не верит словам агента, а своих кодов выхода у него до этого не было. Список пуст, нет `node_modules` или агент не менял код → в фактах стоит строка с причиной, и отсутствие кодов судью не блокирует. Таймаут на команду 20 минут.
 
    **Дифф решения, а не мержа.** `git diff base..HEAD` на мерж-коммите — это все коммиты target (живой случай: 188 коммитов, 13354 строки; судью обрезало, и конфликтующий файл в дифф не попал). Вместо этого `git merge-tree --write-tree` по тем же двум родителям даёт дерево механического слияния с маркерами, а `git diff <дерево> HEAD` — ровно то, что сделал агент (тот же случай: 83 строки, оба конфликтующих файла). `changed_files` считается по нему же. Мерж-коммита нет (агент ребейзнул) → откат на `base..HEAD` без заметок агента (`.claude/**`), но эта вырезка снимается, если конфликт в самих `.claude/**`.
-6. Судья (роль `acceptance`) получает цель, факты, дифф и текст агента. Вердикт `revise` возвращает работу агенту в ту же сессию (`claude --resume`, `pi --session-id`) вместе с находками, дальше факты и вердикт снимаются заново; повторов не больше `judge.maxRevise` (дефолт 1). **Push происходит только при `approve`**; любое другое решение, невалидный вердикт или падение бэкенда закрывают гейт: worktree сохраняется (как и при любом провале после запуска агента), коды `judge_rejected`, `judge_schema`, `judge_failed`. `--no-judge` отключает приёмку явно.
+6. Судья (роль `acceptance`) получает цель, факты, дифф и текст агента. Вердикт `revise` возвращает работу агенту в ту же сессию (`claude --resume`, `agy --conversation`) вместе с находками, дальше факты и вердикт снимаются заново; повторов не больше `judge.maxRevise` (дефолт 1). **Push происходит только при `approve`**; любое другое решение, невалидный вердикт или падение бэкенда закрывают гейт: worktree сохраняется (как и при любом провале после запуска агента), коды `judge_rejected`, `judge_schema`, `judge_failed`. `--no-judge` отключает приёмку явно.
 7. `publish`: `git push origin HEAD:<source>` с read-back проверкой, что origin встал на `head_sha`.
 8. Пайплайн build жмёт **fsh**, не агент: если head-пайплайн MR устарел (sha ≠ нового HEAD) — создать новый MR-пайплайн, найти build-джобу, запустить, дождаться, показать статус.
 9. **Гарантированная очистка** (finally): `git worktree remove --force` + `git worktree prune` + удаление временной ветки.
@@ -127,7 +127,7 @@ v1 (плоские `repo`, `host`, `projectDir`) мигрируется **в п�
 ```
 
 Готовые профили: `cc` (по умолчанию, подписка), `ccq` (Alibaba Qwen), `cco` (OpenRouter), `ccd`
-(DeepSeek), `pi`. Имя `claude` оставлено алиасом `cc`. Ключ читается из `keyFile` в момент запуска и
+(DeepSeek), `agy`. Имя `claude` оставлено алиасом `cc`. Ключ читается из `keyFile` в момент запуска и
 уходит в `ANTHROPIC_AUTH_TOKEN` — в конфиге его нет; файла нет → ошибка `secret_missing`.
 
 Выбор: `--agent <имя>` (или `--agent=<имя>`) > `projects.<имя>.agent` > дефолт действия. Незнакомое
@@ -333,6 +333,35 @@ sha после протухания станет заданием снова.
 POST — строка в логе рана, не ошибка действия. Заполнено только одно из двух полей — `doctor` об
 этом говорит; в чат он ничего не пишет.
 
+## Интерактивный гейт и бот
+
+`telegram.approvals: true` + непустой `telegram.allowed_user_ids` — гейт `pre-push` не пушит сам.
+После вердикта (любого, не только reject) ран останавливается: `meta.state = 'pending_approval'`,
+`meta.approval = {nonce, issued_at, run, action, chat_id, message_id}`, worktree сохраняется,
+`result.json` не пишется. В Telegram уходят кнопки `callback_data` вида
+`appr|rev|rej:<runId>:<nonce>` (≤64 байт; nonce — `randomUUID`, одноразовый: обнуляется в meta
+**до** начала publish/revise, чтобы упавшая попытка не оставила живую кнопку).
+
+- **Approve** → `fsh publish <runId>`: `sweepExpiredApprovals`, затем `state === pending_approval`,
+  вердикт `approve`, нет `result.json`, worktree существует; перепроверки `git rev-parse HEAD ===
+  meta.head_sha` и `ls-remote origin <source_branch>` (sha совпал — `already_published`), для
+  `conflict` — `git merge-tree` заново (`conflict_reappeared`, если target уехал). Только потом
+  `action.publish`. Успех: `result.json`, `state: done`, уборка worktree.
+- **Revise** → `fsh revise <runId>`: тот же worktree, `meta.session_id` через `SESSION_ARGS[family]`
+  (`--resume`/`--session-id`/`--conversation`), новая проверка судьи, при approvals снова
+  `pending_approval` с **новым** nonce; старый сообщению снимаются кнопки.
+- **Reject** → `state: rejected`, worktree убран, кнопки сняты.
+- **TTL сутки**: `sweepExpiredApprovals` в начале `publish`/`revise` и каждый цикл `fsh bot`.
+  Просроченный → `state: expired`, `onExpired` убирает worktree, повторный publish даёт
+  `approval_expired`. Раны в `pending_approval` не попадают в `pruneRuns` (иначе ретеншн на 50
+  съест ждущий кнопки).
+- **Бот** — `fsh bot`, long-polling `getUpdates` (timeout 25с), offset в
+  `~/.local/state/fs-harness/tgbot.json`; на старте один «снос» без offset (`timeout: 0`), чтобы
+  не переигрывать старые кнопки. Allowlist обязателен: без `allowed_user_ids` бот не стартует;
+  чужие `message.from.id` и `callback_query.from.id` → `{kind:'ignored'}` без ответа. Команды:
+  `/mrs`, `/watch`, `/status`, `/run <действие> <цель>` (с `yes: true`; при approvals гейт сам
+  остановит в pending, выключен — publish синхронно, присутствие человека и есть гейт).
+
 ## Архитектура
 
 ```
@@ -349,8 +378,11 @@ src/
   prompts.js     — шаблоны промптов: оверрайды, front-matter, строгие переменные
   secrets.js     — ключи: env → keychain → файл → .env бэкенда → ошибка с командой заведения
   notify.js      — исходящие уведомления в Telegram (Bot API, sendMessage)
+  tgbot.js       — двусторонний Telegram: getUpdates, inline-кнопки, allowlist, offset
+  publish.js     — publishRun/reviseRun: доигрывание pending_approval из meta.json
   watch.js       — снимок состояния MR, дифф с прошлым, триаж судьёй, проверка секретов демона
   queue.js       — очередь заданий watcher: ключ идемпотентности, TTL, чтение и уборка
+  commands/bot.js — fsh bot: демон long-polling, команды чата, кнопки appr/rev/rej
   agent/         — spawn (процесс агента), events (поток), journal (раны)
   judge/         — judge(), zod-схема вердикта, payload, провайдеры cli и openai
   tui/           — store (чистое состояние), app (ink + htm), index (старт и проверка TTY)

@@ -4,7 +4,16 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { reviewAction, loadRules, formatChanges } from '../src/actions/review.js';
+import {
+  reviewAction,
+  loadRules,
+  formatChanges,
+  buildDiffIndex,
+  buildPosition,
+  formatFindingComment,
+  formatFallbackComment,
+  formatSummaryComment,
+} from '../src/actions/review.js';
 import { analyzeAction, formatComments } from '../src/actions/analyze.js';
 import { runActionCLI } from '../src/engine.js';
 
@@ -81,6 +90,120 @@ test('analyze --dry-run: задача из Jira, ключ проверяется
 test('formatComments: пусто и с автором', () => {
   assert.equal(formatComments([]), 'Комментариев нет.');
   assert.match(formatComments([{ author: { displayName: 'PM' }, created: '2026-09-01T10:00:00.000+0300', body: ' текст ' }]), /\*\*PM\*\*[\s\S]*текст/);
+});
+
+test('buildDiffIndex & buildPosition: позиция для inline-дискуссии', () => {
+  const diff = `diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -10,3 +10,4 @@
+ context line
+-old line
++new line 1
++new line 2
+ context 2`;
+
+  const index = buildDiffIndex(diff);
+  assert.ok(index['src/a.ts']);
+  assert.equal(index['src/a.ts'].old_path, 'src/a.ts');
+
+  const diffRefs = { base_sha: 'b1', start_sha: 's1', head_sha: 'h1' };
+
+  // Добавленная строка
+  const posAdded = buildPosition(diffRefs, { file: 'src/a.ts', line: 11 }, index);
+  assert.deepEqual(posAdded, {
+    base_sha: 'b1',
+    start_sha: 's1',
+    head_sha: 'h1',
+    position_type: 'text',
+    new_path: 'src/a.ts',
+    old_path: 'src/a.ts',
+    new_line: 11,
+  });
+
+  // Контекстная строка требует и new_line, и old_line
+  const posContext = buildPosition(diffRefs, { file: 'src/a.ts', line: 10 }, index);
+  assert.deepEqual(posContext, {
+    base_sha: 'b1',
+    start_sha: 's1',
+    head_sha: 'h1',
+    position_type: 'text',
+    new_path: 'src/a.ts',
+    old_path: 'src/a.ts',
+    new_line: 10,
+    old_line: 10,
+  });
+
+  // Строка вне диффа
+  assert.equal(buildPosition(diffRefs, { file: 'src/a.ts', line: 99 }, index), null);
+  // Неизвестный файл
+  assert.equal(buildPosition(diffRefs, { file: 'src/unknown.ts', line: 1 }, index), null);
+  // Без diff_refs
+  assert.equal(buildPosition(null, { file: 'src/a.ts', line: 11 }, index), null);
+});
+
+test('formatFindingComment & formatSummaryComment', () => {
+  const finding = { file: 'src/a.ts', line: 11, severity: 'blocker', body: 'Ошибка контракта' };
+  assert.match(formatFindingComment(finding), /🚫 \*\*BLOCKER\*\*[\s\S]*Ошибка контракта/);
+  assert.match(formatFallbackComment(finding), /🚫 \*\*BLOCKER\*\* \(`src\/a\.ts`, строка 11\)[\s\S]*Ошибка контракта/);
+
+  const summary = formatSummaryComment({ summary: 'Всё хорошо' }, [
+    finding,
+    { file: 'src/a.ts', line: 12, severity: 'warning', body: 'Дублирование' },
+  ]);
+  assert.match(summary, /🤖 \*\*FS-Harness Code Review\*\*/);
+  assert.match(summary, /Всё хорошо/);
+  assert.match(summary, /🚫 \*\*BLOCKER\*\* 1/);
+  assert.match(summary, /⚠ \*\*WARNING\*\* 1/);
+});
+
+test('review publish: без --post молчит, с --post отправляет inline и саммари', async () => {
+  const diff = 'diff --git a/src/a.ts b/src/a.ts\n@@ -1,2 +1,2 @@\n context\n+new line\n';
+  const discussions = [];
+  const notes = [];
+  const g = {
+    createDiscussion: async (repo, iid, data) => {
+      discussions.push(data);
+      return { id: 'disc-' + discussions.length };
+    },
+    createNote: async (repo, iid, data) => {
+      notes.push(data);
+      return { id: notes.length };
+    },
+  };
+
+  const verdict = {
+    summary: 'Найдены проблемы',
+    findings: [
+      { file: 'src/a.ts', line: 2, severity: 'blocker', body: 'Блокер в строке 2' },
+      { file: 'src/a.ts', line: 99, severity: 'nit', body: 'Замечание вне диффа' },
+    ],
+  };
+
+  const ctx = { g, repo: 'r/repo' };
+  const target = { iid: 10, diff_refs: { base_sha: 'b', start_sha: 's', head_sha: 'h' } };
+  const pre = { diff };
+
+  // Без --post
+  const noPost = await reviewAction.action.publish({
+    ctx, opts: { post: false }, target, pre, verdict, say: () => {},
+  });
+  assert.deepEqual(noPost, { posted: false, discussions: 0, notes: 0 });
+  assert.equal(discussions.length, 0);
+  assert.equal(notes.length, 0);
+
+  // С --post
+  const posted = await reviewAction.action.publish({
+    ctx, opts: { post: true }, target, pre, verdict, say: () => {},
+  });
+  assert.equal(posted.posted, true);
+  assert.equal(posted.discussions, 1);
+  assert.equal(posted.notes, 2); // 1 фолбэк для строки 99 + 1 саммари
+  assert.equal(discussions.length, 1);
+  assert.equal(discussions[0].position.new_line, 2);
+  assert.match(discussions[0].body, /🚫 \*\*BLOCKER\*\*/);
+  assert.match(notes[0], /💬 \*\*NIT\*\* \(`src\/a\.ts`, строка 99\)/);
+  assert.match(notes[1], /🤖 \*\*FS-Harness Code Review\*\*/);
 });
 
 process.on('exit', () => rmSync(project, { recursive: true, force: true }));

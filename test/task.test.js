@@ -127,7 +127,7 @@ test('task push --post: сообщение в Mattermost уходит тольк
   const res = await cmdTask(ctx, ['push'], { asObject: true, yes: true, post: true });
   assert.deepEqual(posts, [{
     channel: 'hn3e14mhebg9jmo5kmnzgbcque',
-    message: '• MR !7: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
+    message: 'старый\n• MR !7: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
   }]);
   assert.equal(res.posted.scenario, 'review');
 });
@@ -147,6 +147,77 @@ test('task push: с защищённой ветки и без коммитов �
   await assert.rejects(
     () => cmdTask(ctxWith(), ['push'], { asObject: true, yes: true }),
     (e) => e.code === 'no_commit',
+  );
+});
+
+test('task submit: снимает черновик, переводит Jira, пишет в Mattermost', async () => {
+  const posts = [];
+  const updates = [];
+  const moved = [];
+  let done = false;
+  const ctx = ctxWith({ mrs: [{ iid: 7, title: 'Draft: FD-1: Починить', web_url: 'https://gl/mr/7' }], posts });
+  ctx.g.updateMR = async (repo, iid, fields) => { updates.push({ iid, fields }); return { iid, title: fields.title, web_url: 'https://gl/mr/7' }; };
+  ctx.jira = () => ({
+    transitions: async () => ({ transitions: [{ id: '31', name: 'В ревью', to: { name: 'Ревью' } }] }),
+    issue: async () => ({ key: 'FD-1', names: {}, fields: { summary: 'Починить', status: { name: done ? 'Ревью' : 'В работе' } } }),
+    transition: async (key, id) => { moved.push({ key, id }); done = true; },
+  });
+
+  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+  assert.equal(res.draft_removed, true);
+  assert.deepEqual(updates, [{ iid: 7, fields: { title: 'FD-1: Починить' } }]);
+  assert.deepEqual(moved, [{ key: 'FD-1', id: '31' }]);
+  assert.deepEqual(res.jira, { from: 'В работе', to: 'Ревью', transition: 'В ревью' });
+  assert.deepEqual(posts, [{
+    channel: 'hn3e14mhebg9jmo5kmnzgbcque',
+    message: 'FD-1: Починить\n• MR !7: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
+  }]);
+});
+
+test('task submit: обязательные поля перехода — отказ с подсказкой, MR не трогаем', async () => {
+  const updates = [];
+  const ctx = ctxWith({ mrs: [{ iid: 7, title: 'Draft: FD-1: Починить', web_url: 'https://gl/mr/7' }] });
+  ctx.g.updateMR = async (...a) => { updates.push(a); };
+  ctx.jira = () => ({
+    transitions: async () => ({ transitions: [{ id: '31', name: 'В ревью', to: { name: 'Ревью' }, fields: { customfield_1: { required: true, name: 'Контент' } } }] }),
+    issue: async () => ({ key: 'FD-1', names: {}, fields: { summary: 'Починить', status: { name: 'В работе' } } }),
+    transition: async () => { throw new Error('переход не должен случиться'); },
+  });
+
+  await assert.rejects(
+    () => cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true }),
+    (e) => e.code === 'jira_fields_missing' && /Контент/.test(e.message) && /jira field FD-1/.test(e.message),
+  );
+  assert.deepEqual(updates, [], 'черновик снят, хотя Jira не перевелась');
+});
+
+test('task submit: MR ищется по ветке задачи, даже если чекаут на dev', async () => {
+  git(['switch', 'dev']);
+  const seen = [];
+  let moved = false;
+  const ctx = ctxWith();
+  ctx.g.listOpenMRs = async (repo, params) => {
+    seen.push(params.source_branch);
+    return params.source_branch === 'feature/FD-1' ? [{ iid: 9, title: 'Draft: FD-1: Починить', web_url: 'https://gl/mr/9' }] : [];
+  };
+  ctx.g.updateMR = async (repo, iid, fields) => ({ iid, title: fields.title, web_url: 'https://gl/mr/9' });
+  ctx.jira = () => ({
+    transitions: async () => ({ transitions: [{ id: '31', name: 'В ревью', to: { name: 'Ревью' } }] }),
+    issue: async () => ({ key: 'FD-1', names: {}, fields: { summary: 'Починить', status: { name: moved ? 'Ревью' : 'В работе' } } }),
+    transition: async () => { moved = true; },
+  });
+
+  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+  assert.equal(res.mr.iid, 9);
+  assert.equal(res.branch, 'feature/FD-1');
+  assert.ok(seen.includes('feature/FD-1'), 'MR не искали по ветке задачи');
+});
+
+test('task submit: без открытого MR — no_mr', async () => {
+  const ctx = ctxWith({ mrs: [] });
+  await assert.rejects(
+    () => cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true }),
+    (e) => e.code === 'no_mr',
   );
 });
 
