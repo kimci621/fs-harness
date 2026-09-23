@@ -13,7 +13,7 @@ description: Заполнить обязательные поля задачи �
 контексту сессии. Вызови скилл, сохрани результат в файл и положи его в поле:
 
 ```
-fsh jira field FD-XXXX "Technical details for QA" --file qa.md
+fsh jira field FD-XXXX "Technical details for QA" --file qa.md -y
 ```
 
 `--file` обязателен: инструкция многострочная, в аргументах командной строки она теряет переводы
@@ -53,14 +53,14 @@ fsh growthbook create имя-флага off
 Собери обе части в один файл и запиши:
 
 ```
-fsh jira field FD-XXXX "Контент" --file content.txt
+fsh jira field FD-XXXX "Контент" --file content.txt -y
 ```
 
 Словарь удобнее отдавать контент-менеджеру ещё и файлом — `--attach` кладёт тот же `--file` в поле
 текстом и прикладывает его к задаче вложением за один вызов:
 
 ```
-fsh jira field FD-XXXX "Контент" --file content.csv --attach
+fsh jira field FD-XXXX "Контент" --file content.csv --attach -y
 ```
 
 Отдельно вложения живут так: `fsh jira attach FD-XXXX` — что уже приложено,
