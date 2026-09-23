@@ -90,7 +90,9 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
 
     comments: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/comment?maxResults=50`),
 
-    transitions: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/transitions`),
+    // expand=transitions.fields: без него в переходе не видно обязательных полей экрана,
+    // и submit не может сказать, чего не хватает, до POST.
+    transitions: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/transitions?expand=transitions.fields`),
 
     // Запись 1. Ответ пустой (204), новый статус проверяем чтением.
     transition: (key, id) =>

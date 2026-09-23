@@ -15,9 +15,13 @@ export function finish(json, obj) {
 }
 
 // Структурированная ошибка для агентов: {ok:false, error:{code, message}}.
+// Упавший ран добавляет run/run_dir — по ним агент зовёт resume/retry/ask.
 export function formatErrorJSON(err) {
   const code = err?.code && typeof err.code === 'string' ? err.code : 'error';
-  return JSON.stringify({ ok: false, error: { code, message: String(err?.message || err) } }, null, 2);
+  const error = { code, message: String(err?.message || err) };
+  if (err?.run) error.run = err.run;
+  if (err?.runDir) error.run_dir = err.runDir;
+  return JSON.stringify({ ok: false, error }, null, 2);
 }
 
 // JSON-представление джобы в результатах.

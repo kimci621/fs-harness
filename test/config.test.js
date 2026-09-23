@@ -10,7 +10,7 @@ const V1 = {
   repo: 'group/app',
   host: 'gitlab.example',
   projectDir: '~/Projects/app-frontend',
-  agent: 'pi',
+  agent: 'cco',
   agentArgs: { claude: ['--flag'] },
   jira: { baseUrl: 'https://j.example', email: 'me@e.st' },
   judge: { roles: { acceptance: ['haiku-cli'] } },
@@ -21,7 +21,7 @@ const V2 = {
   activeProject: 'app',
   projects: {
     app: { repo: 'group/app', host: 'gitlab.example', dir: '~/app', jira: { baseUrl: 'https://j.example' } },
-    other: { repo: 'group/other', host: 'gitlab.example', dir: '~/other', agent: 'pi', deps: { strategy: 'none' } },
+    other: { repo: 'group/other', host: 'gitlab.example', dir: '~/other', agent: 'cco', deps: { strategy: 'none' } },
   },
 };
 
@@ -42,7 +42,7 @@ test('миграция v1: имя проекта из каталога, поля
   assert.equal(v2.activeProject, 'app-frontend');
   assert.deepEqual(v2.projects['app-frontend'].repo, 'group/app');
   assert.equal(v2.projects['app-frontend'].dir, '~/Projects/app-frontend');
-  assert.equal(v2.projects['app-frontend'].agent, 'pi');
+  assert.equal(v2.projects['app-frontend'].agent, 'cco');
   assert.equal(v2.projects['app-frontend'].jira.baseUrl, 'https://j.example');
   // Общие настройки остаются наверху, а не растекаются по проектам.
   assert.deepEqual(v2.agentArgs, V1.agentArgs);
@@ -62,10 +62,10 @@ test('v1-конфиг читается как раньше: плоские по�
     assert.equal(cfg.repo, 'group/app');
     assert.equal(cfg.host, 'gitlab.example');
     assert.equal(cfg.projectDir, '~/Projects/app-frontend');
-    assert.equal(cfg.agent, 'pi');
+    assert.equal(cfg.agent, 'cco');
     assert.equal(cfg.jira.email, 'me@e.st');
     assert.deepEqual(cfg.judge.roles.acceptance, ['haiku-cli']);
-    assert.deepEqual(cfg.agentArgs.pi, []); // дефолт не потерялся
+    assert.deepEqual(cfg.agentArgs.claude, ['--flag']);
   });
 });
 
@@ -76,7 +76,7 @@ test('v2: -P переключает проект, его deps перебиваю
     assert.equal(active.workspace.deps.strategy, 'clone');
 
     const other = loadConfig({}, { file, project: 'other' });
-    assert.deepEqual([other.activeProject, other.repo, other.agent], ['other', 'group/other', 'pi']);
+    assert.deepEqual([other.activeProject, other.repo, other.agent], ['other', 'group/other', 'cco']);
     assert.equal(other.workspace.deps.strategy, 'none');
 
     const byEnv = loadConfig({ FS_HARNESS_PROJECT: 'other' }, { file });

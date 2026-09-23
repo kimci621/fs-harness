@@ -94,10 +94,12 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
   };
 }
 
-// Сообщение о том, что задача уехала в ревью. Формат задан владельцем дословно —
-// две строки списком, MR первым: в канале читают именно ссылку на MR.
-export function reviewMessage({ iid, mrUrl, key, issueUrl }) {
+// Сообщение о том, что задача уехала в ревью. Первой строчкой — заголовок задачи (как в GitLab),
+// затем ссылки на MR и Jira.
+export function reviewMessage({ iid, mrUrl, key, issueUrl, title }) {
   const lines = [];
+  const cleanTitle = String(title ?? '').replace(/^\s*(draft|wip):\s*/i, '').trim();
+  if (cleanTitle) lines.push(cleanTitle);
   if (iid && mrUrl) lines.push(`• MR !${iid}: ${mrUrl}`);
   if (key && issueUrl) lines.push(`• Jira ${key} ${issueUrl}`);
   if (!lines.length) throw new CliError('Нечего отправлять: нет ни MR, ни задачи.', 1, 'usage');

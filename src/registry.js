@@ -9,6 +9,7 @@ import { ciFixAction } from './actions/ci-fix.js';
 import { threadsAction } from './actions/threads.js';
 import { reviewAction } from './actions/review.js';
 import { analyzeAction } from './actions/analyze.js';
+import { implementAction } from './actions/implement.js';
 import { runActionCLI } from './engine.js';
 import { cmdCommit } from './commands/commit.js';
 import { cmdDoctor } from './commands/doctor.js';
@@ -21,6 +22,12 @@ import { cmdFlow } from './commands/flow.js';
 import { cmdInit } from './commands/init.js';
 import { cmdWatch, cmdWatchDaemon, cmdWatchInstall } from './commands/watch.js';
 import { cmdQueue } from './commands/queue.js';
+import { cmdRuns } from './commands/runs.js';
+import { cmdRetry } from './commands/retry.js';
+import { cmdResume } from './commands/resume.js';
+import { cmdPublish } from './commands/publish.js';
+import { cmdRevise } from './commands/revise.js';
+import { cmdBot } from './commands/bot.js';
 import { cmdMM } from './commands/mm.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
@@ -196,6 +203,7 @@ export const COMMANDS = [
   fromAction(threadsAction),
   fromAction(reviewAction),
   fromAction(analyzeAction),
+  fromAction(implementAction),
   {
     name: 'jira',
     usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|field <KEY> "<поле>" <значение>|attach <KEY> [файл...]|attach get <KEY> [имя]|create <ПРОЕКТ> <тип> <summary>|delete <KEY>]',
@@ -213,17 +221,19 @@ export const COMMANDS = [
   },
   {
     name: 'task',
-    usage: 'task start <KEY> | task push [KEY] [--target <ветка>] | task judge [KEY]',
-    description: 'Взять задачу в работу (ветка feature/<KEY> от целевой), запушить её с открытием MR, показать приёмку судьи',
+    usage: 'task start <KEY> | task push [KEY] [--target <ветка>] | task submit [KEY] [--status <имя>] | task judge [KEY]',
+    description: 'Взять задачу в работу (ветка feature/<KEY> от целевой), запушить её с открытием MR, отправить в ревью команде, показать приёмку судьи',
     example: 'fsh task start FD-7719',
     run: (ctx, args, opts) => cmdTask(ctx, args, opts),
     mcp: {
+      // submit намеренно вне MCP: он пишет в общий канал Mattermost, а MCP-вызовы идут
+      // с yes:true мимо человека. Отправка в ревью — решение человека (CLI/TUI).
       description: 'start: читает задачу Jira и ставит рабочее дерево на ветку по шаблону проекта (по умолчанию feature/<KEY>), создавая её от целевой ветки. push: пушит текущую ветку в origin и открывает MR в целевую ветку (по умолчанию dev), либо возвращает уже открытый. judge: судья сверяет дифф ветки с текстом задачи и возвращает вердикт (совет, ничего не блокирует). start и push меняют git-репозиторий и GitLab.',
       inputSchema: {
         type: 'object',
         properties: {
           sub: { type: 'string', enum: ['start', 'push', 'judge'] },
-          key: { type: 'string', description: 'ключ задачи (FD-7719); для push необязателен, берётся из имени ветки' },
+          key: { type: 'string', description: 'ключ задачи (FD-7719); для push/judge необязателен, берётся из имени ветки' },
           target: { type: 'string', description: 'целевая ветка MR, по умолчанию dev' },
           dir: { type: 'string', description: 'каталог репозитория' },
         },
@@ -262,7 +272,7 @@ export const COMMANDS = [
     name: 'commit',
     usage: 'commit [--agent]',
     description: 'Сформировать и сделать коммит по паттерну (агент, без push)',
-    example: 'fsh commit --agent pi',
+    example: 'fsh commit --agent cco',
     run: (ctx, args, opts) => {
       const agent = opts.agent || ctx.cfg.agent;
       return cmdCommit(args, {
@@ -280,7 +290,7 @@ export const COMMANDS = [
         type: 'object',
         properties: {
           dir: { type: 'string', description: 'каталог репозитория (по умолчанию текущий)' },
-          agent: { type: 'string', description: 'профиль агента из конфига (cc, ccq, cco, ccd, pi)' },
+          agent: { type: 'string', description: 'профиль агента из конфига (cc, ccq, cco, ccd, agy)' },
         },
       },
       call: (ctx, a) => {
@@ -397,6 +407,75 @@ export const COMMANDS = [
     description: 'Очередь заданий watcher: что требует работы (исполнителя пока нет — запускает человек)',
     example: 'fsh queue',
     run: (ctx, args, opts) => cmdQueue(ctx, args, opts),
+  },
+  {
+    name: 'runs',
+    usage: 'runs [show <runId>]',
+    description: 'Архив ранов действий: состояние, код ошибки, worktree; show — подробности рана',
+    example: 'fsh runs show conflict-m1a2b-3c4d',
+    run: (ctx, args, opts) => cmdRuns(ctx, args, opts),
+    mcp: {
+      description: 'Архив запусков действий: id, действие, цель, состояние (running/failed/done), код ошибки. show <runId> — ошибка, worktree, сессия, артефакты, хвост журнала. id упавшего рана нужен для retry/resume/ask. Только чтение.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sub: { type: 'string', enum: ['list', 'show'], default: 'list' },
+          run: { type: 'string', description: 'id рана (для show)' },
+        },
+        additionalProperties: false,
+      },
+      call: (ctx, a) => cmdRuns(ctx, [a.sub ?? 'list', a.run].filter(Boolean), { json: true, asObject: true }),
+    },
+  },
+  {
+    name: 'retry',
+    usage: 'retry <runId>',
+    description: 'Повторить упавший ран с нуля: то же действие и цель, новый worktree и сессия',
+    example: 'fsh retry conflict-m1a2b-3c4d',
+    run: (ctx, args, opts) => cmdRetry(ctx, args, opts),
+    mcp: {
+      description: 'Повторить действие по упавшему рану с нуля: то же действие и та же цель, новый worktree и новая сессия агента. Меняет код и GitLab. runId берётся из fsh runs.',
+      inputSchema: {
+        type: 'object',
+        properties: { run: { type: 'string', description: 'id упавшего рана' } },
+        required: ['run'],
+      },
+      call: (ctx, a) => cmdRetry(ctx, [a.run], { json: true, asObject: true, quiet: true, yes: true, onTick: ctx.notify }),
+    },
+  },
+  {
+    name: 'resume',
+    usage: 'resume <runId> [--message <текст>]',
+    description: 'Продолжить упавший ран: тот же worktree и сессия агента, затем приёмка и push',
+    example: 'fsh resume conflict-m1a2b-3c4d --message "поправил версию пакета"',
+    // MCP-инструмента намеренно нет: resume спавнит агента и пушит по устаревшему
+    // контексту, а MCP-вызовы идут с yes: true мимо человека.
+    run: (ctx, args, opts) => cmdResume(ctx, args, opts),
+  },
+  {
+    name: 'publish',
+    usage: 'publish <runId> [--dry-run]',
+    description: 'Доопубликовать упавший на push/build ран: работа агента и вердикт судьи уже есть, повторный запуск не нужен',
+    example: 'fsh publish implement-muciom5o-8s41 --dry-run',
+    // MCP-инструмента намеренно нет: publish пишет в GitLab по решению человека,
+    // а MCP-вызовы идут с yes: true мимо него.
+    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdPublish(ctx, args, opts)),
+  },
+  {
+    name: 'revise',
+    usage: 'revise <runId> [--message <текст>]',
+    description: 'Доделать ран в той же сессии агента (кнопка Revise из Telegram), потом заново судья',
+    example: 'fsh revise conflict-m1a2b-3c4d --message "поправь обработку ошибки"',
+    // Без MCP: спавнит агента и пишет по решению человека, как resume/publish.
+    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdRevise(ctx, args, opts)),
+  },
+  {
+    name: 'bot',
+    usage: 'bot',
+    description: 'Telegram-бот (long-polling): /mrs /watch /status /run и кнопки Approve/Revise/Reject. Запускать вручную или из юнита, как watch --daemon',
+    example: 'fsh bot',
+    // Демон ходит по конфигу сам; MCP-инструмента нет — бот и есть поверхность человека.
+    run: (ctx, args, opts) => cmdBot(opts),
   },
   {
     name: 'tui',

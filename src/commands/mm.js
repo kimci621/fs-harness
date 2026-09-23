@@ -115,13 +115,22 @@ async function review(ctx, [maybeKey], opts) {
   if (!mr) {
     throw new CliError(`Из ветки ${branch} нет открытого MR: сначала fsh task push.`, 1, 'no_mr');
   }
-  return postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key: maybeKey || keyFromBranch(branch) }, opts);
+  return postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key: maybeKey || keyFromBranch(branch), title: mr.title }, opts);
 }
 
 // Общая точка сценария: зовут и `fsh mm review`, и `fsh task push --post`.
 // --channel подменяет канал разово: проверить формат в личке, не трогая общий чат.
-export async function postReview(ctx, { iid, mrUrl, key }, opts = {}) {
-  const text = reviewMessage({ iid, mrUrl, key, issueUrl: key ? issueUrl(ctx, key) : '' });
+export async function postReview(ctx, { iid, mrUrl, key, title }, opts = {}) {
+  let mrTitle = title;
+  if (!mrTitle && iid && ctx.g?.getMR) {
+    try {
+      const mr = await ctx.g.getMR(ctx.repo, iid);
+      mrTitle = mr?.title;
+    } catch {
+      // игнорируем ошибку получения MR
+    }
+  }
+  const text = reviewMessage({ iid, mrUrl, key, issueUrl: key ? issueUrl(ctx, key) : '', title: mrTitle });
   return send(ctx, resolveChannel(ctx.cfg, opts.channel || 'review'), text, opts);
 }
 

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { threadsAction } from '../src/actions/threads.js';
 import { conflictAction } from '../src/actions/conflict.js';
 import { ciFixAction } from '../src/actions/ci-fix.js';
+import { implementAction } from '../src/actions/implement.js';
 import { runAction, runActionCLI, judgeRun } from '../src/engine.js';
 import { readEvents } from '../src/agent/journal.js';
 import { CliError } from '../src/errors.js';
@@ -120,6 +121,16 @@ before(() => {
   ].join('\n'));
   agent('conflict-idle', [
     'echo \'{"type":"result","subtype":"success","result":"я ничего не делал"}\'',
+  ].join('\n'));
+  agent('implement-plan-bot', [
+    // Планировщик: claude family, отдаёт план текстом через result stream-json.
+    'echo \'{"type":"result","subtype":"success","result":"## План\\n1. поправить app.txt"}\'',
+  ].join('\n'));
+  agent('implement-exec-bot', [
+    // Исполнитель: agy family, правит файл, коммитит, отчитывается.
+    "printf 'source\\nреализация\\n' > app.txt",
+    'git add -A && git commit -m "feat: реализация" >/dev/null',
+    'echo \'{"event":"result","result":{"response":"сделано по плану","status":"SUCCESS"}}\'',
   ].join('\n'));
   agent('conflict-agy', [
     'git merge --no-edit origin/target >/dev/null 2>&1 || true',
@@ -462,4 +473,70 @@ test('ci-fix: судья reject — фикс не запушен, джоба н�
   );
   assert.equal(originSha('ci-src'), before, 'push прошёл без approve');
   assert.deepEqual(calls.retried, []);
+});
+
+// implement: план (claude) → код (agy) → судья approve → push ветки задачи + черновик MR.
+const ISSUE = { key: 'FD-1', fields: { summary: 'Починить кнопку', description: 'кнопка не жмётся', status: { name: 'В работе' } } };
+
+test('implement: план → код → approve → push ветки задачи и черновик MR', async () => {
+  const created = [];
+  const { g } = makeG({
+    listOpenMRs: async () => [],
+    createMR: async (repo, fields) => { created.push(fields); return { iid: 42, title: fields.title, web_url: 'http://x/mr/42' }; },
+    updateMR: async () => { throw new Error('updateMR звать не должны: MR новый'); },
+  });
+  const ctx = { g, repo: 'r/r', jira: () => ({ issue: async () => ISSUE, comments: async () => ({ comments: [] }) }) };
+  const o = opts({
+    agent: 'implement-exec-bot', makeProvider: fakeJudge('approve'),
+  });
+  o.cfg.agents.opus = { bin: path.join(bin, 'implement-plan-bot') }; // планировщик — профиль opus
+  o.cfg.agents['implement-exec-bot'] = { bin: path.join(bin, 'implement-exec-bot'), family: 'agy' };
+  o.cfg.judge.roles['task-review'] = ['fake'];
+  o.cfg.targetBranch = 'target';
+  o.cfg.branchPattern = 'feature/{key}';
+  o.cfg.jira = { baseUrl: 'https://j.example' };
+
+  const res = await runActionCLI(implementAction, ctx, ['FD-1'], o);
+
+  assert.equal(res.ok, true);
+  assert.equal(res.issue, 'FD-1');
+  assert.equal(res.branch, 'feature/FD-1');
+  assert.equal(res.mr.iid, 42);
+  assert.equal(res.mr.draft, true);
+  assert.equal(created[0].source_branch, 'feature/FD-1');
+  assert.equal(created[0].target_branch, 'target');
+  assert.equal(created[0].title, 'Draft: FD-1: Починить кнопку');
+  assert.equal(originSha('feature/FD-1'), res.head_sha, 'ветка задачи не дошла до origin');
+
+  // Планировщик реально отработал: план сохранён и попал в промпт исполнителя.
+  const plan = readFileSync(path.join(runsRoot, res.run, 'plan.md'), 'utf8');
+  assert.match(plan, /поправить app\.txt/);
+  assert.match(readFileSync(path.join(runsRoot, res.run, 'prompt.md'), 'utf8'), /поправить app\.txt/);
+  const meta = JSON.parse(readFileSync(path.join(runsRoot, res.run, 'meta.json'), 'utf8'));
+  assert.equal(meta.plan_agent, 'opus');
+  const phases = readEvents({ dir: path.join(runsRoot, res.run) }).filter((e) => e.t === 'phase' && e.status === 'done').map((e) => e.phase);
+  assert.ok(phases.includes('plan'), 'фазы plan нет в журнале');
+  assert.ok(phases.indexOf('plan') < phases.indexOf('prompt'), 'план должен идти до промпта исполнителя');
+});
+
+test('implement: судья reject — ветка не запушена, MR не создан', async () => {
+  const created = [];
+  const { g } = makeG({
+    listOpenMRs: async () => [],
+    createMR: async (repo, fields) => { created.push(fields); return { iid: 42, title: fields.title, web_url: 'http://x/mr/42' }; },
+  });
+  const ctx = { g, repo: 'r/r', jira: () => ({ issue: async () => ISSUE, comments: async () => ({ comments: [] }) }) };
+  const o = opts({ agent: 'implement-exec-bot', makeProvider: fakeJudge('reject') });
+  o.cfg.agents.opus = { bin: path.join(bin, 'implement-plan-bot') }; // планировщик — профиль opus
+  o.cfg.agents['implement-exec-bot'] = { bin: path.join(bin, 'implement-exec-bot'), family: 'agy' };
+  o.cfg.judge.roles['task-review'] = ['fake'];
+  o.cfg.targetBranch = 'target';
+  o.cfg.branchPattern = 'feature/{key}';
+  o.cfg.jira = { baseUrl: 'https://j.example' };
+
+  await assert.rejects(
+    () => runActionCLI(implementAction, ctx, ['FD-1'], o),
+    (e) => e instanceof CliError && e.code === 'judge_rejected',
+  );
+  assert.equal(created.length, 0, 'MR создан без approve');
 });

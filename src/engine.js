@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createEventStream } from './agent/events.js';
 import { parseClaudeLine, parseAgyLine } from './agent/stream.js';
-import { createRun, saveArtifact, readRun, appendEvent } from './agent/journal.js';
+import { createRun, saveArtifact, readRun, appendEvent, patchRunMeta, runIsActive } from './agent/journal.js';
 import { spawnAgent } from './agent/spawn.js';
 import { renderTemplate } from './prompts.js';
 import { judge, isApproved, formatVerdict } from './judge/index.js';
@@ -11,24 +12,24 @@ import { buildAcceptancePayload } from './judge/payload.js';
 import { resolveMR } from './resolve.js';
 import { ISSUE_KEY } from './jira.js';
 import { expandHome } from './config.js';
-import { acquireWorkspace, MODES as ISOLATION_MODES } from './workspace.js';
+import { acquireWorkspace, reopenRunWorkspace, MODES as ISOLATION_MODES } from './workspace.js';
 import { resolveAgent } from './agents.js';
 import { confirm } from './ui.js';
 import { makeLogger, finish } from './output.js';
 import { fmtDuration, hhmmss } from './format.js';
 import { getTelegramTarget, postTelegram, runMessage } from './notify.js';
+import { approvalNonce, sendApprovalRequest } from './tgbot.js';
 import { CliError } from './errors.js';
 
 export { ISOLATION_MODES };
 export const JUDGE_GATES = ['pre-push', 'advisory', 'none'];
 
-// Как агент продолжает свою же сессию: claude резюмит по --resume, pi — тем же --session-id.
+// Как агент продолжает свою же сессию: claude резюмит по --resume, agy — по --conversation.
 // Агента вне списка на доделку не зовём: без сессии он начал бы с нуля и затёр бы сделанное.
 // Сессия нужна, чтобы доделка после revise шла в тот же диалог, а не с чистого листа.
 // Ключ — семейство агента: cc, ccq, cco, ccd это один и тот же Claude Code.
 export const SESSION_ARGS = {
   claude: { start: (id) => ['--session-id', id], resume: (id) => ['--resume', id] },
-  pi: { start: (id) => ['--session-id', id], resume: (id) => ['--session-id', id] },
   agy: { start: () => [], resume: (id) => ['--conversation', id] },
 };
 
@@ -45,6 +46,107 @@ export function reviseMessage(verdict) {
   ].filter(Boolean).join('\n');
 }
 
+// Что агент получает при доигрывании упавшего рана: тот же worktree, но сессия могла
+// оборваться до init. Поэтому явно просим свериться с состоянием дерева, а не с памятью.
+export function resumeMessage(error, extra) {
+  const why = error ? `${error.code ? `[${error.code}] ` : ''}${error.message ?? ''}` : 'ран был прерван';
+  return [
+    `Прошлый запуск прервался: ${why}`,
+    'Worktree тот же, твои правки на месте. Посмотри `git status` и `git diff`, продолжи с места остановки и закоммить.',
+    'Push и force-push по-прежнему запрещены — их делает fs-harness после приёмки.',
+    extra ? `\nУточнение от человека: ${extra}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+// Снимок precheck в meta.json. Кладём всё, что читают verify/publish/result при
+// доигрывании, и выкидываем только то, что resume пересоздаёт сам (workspace) или что
+// нужно лишь фазе context, которая на resume не зовётся (дифф ветки, блок логов джоб).
+const PRE_DROP = ['workspace', 'result', 'branch_diff', 'job_logs'];
+export function slimPre(pre) {
+  if (!pre) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(pre)) if (!PRE_DROP.includes(k)) out[k] = v;
+  return out;
+}
+
+// Запуск агента в worktree. resume — продолжение сессии (revise), иначе новый ход.
+// x несёт opts, ws, ctx, signal, emit, say, phase, sessions: так revise зовёт тот же код, что ран.
+export async function spawnSession(x, text, { resume = false, agentName, sessionKey = 'main' } = {}) {
+  const opts = x.opts ?? {};
+  const ws = x.ws;
+  const ctx = x.ctx ?? {};
+  const emit = x.emit ?? (() => {});
+  const agent = resolveAgent(opts.cfg, agentName ?? opts.agent);
+  const session = SESSION_ARGS[agent.family];
+  x.sessions ??= {};
+  if (session && !x.sessions[sessionKey] && agent.family !== 'agy') x.sessions[sessionKey] = randomUUID();
+  const sid = x.sessions[sessionKey];
+  const sessionArgs = session ? (resume && sid ? session.resume(sid) : session.start(sid)) : [];
+  const isAgy = agent.family === 'agy';
+  const streamJson = isAgy || (agent.family === 'claude' && !agent.args.includes('--output-format'));
+  const extraArgs =
+    isAgy ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '-p=']
+    : streamJson ? ['--output-format', 'stream-json', '--verbose', '-p']
+    : ['-p'];
+  const input =
+    isAgy
+      ? `${JSON.stringify({ event: 'user', message: { role: 'user', content: text } })}\n`
+      : text;
+
+  x.phase?.('agent', 'start', agent.name);
+  x.say?.(`🤖 ${resume ? 'Возвращаю задачу' : 'Запускаю'} ${agent.name}…`);
+  const startedAt = Date.now();
+  const proc = spawnAgent({
+    bin: agent.bin,
+    args: [...agent.args, ...sessionArgs, ...extraArgs],
+    input,
+    cwd: ws.dir,
+    env: { ...process.env, ...agent.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo ?? '' },
+    signal: x.signal,
+  });
+  const out = [];
+  let resultText = null;
+  proc.events.on((ev) => {
+    if (ev.t !== 'log') return;
+    if (ev.stream === 'stdout' && streamJson) {
+      const { activity, result, passthrough, session: sess } = isAgy ? parseAgyLine(ev.text) : parseClaudeLine(ev.text);
+      if (sess && !x.sessions[sessionKey]) x.sessions[sessionKey] = sess;
+      if (result !== null) {
+        resultText = result;
+        return;
+      }
+      if (activity) {
+        emit({ t: 'log', stream: 'activity', text: activity });
+        return;
+      }
+      if (passthrough) {
+        out.push(passthrough);
+        emit({ t: 'log', stream: 'stdout', text: passthrough });
+      }
+      return;
+    }
+    if (ev.stream === 'stdout') out.push(ev.text);
+    emit({ t: 'log', stream: ev.stream, text: ev.text });
+  });
+  let done;
+  try {
+    done = await proc.result;
+  } catch (err) {
+    throw new CliError(`Не удалось запустить ${agent.name}: ${err.message}`, 1, 'agent_failed');
+  }
+  if (!done.ok) {
+    if (sessionKey === 'main') x.sessionId = x.sessions.main ?? null;
+    const how = done.signal ? `прерван (${done.signal})` : `завершился с кодом ${done.code}`;
+    const where = ws?.created ? `\nWorktree сохранён: ${ws.dir}` : '';
+    const err = new CliError(`Агент ${agent.name} ${how} за ${fmtDuration(Date.now() - startedAt)}.${where}`, 1, 'agent_failed');
+    err.keepWorktree = true;
+    throw err;
+  }
+  if (sessionKey === 'main') x.sessionId = x.sessions.main ?? null;
+  x.phase?.('agent', 'done');
+  return resultText ?? out.join('\n');
+}
+
 // Движок действия. Порядок фаз один на все действия, различия живут в хуках декларации:
 //   resolve target → precheck → (skip?) → context → isolate → prompt
 //     → agent → verify → judge → publish → cleanup
@@ -58,6 +160,7 @@ export function runAction(spec, ctx, input, opts = {}) {
   let runDir = null;
   let ws = null;
   let meta = null;
+  let currentPhase = null; // на чём упали — уходит в meta.error.phase
   let keep = Boolean(opts.keepWorktree);
 
   // at ставится здесь, а не только в журнале: рендереру CLI нужны метки времени на каждой строке.
@@ -73,19 +176,36 @@ export function runAction(spec, ctx, input, opts = {}) {
     signal: ac.signal,
     emit,
     say: (text) => emit({ t: 'log', stream: 'stdout', text }),
-    phase: (name, status, detail) => emit({ t: 'phase', phase: name, status, detail }),
+    phase: (name, status, detail) => {
+      if (status === 'start') currentPhase = name;
+      emit({ t: 'phase', phase: name, status, detail });
+    },
   };
 
   const result = go().then(
     async (res) => {
-      await notify(true);
+      // Кнопки аппрува и есть уведомление: вторая строка в чат не нужна.
+      if (!res?.pending_approval) await notify(true);
       emit({ t: 'done', ok: true, result: res });
       events.close();
       return res;
     },
     async (err) => {
+      const code = err.code ?? 'failed';
+      // Провал сохраняем как состояние рана: без него не отличить упавший ран от живого,
+      // а id упавшего рана человек должен получить в хвосте ошибки.
+      if (runDir) {
+        patchRunMeta(runDir, {
+          state: 'failed',
+          pid: null,
+          error: { code, message: err.message, phase: currentPhase, at: new Date().toISOString() },
+          session_id: x.sessionId ?? x.sessions?.main ?? null,
+        });
+        err.run = runDir.id;
+        err.runDir = runDir.dir;
+      }
       await notify(false, err);
-      emit({ t: 'error', code: err.code ?? 'failed', message: err.message });
+      emit({ t: 'error', code, message: err.message });
       events.close();
       throw err;
     },
@@ -114,6 +234,7 @@ export function runAction(spec, ctx, input, opts = {}) {
 
   async function go() {
     try {
+      if (opts.resumeOf) return await goResume();
       x.phase('context', 'start');
       x.target = await resolveTarget(a.target, ctx, input.query);
       x.pre = (await a.precheck(x)) ?? {};
@@ -143,6 +264,23 @@ export function runAction(spec, ctx, input, opts = {}) {
       x.vars = await a.context(x);
       x.phase('context', 'done');
 
+      if (!opts.yes && !opts.asObject && !confirm(`Запускаю агента ${opts.agent}. Продолжить? [y/N] `)) {
+        throw new CliError('Отменено.', 0, 'canceled');
+      }
+
+      // Планировщик — отдельный агент и отдельная сессия до исполнителя. Его текст уходит
+      // в переменную plan и в промпт исполнителя, а не в общий диалог с исполнителем.
+      if (a.plan) {
+        const planAgent = a.plan.agent ?? a.agent.default;
+        x.phase('plan', 'start', planAgent);
+        const planRendered = renderTemplate(a.plan.prompt, x.vars, { projectDir: x.pre.projectDir });
+        saveArtifact(runDir, 'plan-prompt.md', planRendered.text);
+        x.plan = await runAgent(x, { agentName: planAgent, prompt: planRendered.text, sessionKey: 'plan' });
+        saveArtifact(runDir, 'plan.md', x.plan);
+        x.phase('plan', 'done', planAgent);
+        x.vars = { ...x.vars, plan: x.plan };
+      }
+
       x.phase('prompt', 'start');
       const rendered = renderTemplate(a.prompt, x.vars, { projectDir: x.pre.projectDir });
       x.prompt = rendered.text;
@@ -152,37 +290,104 @@ export function runAction(spec, ctx, input, opts = {}) {
         action: spec.name,
         created_at: new Date().toISOString(),
         agent: x.opts.agent,
+        plan_agent: a.plan ? (a.plan.agent ?? a.agent.default) : null,
         prompt_source: rendered.source,
+        state: 'running',
+        pid: process.pid,
+        isolation: a.isolation,
         worktree: ws.dir,
         branch: ws.branch,
         base: ws.base,
         base_sha: ws.baseSha,
+        pre: slimPre(x.pre),
         judge: { role: a.judge.role, profile: opts.judgeProfile ?? null },
         ...(x.pre.meta ?? {}),
       };
       saveArtifact(runDir, 'meta.json', meta);
       x.phase('prompt', 'done', rendered.source);
 
-      if (!opts.yes && !opts.asObject && !confirm(`Запускаю агента ${opts.agent}. Продолжить? [y/N] `)) {
-        throw new CliError('Отменено.', 0, 'canceled');
-      }
-
       x.agentText = await runAgent(x);
       keep = true; // дальше в worktree лежит работа агента: любой провал ниже её не выбрасывает
       await collect(x);
 
       x.verdict = await accept(x);
+      const parked = await maybePark(x);
+      if (parked) return parked;
       x.published = (a.publish ? await a.publish(x) : null) ?? {};
       x.phase('publish', 'done');
 
       const res = a.result(x);
       keep = Boolean(opts.keepWorktree);
+      patchRunMeta(runDir, { state: 'done', pid: null, error: null });
       saveArtifact(runDir, 'result.json', res);
       return res;
     } finally {
       // Без return: он проглатывал летящее исключение и действие возвращало undefined.
       if (ws) ws.cleanup(keep);
     }
+  }
+
+  // Доигрывание упавшего рана: тот же worktree и та же сессия агента, без повторного
+  // precheck/context — агент получает текст о прерывании и продолжает с места остановки.
+  // Дальше идёт обычный хвост accept → publish, поэтому будущий pending_approval
+  // (фаза 13) resume унаследует бесплатно.
+  async function goResume() {
+    const saved = readRun(opts.resumeOf, { root: opts.runsDir });
+    const m = saved.meta;
+    if (runIsActive(m, saved.dir)) {
+      throw new CliError(`Ран ${saved.id} ещё выполняется (pid ${m.pid}). Дождись или прерви его.`, 1, 'run_active');
+    }
+    const code = m.error?.code;
+    if (!['agent_failed', 'canceled'].includes(code)) {
+      const hint = String(code ?? '').startsWith('judge')
+        ? `Пересуди: fsh ${m.action} --judge-only ${saved.id}.`
+        : `Повтори с нуля: fsh retry ${saved.id}.`;
+      throw new CliError(`Ран ${saved.id} упал на "${code ?? '?'}" — доигрывать агента нечего. ${hint}`, 1, 'resume_not_applicable');
+    }
+    if (!m.pre || !m.worktree || !existsSync(m.worktree)) {
+      throw new CliError(`Ран ${saved.id} не доиграть: worktree ${m.worktree ?? '—'} не сохранён или удалён. Повтори с нуля: fsh retry ${saved.id}.`, 1, 'run_not_resumable');
+    }
+    if (a.target !== 'none' && !(m.issue ?? m.mr)) {
+      throw new CliError(`Ран ${saved.id} не привязан к MR или задаче — доигрывать нечего.`, 1, 'run_not_resumable');
+    }
+
+    runDir = { id: saved.id, dir: saved.dir };
+    x.run = runDir;
+    meta = { ...m, error: null, state: 'running', pid: process.pid };
+    x.pre = m.pre;
+    x.plan = saved.read('plan.md') ?? null;
+
+    x.phase('isolate', 'start');
+    ws = reopenRunWorkspace(m, a, { onEvent: x.say });
+    x.ws = ws;
+    x.phase('isolate', 'done', ws.dir);
+
+    x.target = a.target === 'none' ? null : await resolveTarget(a.target, ctx, m.issue ?? String(m.mr));
+    x.phase('context', 'done');
+
+    if (!opts.yes && !opts.asObject && !confirm(`Продолжаю агента ${opts.agent} в worktree рана. Продолжить? [y/N] `)) {
+      throw new CliError('Отменено.', 0, 'canceled');
+    }
+
+    const msg = resumeMessage(m.error, opts.message);
+    if (m.session_id) x.sessions = { main: m.session_id };
+    x.agentText = m.session_id
+      ? await runAgent(x, { resume: msg })
+      : await runAgent(x, { prompt: msg });
+    keep = true;
+    await collect(x);
+
+    x.verdict = await accept(x);
+    const parked = await maybePark(x);
+    if (parked) return parked;
+    x.published = (a.publish ? await a.publish(x) : null) ?? {};
+    x.phase('publish', 'done');
+
+    const res = a.result(x);
+    keep = Boolean(opts.keepWorktree);
+    patchRunMeta(runDir, { state: 'done', pid: null, error: null });
+    saveArtifact(runDir, 'result.json', res);
+    return res;
   }
 
   // Факты о результате агента: снимаются заново после каждого его захода.
@@ -208,15 +413,17 @@ export function runAction(spec, ctx, input, opts = {}) {
   // Любой другой исход кроме approve на гейте pre-push закрывает push.
   async function accept(x) {
     // Доделка нужна только гейту: advisory нечего останавливать, перезапуск агента лишь жжёт деньги.
-    const limit = a.judge.gate === 'pre-push' && SESSION_ARGS[resolveAgent(opts.cfg, opts.agent).family] ? (opts.cfg?.judge?.maxRevise ?? 1) : 0;
+    // maxRevise у действия перебивает общий: у implement ревью идёт до трёх раз.
+    const maxRevise = a.judge.maxRevise ?? opts.cfg?.judge?.maxRevise ?? 1;
+    const limit = a.judge.gate === 'pre-push' && SESSION_ARGS[resolveAgent(opts.cfg, opts.agent).family] ? maxRevise : 0;
     let verdict = await gate(x);
     for (let round = 1; verdict?.decision === 'revise' && round <= limit; round++) {
       x.say(`↻ Судья просит доделать (${round}/${limit}) — возвращаю задачу агенту.`);
-      x.agentText = await runAgent(x, reviseMessage(verdict));
+      x.agentText = await runAgent(x, { resume: reviseMessage(verdict) });
       await collect(x);
       verdict = await gate(x);
     }
-    if (a.judge.gate === 'pre-push' && verdict && !isApproved(verdict)) {
+    if (a.judge.gate === 'pre-push' && verdict && !isApproved(verdict) && !interactiveGate()) {
       throw new CliError(
         `${formatVerdict(verdict)}\n\nPush не сделан. Worktree сохранён: ${ws.dir}\nВердикт: ${runDir.dir}/verdict.json`,
         1,
@@ -224,6 +431,47 @@ export function runAction(spec, ctx, input, opts = {}) {
       );
     }
     return verdict;
+  }
+
+  // Интерактивный гейт: человек жмёт кнопку, процесс рана к этому моменту мёртв.
+  function interactiveGate() {
+    return a.writes
+      && a.judge.gate === 'pre-push'
+      && opts.cfg?.telegram?.approvals === true
+      && getTelegramTarget(opts.cfg) !== null
+      && !opts.noJudge;
+  }
+
+  // Останавливаем ран до publish. result.json не пишем — иначе список ранов покажет done.
+  async function maybePark(x) {
+    if (!interactiveGate() || !x.verdict) return null;
+    const nonce = approvalNonce();
+    const approval = {
+      nonce,
+      issued_at: new Date().toISOString(),
+      run: runDir.id,
+      action: spec.name,
+    };
+    patchRunMeta(runDir, { state: 'pending_approval', pid: null, error: null, approval });
+    meta = { ...meta, state: 'pending_approval', approval, head_sha: x.facts?.head_sha ?? meta?.head_sha };
+    keep = true;
+    const sink = opts.approvalSink;
+    if (sink) {
+      try {
+        await sink({ cfg: opts.cfg, run: runDir.id, meta, verdict: x.verdict, nonce, fetchImpl: opts.fetchImpl, say: x.say });
+      } catch (e) {
+        x.say(`⚠ Кнопки аппрува не ушли: ${e.message}. Ожидает аппрува: fsh publish ${runDir.id}`);
+      }
+    } else {
+      x.say(`Ожидает аппрува: fsh publish ${runDir.id}`);
+    }
+    return {
+      ok: true,
+      pending_approval: true,
+      run: runDir.id,
+      mr: meta.mr ?? x.target?.iid ?? null,
+      verdict: { decision: x.verdict.decision, confidence: x.verdict.confidence, summary: x.verdict.summary },
+    };
   }
 
   // Один заход судьи. Решение не трактует: это дело accept().
@@ -261,74 +509,16 @@ export function runAction(spec, ctx, input, opts = {}) {
   }
 
   // resume — текст доделки: тот же агент продолжает свою сессию, а не начинает заново.
-  async function runAgent(x, resume = null) {
-    const agent = resolveAgent(opts.cfg, opts.agent);
-    const session = SESSION_ARGS[agent.family];
-    if (session && !x.sessionId && agent.family !== 'agy') x.sessionId = randomUUID();
-    const sessionArgs = session ? (resume && x.sessionId ? session.resume(x.sessionId) : session.start(x.sessionId)) : [];
-    // stream-json: без него headless-агент молчит до самого конца, и долгая работа
-    // неотличима от зависания. claude и agy держат стрим со своими флагами и разбором.
-    const isAgy = agent.family === 'agy';
-    const streamJson = isAgy || (agent.family === 'claude' && !agent.args.includes('--output-format'));
-    const extraArgs =
-      isAgy ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '-p=']
-      : streamJson ? ['--output-format', 'stream-json', '--verbose', '-p']
-      : ['-p'];
-    const input =
-      isAgy
-        ? `${JSON.stringify({ event: 'user', message: { role: 'user', content: resume ?? x.prompt } })}\n`
-        : (resume ?? x.prompt);
-
-    x.phase('agent', 'start', agent.name);
-    x.say(`🤖 ${resume ? 'Возвращаю задачу' : 'Запускаю'} ${agent.name}…`);
-    const startedAt = Date.now();
-    const proc = spawnAgent({
-      bin: agent.bin,
-      args: [...agent.args, ...sessionArgs, ...extraArgs],
-      input,
-      cwd: ws.dir,
-      env: { ...process.env, ...agent.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo },
-      signal: ac.signal,
-    });
-    const out = [];
-    let resultText = null; // финальный отчёт из события result потока stream-json
-    proc.events.on((ev) => {
-      if (ev.t !== 'log') return;
-      if (ev.stream === 'stdout' && streamJson) {
-        const { activity, result, passthrough, session: sess } = isAgy ? parseAgyLine(ev.text) : parseClaudeLine(ev.text);
-        if (sess && !x.sessionId) x.sessionId = sess;
-        if (result !== null) {
-          resultText = result;
-          return;
-        }
-        if (activity) {
-          emit({ t: 'log', stream: 'activity', text: activity });
-          return;
-        }
-        if (passthrough) {
-          out.push(passthrough);
-          emit({ t: 'log', stream: 'stdout', text: passthrough });
-        }
-        return;
-      }
-      if (ev.stream === 'stdout') out.push(ev.text);
-      emit({ t: 'log', stream: ev.stream, text: ev.text });
-    });
-    let done;
+  // agentName/prompt/sessionKey — для многошаговых флоу (планировщик): своя сессия на шаг,
+  // чтобы resume после revise не уехал не тому агенту.
+  async function runAgent(x, { resume = null, agentName = opts.agent, prompt = null, sessionKey = 'main' } = {}) {
     try {
-      done = await proc.result;
+      return await spawnSession(x, resume ?? prompt ?? x.prompt, { resume: Boolean(resume), agentName, sessionKey });
     } catch (err) {
-      throw new CliError(`Не удалось запустить ${agent.name}: ${err.message}`, 1, 'agent_failed');
-    }
-    if (!done.ok) {
       // Агент успел поработать: его правки в worktree не выбрасываем даже при провале.
-      keep = true;
-      const how = done.signal ? `прерван (${done.signal})` : `завершился с кодом ${done.code}`;
-      const where = ws?.created ? `\nWorktree сохранён: ${ws.dir}` : '';
-      throw new CliError(`Агент ${agent.name} ${how} за ${fmtDuration(Date.now() - startedAt)}.${where}`, 1, 'agent_failed');
+      if (err.keepWorktree) keep = true;
+      throw err;
     }
-    x.phase('agent', 'done'); // длительность фазы считает рендерер по времени старта
-    return resultText ?? out.join('\n');
   }
 
   return {
@@ -342,7 +532,7 @@ export function runAction(spec, ctx, input, opts = {}) {
 }
 
 // Цель действия: MR, задача Jira или ничего. Ключ задачи — по форме, а не по флагу.
-async function resolveTarget(kind, ctx, query) {
+export async function resolveTarget(kind, ctx, query) {
   if (kind === 'none') return null;
   if (kind === 'mr') return resolveMR(ctx.g, ctx.repo, query);
   if (kind === 'issue') {
@@ -361,10 +551,14 @@ export async function runActionCLI(spec, ctx, args, opts = {}) {
   if (opts.judgeOnly) return judgeRun(opts.judgeOnly, opts);
 
   const [query] = args;
-  if (a.target !== 'none' && !query) {
+  // resume работает по сохранённому рану, цель берётся из meta — query не нужен.
+  if (!opts.resumeOf && a.target !== 'none' && !query) {
     throw new CliError(`Использование: fsh ${spec.usage}`, 1, 'usage');
   }
   resolveAgent(opts.cfg, opts.agent); // список агентов открытый: проверка — есть ли профиль в конфиге
+  if (!opts.approvalSink) {
+    opts = { ...opts, approvalSink: (info) => sendApprovalRequest({ ...info, runsRoot: opts.runsDir }) };
+  }
 
   // Рендер событий: время на каждой строке, длительности фаз, сердцебиение на долгих фазах.
   // Тихие режимы (MCP, asObject) ничего не печатают — stdout там занят протоколом/результатом.

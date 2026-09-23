@@ -6,8 +6,8 @@ import { fieldByName, fieldText, openSprints } from '../jira.js';
 
 export const TABS = [
   { key: 'mr', title: 'MR', hint: 'a решить конфликт · t разобрать треды · r локальное ревью · C починить CI · p пайплайн · E поле · f фильтры' },
-  { key: 'issues', title: 'Задачи', hint: 'v доска · n проанализировать · s статус · S спринт · E поле · p родитель · c коммент · f фильтры' },
-  { key: 'runs', title: 'Процессы', hint: 'активные процессы и архив запусков (до 50): вердикт, цена, каталог' },
+  { key: 'issues', title: 'Задачи', hint: 'v доска · n проанализировать · i выполнить · u в ревью · s статус · S спринт · E поле · p родитель · c коммент · f фильтры' },
+  { key: 'runs', title: 'Процессы', hint: 'активные и архив запусков (до 50) · t повторить · c продолжить · A мастер' },
   { key: 'prompts', title: 'Промпты', hint: 'промпты действий и судей · e сделать свой · d вернуть встроенный' },
   { key: 'gb', title: 'Флаги', hint: 'c создать · t вкл/выкл в окружении · D удалить · R перечитать' },
   { key: 'dict', title: 'Словарь', hint: 'c создать · E править · D удалить · n/p страница · R перечитать' },
@@ -20,6 +20,7 @@ export const LAUNCH = {
   r: { action: 'review', tab: 'mr' },
   C: { action: 'ci-fix', tab: 'mr' },
   n: { action: 'analyze', tab: 'issues' },
+  i: { action: 'implement', tab: 'issues' },
 };
 
 export const LOG_LIMIT = 2000;
@@ -330,7 +331,7 @@ export const activeRuns = (state) => Object.values(state.runs).filter((r) => !r.
 const HAY = {
   mr: (r) => [`!${r.iid}`, r.title, r.author, r.source_branch, r.target_branch, r.pipeline?.status, r.draft ? 'draft' : '', ...(r.labels ?? [])],
   issues: (r) => [r.key, r.fields?.summary, r.fields?.status?.name, r.fields?.issuetype?.name, r.fields?.assignee?.displayName, ...(r.fields?.labels ?? [])],
-  runs: (r) => [r.id, r.action, r.mr ? `!${r.mr}` : '', r.issue, r.state, r.decision],
+  runs: (r) => [r.id, r.action, r.mr ? `!${r.mr}` : '', r.issue, r.state, r.decision, r.error_code],
   prompts: (r) => [r.name, r.overridden ? 'свой' : 'встроенный', ...(r.vars ?? [])],
   gb: (r) => [r.id, r.type, r.envs, ...(r.tags ?? [])],
   dict: (r) => [r.group, r.key, r.value, String(r.language_id ?? '')],
@@ -523,12 +524,15 @@ export const runRow = (r) => {
       seg(`⏳ ${r.phase || 'в работе'}`, { color: 'yellow' }),
     );
   }
+  // Упавший ран показываем кодом ошибки, а не безликим «прерван»: по нему выбирают resume или retry.
+  const tone = r.decision === 'approve' ? 'green' : r.error_code ? 'red' : r.decision ? 'yellow' : r.state === 'done' ? 'green' : undefined;
+  const label = r.decision ?? (r.error_code ? `✖ ${r.error_code}` : r.state);
   return line(
     seg(r.id, KEY),
     seg(` · ${r.action} `, LBL),
     seg(r.mr ? `!${r.mr}` : r.issue ?? ''),
     seg(' · '),
-    seg(r.decision ?? r.state, { color: r.decision === 'approve' ? 'green' : r.decision ? 'yellow' : undefined }),
+    seg(label, { color: tone }),
   );
 };
 
@@ -672,13 +676,16 @@ function runDetails(item) {
     line(seg('действие  ', LBL), seg(item.action, VAL), seg('  цель  ', LBL), seg(item.mr ? `!${item.mr}` : item.issue ?? '—')),
     line(
       seg('итог      ', LBL),
-      seg(item.state, { color: item.state === 'ok' || item.state === 'done' ? 'green' : item.state === 'error' ? 'red' : undefined }),
+      seg(item.state, { color: item.state === 'ok' || item.state === 'done' ? 'green' : item.state === 'error' || item.state === 'failed' ? 'red' : undefined }),
       item.decision ? seg(`  вердикт  ${item.decision}`, { color: item.decision === 'approve' ? 'green' : 'yellow' }) : null,
       item.cost ? seg(`  $${item.cost.toFixed(2)}`, LBL) : null,
     ),
+    item.error_code ? line(seg('ошибка    ', LBL), seg(`[${item.error_code}] ${item.error_message ?? ''}`, { color: 'red' })) : null,
+    item.worktree ? line(seg('worktree  ', LBL), seg(item.worktree, LBL)) : null,
     GAP,
     line(seg('Прошлый запуск действия: каталог рана со всеми артефактами.', LBL)),
     item.dir ? line(seg(item.dir, LBL)) : null,
+    item.error_code ? line(seg('t повторить с нуля · c продолжить в том же worktree · A мастер', LBL)) : null,
   ].filter(Boolean);
 }
 
@@ -754,6 +761,8 @@ export function keyIntent(input, key, state) {
   if (input === 'd' && state.tab === 'prompts') return { type: 'promptDrop' };
   if (input === 's' && state.tab === 'issues') return { type: 'transition' };
   if (input === 'S' && state.tab === 'issues') return { type: 'sprint' };
+  if (input === 't' && state.tab === 'runs') return { type: 'retry' };
+  if (input === 'c' && state.tab === 'runs') return { type: 'resume' };
   if (input === 'c' && state.tab === 'issues') return { type: 'comment' };
   if (input === 'c' && (state.tab === 'gb' || state.tab === 'dict')) return { type: 'create' };
   if (input === 't' && state.tab === 'gb') return { type: 'gbToggle' };
@@ -767,6 +776,8 @@ export function keyIntent(input, key, state) {
   if (input === 'p' && state.tab === 'mr') return { type: 'pipeline' };
   if (input === 'f' && (state.tab === 'mr' || state.tab === 'issues')) return { type: 'openFilters' };
   if (input === 'R') return { type: 'reload' };
+  // Отправка в ревью — не действие с агентом, а прямая команда: у неё нет карточки рана.
+  if (input === 'u' && state.tab === 'issues') return { type: 'submitReview' };
   const launch = LAUNCH[input];
   if (launch && launch.tab === state.tab) return { type: 'launch', action: launch.action };
   return null;

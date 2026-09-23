@@ -110,6 +110,17 @@ test('formatErrorJSON: {ok:false, error:{code,message}}', () => {
   assert.deepEqual(out.error, { code: 'job_failed', message: 'плохо' });
 });
 
+test('formatErrorJSON: упавший ран отдаёт run и run_dir, обычная ошибка — нет', () => {
+  const err = new CliError('агент упал', 1, 'agent_failed');
+  err.run = 'conflict-abc-1a2b';
+  err.runDir = '/tmp/runs/conflict-abc-1a2b';
+  const out = JSON.parse(formatErrorJSON(err));
+  assert.equal(out.error.run, 'conflict-abc-1a2b');
+  assert.equal(out.error.run_dir, '/tmp/runs/conflict-abc-1a2b');
+  const plain = JSON.parse(formatErrorJSON(new CliError('плохо', 1, 'job_failed')));
+  assert.equal(plain.error.run, undefined);
+});
+
 test('makeLogger: json-режим пишет в stderr', () => {
   let out = '';
   let err = '';

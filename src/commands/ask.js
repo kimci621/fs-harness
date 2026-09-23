@@ -66,7 +66,7 @@ export function buildAskBrief({ run, question, readOnly = false, repoDir = HARNE
 }
 
 // Профиль мастера: --agent > chat.agent из конфига > agy > cc.
-// agy опционален (как pi): нет в PATH — молча берём claude-профиль, дефолтный конфиг не ломается.
+// agy опционален: нет в PATH - молча берём claude-профиль, дефолтный конфиг не ломается.
 export function pickChatAgent(cfg, name) {
   const wanted = name || cfg?.chat?.agent || 'agy';
   const agent = resolveAgent(cfg, wanted);

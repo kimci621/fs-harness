@@ -17,9 +17,12 @@ src/pipeline.js         ensureMRPipeline, findJob, deployJobName, mapLimit
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/errors.js           CliError (сообщение без stack trace)
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot
+src/publish.js          publishRun/reviseRun: доигрывание pending_approval из meta.json, проверки HEAD/ls-remote/merge-tree, dodelka в той же сессии
+src/tgbot.js            двусторонний Telegram: tgCall, getUpdates (long-polling), inline-кнопки, allowlist, handleUpdate, offset в tgbot.json
+src/commands/bot.js     fsh bot: демон бота (цикл getUpdates, команды /mrs /watch /status /run, кнопки appr/rev/rej, sweepExpiredApprovals)
 src/jira.js             Jira REST: чтение и записи (статус, спринт, комментарий, поле, вложения), fetch инжектируется (тесты)
-src/commands/task.js    ветка задачи и push с открытием MR: гарды защищённых веток и грязного дерева
+src/commands/task.js    ветка задачи, push с открытием MR и submit (снять draft, Jira в ревью, пост в MM): гарды защищённых веток и грязного дерева
 src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/toggle/delete), fetch инжектируется (тесты)
 src/mattermost.js       Mattermost REST: вход по паролю, me, отправка в канал, fetch инжектируется (тесты)
 src/dict.js             REST словаря бэкенда (rest-token): CRUD + refresh кэша, fetch инжектируется (тесты)
@@ -35,9 +38,9 @@ src/agents.js           профили агента: имя → bin/args/env/key
 src/agent/spawn.js      запуск агента процессом: промпт в stdin, стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
 src/agent/stream.js     разбор stream-json: claude (type) и agy (event) — активность, дельты, отчёт
-src/chat.js             многоходовый чат с агентом: живой процесс на NDJSON (claude, agy) либо процесс на ход (pi)
+src/chat.js             многоходовый чат с агентом: живой процесс на NDJSON (claude, agy)
 src/commands/ask.js     мастер по самому fsh: бриф об упавшем ране, выбор профиля, read-only из CLI
-src/agent/journal.js    раны в ~/.local/state/fs-harness/runs/<id>/
+src/agent/journal.js    раны в ~/.local/state/fs-harness/runs/<id>/: meta.json (state/error/pid/pre), patchRunMeta/setRunState, listRuns, pidAlive/runIsActive
 src/judge/index.js      judge(): рубрика + профиль → вердикт, фолбэк, ремонтный round-trip
 src/judge/schema.js     zod-схема вердикта, VERDICT_SHAPE, extractJson
 src/judge/payload.js    что показывать судье в роли acceptance
@@ -45,8 +48,10 @@ src/checks.js           коды выхода проверок проекта д
 src/judge/providers/    cli (процесс claude) и openai (всё OpenAI-совместимое)
 src/prompts/judge/*.md  рубрики по ролям — файл на роль
 src/prompts/flows/*.md  сценарии работы для агента: протокол на файл, description во front-matter
-src/engine.js           runAction: фазы действия, события, изоляция, гейт судьи; runActionCLI, judgeRun
-src/actions/*.js        декларации действий (conflict, ci-fix, threads, review, analyze): precheck/context/verify/publish и блок action
+src/engine.js           runAction: фазы действия, события, изоляция, гейт судьи; resumeOf — доигрывание упавшего рана в том же worktree/сессии; runActionCLI, judgeRun
+src/publish.js          publish <runId>: доопубликовать упавший на push/build ран без агента и судьи; reconstructPre для ранов без meta.pre
+src/actions/*.js        декларации действий (conflict, ci-fix, threads, review, analyze, implement): precheck/context/verify/publish и блок action
+src/actions/implement.js реализация задачи Jira: план (opus) → код (gemini) → ревью судьёй (до 3) → push + черновик MR; в ревью отправляет fsh task submit
 src/actions/ci-fix.js   починка упавших джоб: выжимка из логов, счётчик попыток в ~/.local/state/fs-harness/ci-fix
 src/prompts.js          шаблоны: loadTemplate/renderTemplate/listTemplates/checkTemplates
 src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
@@ -81,6 +86,8 @@ test/*.test.js          node --test, мокнутый exec — без сети
 | `retryJob(repo, jid)` | `POST /jobs/{jid}/retry` — retry создаёт НОВУЮ джобу (новый id) |
 | `getJobTrace(repo, jid)` | `GET /jobs/{jid}/trace` — **не JSON**: идёт через `apiRaw`, обычный `api()` вернул бы `null` |
 | `createMRPipeline(repo, iid)` | `POST /merge_requests/{iid}/pipelines` |
+| `createDiscussion(repo, iid, fields)` | `POST /merge_requests/{iid}/discussions` |
+| `createNote(repo, iid, body)` | `POST /merge_requests/{iid}/notes` |
 
 Каждый вызов идёт с `--hostname <host из конфига>` (иначе glab выберет хост по git remote cwd — источник загадочных 404) и ретраями GET до 5 раз (флапающий GitLab).
 
@@ -91,9 +98,13 @@ test/*.test.js          node --test, мокнутый exec — без сети
 Порядок фаз один на все действия и живёт в `runAction`:
 
 ```
-resolve target → precheck → (skip?) → context → isolate → prompt
+resolve target → precheck → (skip?) → context → isolate → plan? → prompt
   → agent → verify → judge → publish → cleanup
 ```
+
+`plan` — необязательный шаг: отдельный агент (`action.plan.agent`) со своим шаблоном
+(`action.plan.prompt`) и своей сессией до исполнителя, его текст уходит в переменную `plan`.
+`judge.maxRevise` у действия перебивает общий (у implement — 3).
 
 Блок `action`:
 
@@ -103,7 +114,8 @@ resolve target → precheck → (skip?) → context → isolate → prompt
 | `writes` | меняет ли внешнее состояние; при `true` обязательны `publish` и гейт судьи |
 | `isolation` | `'checkout'` \| `'ephemeral-worktree'` \| `'task-worktree'` |
 | `prompt` | имя шаблона в `src/prompts/` |
-| `judge` | `{gate: 'pre-push'\|'advisory'\|'none', role}` |
+| `plan` | `{agent, prompt}` — необязательный планировщик до исполнителя; его текст уходит в `plan` |
+| `judge` | `{gate: 'pre-push'\|'advisory'\|'none', role, maxRevise?}` |
 | `agent` | `{default}` — имя профиля из `agents` в конфиге, перебивается `--agent` |
 | `precheck(x)` | до изоляции: посчитать факты, решить `skip`, отдать описание workspace |
 | `dryRun(x)` / `renderPlan(plan, log)` | план без side-effect'ов и его отрисовка |
@@ -188,7 +200,7 @@ resolve target → precheck → (skip?) → context → isolate → prompt
 
 `jobs`: `{pipeline: {id, status, web_url}, jobs: [{id, name, stage, status, web_url}]}`.
 
-`review`: `{ok, run, mr, review: '<текст находок>', judge: {...}|{skipped:true}}`; `analyze`: `{ok, run, issue, analysis: '<текст разбора>'}`; `jira`: `{ok, issues:[...]}` либо `{ok, issue:{...}, comments:[...]}`.
+`review`: `{ok, run, mr, review: '<текст находок>', judge: {...}|{skipped:true}}`; `analyze`: `{ok, run, issue, analysis: '<текст разбора>'}`; `implement`: `{ok, run, issue, branch, target, head_sha, commits_ahead, mr: {iid, web_url, draft}, judge}`; `task submit`: `{ok, key, branch, mr, title, draft_removed, jira: {from, to, transition}, posted}`; `jira`: `{ok, issues:[...]}` либо `{ok, issue:{...}, comments:[...]}`.
 
 `run`/`deploy`/`conflict`/`threads`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков. У `conflict` дополнительно `conflict_files: string[]` и `has_conflicts` — посчитанные `git merge-tree`, а не взятые из GitLab, `run` (id рана) и `judge: {decision, confidence, summary, profile, cost}` либо `{skipped: true}` при `--no-judge`. У `threads` — `threads_open`, `replied: string[]`, `resolved: string[]`, `commits_ahead` (ноль — норма: тред мог требовать только ответа).
 
@@ -202,19 +214,28 @@ resolve target → precheck → (skip?) → context → isolate → prompt
 - Вызов: клавиша `A` в TUI (окно поверх экрана, многоходовый разговор) и `fsh ask "<вопрос>"
   [--run <id>]` в CLI (один ход, только чтение). В хвосте любой ошибки, кроме `usage` и `canceled`,
   печатается `разобраться: fsh ask`.
-- Транспорт выбирается по семейству профиля, а не по нашему вкусу: `claude` и `agy` держат
-  `--input-format stream-json` — **один живой процесс, NDJSON-строка на реплику**, контекст держит
-  сам агент, id сессии не нужен. `pi` потокового входа не умеет — у него ход это отдельный процесс с
-  тем же `--session-id`. Отсюда `keepStdin` и `write()` в `spawnAgent`.
-- Профиль: `--agent` > `chat.agent` в конфиге > `agy` > `cc`. **`agy` опционален как `pi`**: нет в
-  PATH — `pickChatAgent` молча берёт `cc`, дефолтный конфиг без него рабочий. Это и есть условие, на
+- Транспорт выбирается по семейству профиля: `claude` и `agy` держат
+  `--input-format stream-json` - **один живой процесс, NDJSON-строка на реплику**, контекст держит
+  сам агент, id сессии не нужен. Отсюда `keepStdin` и `write()` в `spawnAgent`.
+- Профиль: `--agent` > `chat.agent` в конфиге > `agy` > `cc`. **`agy` опционален**: нет в
+  PATH - `pickChatAgent` молча берёт `cc`, дефолтный конфиг без него рабочий. Это и есть условие, на
   котором `agy` не нарушает ограничение №1.
-- Права: окно в TUI работает профилем как есть (гейт — человек за клавиатурой, он видит каждый шаг),
-  `fsh ask` без TTY снимает `--dangerously-skip-permissions` и ставит режим плана. У `pi`
-  read-only-режима нет — `startChat` бросает `usage`, а не делает вид, что режим есть.
+- Права: окно в TUI работает профилем как есть (гейт - человек за клавиатурой, он видит каждый шаг),
+  `fsh ask` без TTY снимает `--dangerously-skip-permissions` и ставит режим плана.
 - **В бриф не попадает конфиг ни в каком виде**: в `telegram.bot_token` живой секрет. Кладутся
   только рантайм-факты рана (id, `code`, текст ошибки, 40 строк хвоста журнала, имена артефактов) —
   файлы репозитория агент читает сам и видит свежее.
+
+## Уведомления в Telegram (notify.js + tgbot.js)
+
+Исходящие уведомления (`runMessage` + `postTelegram`) идут в чат по завершении рана. При
+`telegram.approvals: true` и заполненном `allowed_user_ids` гейт pre-push не пушит сам: ран
+останавливается в `state: pending_approval`, worktree сохраняется, в Telegram уходят кнопки
+Approve/Revise/Reject (callback_data `appr|rev|rej:<runId>:<nonce>`, nonce одноразовый).
+Push делает `fsh publish <runId>` (перепроверяет HEAD и `ls-remote`), доделку в той же
+сессии - `fsh revise <runId>`. Аппрув живёт сутки: `sweepExpiredApprovals` гасит просроченный
+в `expired` и убирает worktree. Чужие `from.id` (не в allowlist) бот игнорирует молча.
+Демон - `fsh bot` (long-polling `getUpdates`, offset в `~/.local/state/fs-harness/tgbot.json`).
 
 ## Сообщения в Mattermost (mattermost.js + commands/mm.js)
 

@@ -9,7 +9,7 @@ const FLAGS_USAGE = `Флаги:
   -P, --project <имя>     Проект из конфига (дефолт activeProject / FS_HARNESS_PROJECT)
   --host <hostname>       GitLab-хост (дефолт из конфига)
   --json                  Вывод в JSON (mrs, mr, jobs, run, deploy) — удобно агентам
-  --agent <профиль>       Агент для действий и commit: cc (по умолчанию), ccq, cco, ccd, pi
+  --agent <профиль>       Агент для действий и commit: cc (по умолчанию), ccq, cco, ccd, agy
                           Профили живут в конфиге, agents.<имя>. Можно и --agent=cc
   --project-dir <dir>     Каталог проекта для действий (worktree) и commit
   -B, --build-job <имя>   Имя build-джобы (deploy, conflict; дефолт build_image)
@@ -22,10 +22,11 @@ const FLAGS_USAGE = `Флаги:
   --no-judge              В действиях: пушить без приёмки судьёй
   --judge <профиль>       В действиях: разовая подмена профиля судьи
   --judge-only <runId>    В действиях: прогнать судью по сохранённому рану
+  --message <текст>       В resume и revise: что человек понял / что доделать (уходит агенту)
   --for <mr|ветка>        В prompts show: отрендерить промпт на реальных данных MR
   --attach                В jira field: положить тот же --file ещё и вложением
   --out <каталог>         В jira attach get: куда сохранить (дефолт — текущий каталог)
-  --post                  В task push: отписать в Mattermost, что задача уехала в ревью
+  --post                  В task push: отписать в Mattermost; в review: отправить треды в GitLab
   --channel <сценарий|id> В mm review и task push --post: разовая подмена канала
   --run <runId>           В ask: разбирать этот ран, а не последний упавший
   --author me|<ник>       В mrs: чьи MR
@@ -40,7 +41,8 @@ const FLAGS_USAGE = `Флаги:
   --assignee me|<кто>     В mrs — исполнитель MR; в jira — чьи задачи (дефолт me)
   --sprint current|<имя>  В jira: только задачи спринта
   --component <значение>  В jira: фильтр по checkbox-полю «Компонент»
-  --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые)
+  --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые);
+                          в task submit: статус Jira для перевода в ревью (дефолт «Ревью»)
   --jql "<запрос>"        В jira: свой JQL вместо собранного из флагов
   --file <путь|->         В jira field/create: значение из файла или stdin
   --env <окружение>       В growthbook: окружение флага (дефолт growthbook.env)
@@ -125,9 +127,14 @@ export async function main(argv) {
       console.log(formatErrorJSON(cliErr));
     } else {
       console.error(`\n❌ ${cliErr.message}`);
-      // Про мастера вспоминают только если о нём напомнить — и ровно там, где упало.
-      // usage и canceled это не ошибки инструмента, по ним спрашивать нечего.
-      if (!['usage', 'canceled'].includes(cliErr.code) && cmd !== 'ask') {
+      // Упавший ран не бросаем на полпути: печатаем, что с ним делать дальше.
+      if (cliErr.run) {
+        console.error(`   ран: ${cliErr.run}${cliErr.runDir ? ` · ${cliErr.runDir}` : ''}`);
+        if (cliErr.code !== 'canceled') console.error(`   повторить:   fsh retry ${cliErr.run}`);
+        console.error(`   продолжить:  fsh resume ${cliErr.run}`);
+        console.error(`   разобраться: fsh ask "почему упало" --run ${cliErr.run}`);
+      } else if (!['usage', 'canceled'].includes(cliErr.code) && cmd !== 'ask') {
+        // Про мастера вспоминают только если о нём напомнить — и ровно там, где упало.
         console.error('   разобраться: fsh ask "почему упало"');
       }
     }
@@ -140,7 +147,7 @@ function parseArgs(argv) {
     json: false, repo: null, host: null, project: null, agent: null, projectDir: null, buildJob: null,
     watch: false, daemon: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
-    noJudge: false, judgeProfile: null, judgeOnly: null, for: null, file: null, env: null, check: false,
+    noJudge: false, judgeProfile: null, judgeOnly: null, message: null, for: null, file: null, env: null, check: false,
     attach: false, out: null, run: null, post: false, channel: null,
     type: null, default: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
@@ -171,6 +178,7 @@ function parseArgs(argv) {
     else if (a === '--no-judge') opts.noJudge = true;
     else if (a === '--judge') opts.judgeProfile = av[++i];
     else if (a === '--judge-only') opts.judgeOnly = av[++i];
+    else if (a === '--message') opts.message = av[++i];
     else if (a === '--for') opts.for = av[++i];
     else if (a === '--file') opts.file = av[++i];
     else if (a === '--attach') opts.attach = true;

@@ -49,6 +49,7 @@ test('ephemeral-worktree: каталог вне проекта, своя вет�
   assert.ok(!ws.dir.startsWith(project));
   assert.match(ws.branch, /^fs-harness\/conflict-7-/);
   assert.equal(git(['rev-parse', '--abbrev-ref', 'HEAD'], ws.dir), ws.branch);
+  assert.equal(ws.baseSha, git(['rev-parse', 'origin/main'], project), 'base_sha базового ref');
   assert.ok(lstatSync(path.join(ws.dir, 'node_modules')).isSymbolicLink());
   assert.equal(ws.deps.available, true); // lock-файл тот же — зависимости годны
 
@@ -89,6 +90,7 @@ test('checkout: каталог проекта, а изменение чекау�
   const ws = await acquireWorkspace({ mode: 'checkout', action: 'review', project, ref: 'main', key: '1' });
   assert.equal(ws.dir, project);
   assert.equal(ws.branch, null);
+  assert.equal(ws.baseSha, git(['rev-parse', 'origin/main'], project), 'base_sha и в checkout');
   const before = ws.snapshot();
   ws.assertClean(before); // ничего не трогали — проходит
   writeFileSync(path.join(project, 'f.txt'), 'кто-то написал\n');

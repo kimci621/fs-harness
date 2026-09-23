@@ -11,7 +11,7 @@ const GUIDE_TEMPLATE = `fsh — CLI для работы с GitLab (MR, пайп�
 
 {{COMMANDS}}
 
-Флаги: -R/--repo <repo>, --host <host>, --json, --agent <профиль: cc, ccq, cco, ccd, pi>, --project-dir <dir>,
+Флаги: -R/--repo <repo>, --host <host>, --json, --agent <профиль: cc, ccq, cco, ccd, agy>, --project-dir <dir>,
 -B/--build-job <имя> (дефолт build_image), -w/--watch, -y/--yes, --keep-worktree, --rebuild, --dry-run,
 --resolved/--open (mr-comments), --no-judge / --judge <профиль> / --judge-only <runId> (conflict),
 --for <mr> (prompts show).
@@ -64,17 +64,25 @@ build_failed, deploy_failed, agent_failed, not_pushed, no_commit, git_failed,
 workspace_failed, dirty_checkout, config_invalid, canceled, prompt_missing, prompt_var_missing,
 judge_rejected, judge_schema, judge_failed,
 judge_rubric_missing, secret_missing, run_not_found, run_incomplete, no_mr, not_found,
-telegram_failed, tui_requires_tty.
+telegram_failed, tui_requires_tty,
+run_not_pending, run_not_approved, already_published, worktree_gone, worktree_moved,
+approval_expired, conflict_reappeared, no_session, run_active, resume_not_applicable,
+action_unknown, run_not_publishable, deps_unavailable.
 
 ## Важные детали поведения
 
 - deploy сам ждёт build и deploy-джобы (опрос 5с, live-статус в stderr), exit 0 только при success.
 - deploy с --rebuild перезапускает джобы даже при success (retry, новый id) — перезапись слота.
-- conflict: работу с git делает АГЕНТ (claude|pi headless) во временном worktree проекта.
+- conflict: работу с git делает АГЕНТ (claude|agy headless) во временном worktree проекта.
   Пушит не он, а fsh — и только после того, как судья вернул approve. Любой другой вердикт,
   невалидный ответ судьи или падение его бэкенда = гейт закрыт (judge_rejected, judge_schema,
   judge_failed). При любом провале после запуска агента worktree сохранён, путь к нему в
   сообщении. Дальше fsh сам запускает build.
+- При telegram.approvals=true гейт pre-push не пушит сам: ран встаёт в pending_approval
+  (state в meta.json, worktree сохранён), кнопки Approve/Revise/Reject уходят в Telegram.
+  Push делает fsh publish <runId>; доделка в той же сессии — fsh revise <runId>.
+  Аппрув живёт сутки (TTL): истёк — авто-reject и уборка worktree (approval_expired).
+  Повторное нажатие той же кнопки — «Устарело» (nonce одноразовый, обнуляется до publish).
 - threads: те же правила, что у conflict (worktree, гейт судьи, push силами fsh). Агент правит код
   по нерешённым тредам ревью и пишет тексты ответов; отправку ответов и резолв тредов делает fsh
   после approve. Коммитов может не быть — тред мог требовать только ответа, это не провал.

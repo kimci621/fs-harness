@@ -24,6 +24,9 @@ import { buildJql } from '../commands/jira.js';
 import { boardOf } from '../commands/jira.js';
 import { cmdRun } from '../commands/run.js';
 import { cmdDeploy } from '../commands/deploy.js';
+import { cmdTask } from '../commands/task.js';
+import { cmdRetry } from '../commands/retry.js';
+import { cmdResume } from '../commands/resume.js';
 import { statusIcon, commentStats } from '../format.js';
 
 const html = htm.bind(React.createElement);
@@ -860,9 +863,35 @@ export function App({ ctx, opts }) {
     ] });
   }
 
+  // Доиграть или повторить упавший ран прямо из карточки. Живой ран не трогаем:
+  // у него ещё идёт процесс, сначала x.
+  function openRunConfirm(what) {
+    const item = selected(state);
+    if (!item?.id || item.active) return;
+    const retry = what === 'retry';
+    dispatch({ type: 'modalOpen', kind: 'confirm', title: `${retry ? 'Повторить' : 'Продолжить'} ран ${item.id}?`, items: [
+      { label: '— отмена' },
+      { label: retry ? 'повторить с нуля' : 'продолжить в том же worktree', yes: true, what, runId: item.id },
+    ] });
+  }
+
   async function applyConfirm() {
     const opt = state.modal.items[state.modal.cursor];
     if (!opt?.yes) return void dispatch({ type: 'modalClose' });
+    if (opt.what === 'retry' || opt.what === 'resume') {
+      const retry = opt.what === 'retry';
+      dispatch({ type: 'modalItems', busy: true, note: retry ? 'повторяю…' : 'продолжаю…' });
+      try {
+        const cmd = retry ? cmdRetry : cmdResume;
+        const res = await withBusy(`${opt.what} ${opt.runId}`, () => cmd(ctx, [opt.runId], { ...opts, yes: true, asObject: true }));
+        bufferRef.current.push(`${opt.runId} ▸ ${retry ? 'повтор' : 'продолжение'} завершён${res?.head_sha ? `: ${String(res.head_sha).slice(0, 8)}` : ''}`);
+        dispatch({ type: 'modalClose' });
+        load('runs');
+      } catch (err) {
+        dispatch({ type: 'modalItems', busy: false, note: `❌ ${err.message}` });
+      }
+      return;
+    }
     dispatch({ type: 'modalItems', busy: true, note: 'удаляю…' });
     try {
       if (opt.what === 'gb') {
@@ -978,7 +1007,26 @@ export function App({ ctx, opts }) {
       const line = logLine(key, e);
       if (line) bufferRef.current.push(line);
     });
-    run.result.catch(() => {}); // ошибка уже пришла событием
+    run.result
+      .then((res) => {
+        // implement закончился черновиком MR — сразу предлагаем отправить в ревью команде.
+        if (res?.mr?.iid && res.mr.draft) {
+          dispatch({ type: 'modalOpen', kind: 'reviewOffer', title: `MR !${res.mr.iid} готов к ревью?`, issue: res.issue, mr: res.mr, items: [] });
+        }
+      })
+      .catch(() => {}); // ошибка уже пришла событием
+  }
+
+  // Отправка задачи в ревью: снять черновик с MR, перевести Jira и отписать в Mattermost.
+  async function submitReview(key) {
+    if (!key) return;
+    try {
+      const res = await withBusy(`отправляю ${key} в ревью`, () => cmdTask(ctx, ['submit', key], { ...opts, yes: true, asObject: true }));
+      bufferRef.current.push(`✅ ${key}: MR !${res.mr?.iid} в ревью (${res.jira?.from} → ${res.jira?.to})${res.posted ? ', отписано в Mattermost' : ''}`);
+      load('issues');
+    } catch (err) {
+      dispatch({ type: 'error', tab: 'issues', message: err.message });
+    }
   }
 
   // Текстовые модалки: одна точка роутинга Enter из поля ввода.
@@ -1024,7 +1072,10 @@ export function App({ ctx, opts }) {
       for (const r of runsRef.current.values()) r.abort();
       return;
     }
+    if (intent.type === 'retry') return void openRunConfirm('retry');
+    if (intent.type === 'resume') return void openRunConfirm('resume');
     if (intent.type === 'launch') return launch(intent.action);
+    if (intent.type === 'submitReview') return void submitReview(selected(state)?.key);
     if (intent.type === 'transition') return void openTransitions();
     if (intent.type === 'gbToggle') return void openGBToggle();
     if (intent.type === 'create') return void (state.tab === 'gb' ? openGBCreate() : openDictCreate());
@@ -1062,6 +1113,7 @@ export function App({ ctx, opts }) {
       if (state.modal.busy) return; // запрос уже идёт, второй Enter только навредит
       const kind = state.modal.kind;
       if (kind === 'pipeline') return void runJob();
+      if (kind === 'reviewOffer') { dispatch({ type: 'modalClose' }); return void submitReview(state.modal.issue); }
       if (kind === 'sprint') return void applySprint();
       if (kind === 'gbState') return void applyGBCreate();
       if (kind === 'gbToggle') return void applyGBToggle();
@@ -1158,7 +1210,7 @@ const Help = ({ height }) =>
     <${Text}>1…6 — вкладки (MR, задачи, процессы, промпты, флаги, словарь) · Tab — фокус: список → детали → лог<//>
     <${Text}>↑↓ или j/k — курсор и прокрутка · / — поиск по списку (терпит опечатки) · R — перечитать<//>
     <${Text}>MR: a — конфликт · t — треды · r — ревью · C — починить CI · p — пайплайн и джобы · E — поле<//>
-    <${Text}>Задачи: n — анализ · s — статус · S — спринт · c — комментарий · p — родитель · v — доска (H/L — перенос)<//>
+    <${Text}>Задачи: n — анализ · i — выполнить · u — в ревью · s — статус · S — спринт · c — комментарий · p — родитель · v — доска (H/L — перенос)<//>
     <${Text}>E — поле из editmeta · e — раскрыть текст ($EDITOR) · @ — вложения (Enter, a)<//>
     <${Text}>Флаги (5): c — создать · t — вкл/выкл в окружении · D — удалить<//>
     <${Text}>Словарь (6): c — создать (значение → ключ → группа → язык) · E — править значение · D — удалить · n/p — страницы<//>
@@ -1168,6 +1220,13 @@ const Help = ({ height }) =>
 
 function Modal({ modal, filters, fields, optionsFor, height, onSubmit, onChange }) {
   const body = () => {
+    if (modal.kind === 'reviewOffer') {
+      return html`<${Box} flexDirection="column">
+        <${Text}>${modal.mr?.title ?? ''}<//>
+        <${Text} dimColor>${modal.mr?.web_url ?? ''}<//>
+        <${Text} dimColor>Enter — снять черновик, перевести Jira в ревью и отписать в Mattermost · Esc — позже<//>
+      <//>`;
+    }
     if (['gbCreate', 'dictCreate', 'dictEdit'].includes(modal.kind) && modal.editing) {
       const hints = {
         gbCreate: 'ид флага: латиница, цифры, - и _ · Enter — дальше · Esc — отмена',

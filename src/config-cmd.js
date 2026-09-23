@@ -11,7 +11,6 @@ const AGENT_DESCRIPTIONS = {
   cco: 'Claude Code через OpenRouter (~/.openrouter_key)',
   ccd: 'Claude Code через DeepSeek (~/.deepseek_key)',
   ccq: 'Claude Code через Alibaba Qwen (~/.alibaba_key)',
-  pi: 'Pi CLI (inflection)',
 };
 
 // fsh config init|show|migrate|agent [имя]

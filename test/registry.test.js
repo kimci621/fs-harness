@@ -107,6 +107,10 @@ const STUBS = {
     target: { key: 'FD-1', fields: { summary: 'Починить', status: { name: 'Open' }, description: 'текст' } },
     pre: { projectDir: '/tmp/p', comments: [], url: 'https://j.invalid/browse/FD-1' },
   },
+  implement: {
+    target: { key: 'FD-1', fields: { summary: 'Починить', status: { name: 'Open' }, description: 'текст' } },
+    pre: { projectDir: '/tmp/p', comments: [], url: 'https://j.invalid/browse/FD-1', status: 'Open', branch: 'feature/FD-1', target: 'dev' },
+  },
 };
 
 test('registry: у промпта действия есть шаблон, и он объявляет ровно те переменные, что даёт context', () => {
@@ -127,6 +131,8 @@ test('registry: у промпта действия есть шаблон, и о�
       say: () => {},
     });
     // Ровно те: лишняя переменная в шаблоне — prompt_var_missing в проде, лишняя в context — мусор.
-    assert.deepEqual(Object.keys(vars).sort(), [...tpl.meta.vars].sort(), `${c.action.prompt}: vars ↔ context`);
+    // plan движок добавляет сам (шаг планировщика), context его не отдаёт.
+    const expected = c.action.plan ? [...Object.keys(vars), 'plan'] : Object.keys(vars);
+    assert.deepEqual(expected.sort(), [...tpl.meta.vars].sort(), `${c.action.prompt}: vars ↔ context`);
   }
 });
