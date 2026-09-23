@@ -1,12 +1,16 @@
 import path from 'node:path';
 import { homedir } from 'node:os';
-import { loadConfig } from '../config.js';
+import { existsSync } from 'node:fs';
+import { loadConfig, expandHome } from '../config.js';
 import { createGlab } from '../glab.js';
 import { createCtx, findCommand, ACTIONS } from '../registry.js';
 import { getTelegramTarget } from '../notify.js';
 import { publishRun, reviseRun } from '../publish.js';
 import { runActionCLI } from '../engine.js';
 import { readRun, patchRunMeta, listRuns, sweepExpiredApprovals, RUNS_DIR } from '../agent/journal.js';
+import { spawnAgent } from '../agent/spawn.js';
+import { resolveAgent } from '../agents.js';
+import { parseClaudeLine, parseAgyLine } from '../agent/stream.js';
 import { listJobs } from '../queue.js';
 import { removeWorktree, makeGit } from '../workspace.js';
 import {
@@ -48,6 +52,7 @@ export async function cmdBot(opts = {}, deps = {}) {
     publish = publishRun,
     revise = reviseRun,
     commands = {},
+    spawnAgentImpl = spawnAgent,
   } = deps;
 
   let cfg = loadCfg(env, {});
@@ -61,7 +66,12 @@ export async function cmdBot(opts = {}, deps = {}) {
 
   let stopped = false;
   let wake = null;
-  const stop = () => { stopped = true; wake?.(); };
+  const activeAgents = new Set();
+  const stop = () => {
+    stopped = true;
+    for (const a of activeAgents) a.abort?.();
+    wake?.();
+  };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 
@@ -140,7 +150,7 @@ export async function cmdBot(opts = {}, deps = {}) {
         if (stopped) break;
         offset = u.update_id + 1;
         try {
-          await handleOne(u, { c, t, log, fire, sayTo, ctxFor, commands, publish, revise, runsDir, fetchImpl, now, env, loadCfg, makeCtx, sleep });
+          await handleOne(u, { c, t, log, fire, sayTo, ctxFor, commands, publish, revise, runsDir, fetchImpl, now, env, loadCfg, makeCtx, sleep, spawnAgentImpl, activeAgents });
         } catch (e) {
           log(`${stamp()} update ${u.update_id} упал: ${e.message}`);
         }
@@ -164,12 +174,12 @@ const stamp = () => new Date().toISOString().slice(11, 19);
 
 // Один update: команда, кнопка или молчание. Всё долгое уходит в fire().
 async function handleOne(u, d) {
-  const { c, t, log, fire, sayTo, ctxFor, commands, publish, revise, runsDir, fetchImpl } = d;
+  const { c, t, log, fire, sayTo, ctxFor, commands, publish, revise, runsDir, fetchImpl, spawnAgentImpl, activeAgents } = d;
   const parsed = handleUpdate(u, { cfg: c });
   if (parsed.kind === 'ignored') return;
 
   if (parsed.kind === 'command') {
-    await runCommand(parsed, { c, t, sayTo, ctxFor, commands, log, fire, runsDir, fetchImpl });
+    await runCommand(parsed, { c, t, sayTo, ctxFor, commands, log, fire, runsDir, fetchImpl, spawnAgentImpl, activeAgents });
     return;
   }
 
@@ -490,11 +500,162 @@ async function runCommand(parsed, d) {
       return;
     }
 
+    if (name === 'agent') {
+      const knownAgents = ['cc', 'co', 'cco', 'agy', 'gemini', 'opus', 'claude'];
+      let agentName = null;
+      let promptParts = args;
+
+      if (args[0] === '--agent' && args[1]) {
+        agentName = args[1];
+        promptParts = args.slice(2);
+      } else if (args[0] && knownAgents.includes(args[0].toLowerCase())) {
+        agentName = args[0].toLowerCase();
+        promptParts = args.slice(1);
+      }
+
+      const prompt = promptParts.join(' ').trim();
+      if (!prompt) {
+        await reply(
+          'Использование: /agent [профиль] <задача>\n\n' +
+          'Примеры:\n' +
+          '• /agent сделай рефакторинг Header.vue\n' +
+          '• /agent cc посмотри открытые MR через fsh и создай ветку\n' +
+          '• /agent agy запусти тесты и закоммить через fsh'
+        );
+        return;
+      }
+
+      const activeAgent = agentName || c.agent || 'agy';
+      const projectDir = expandHome(c.projectDir || process.cwd());
+      const promptPreview = prompt.length > 200 ? `${prompt.slice(0, 200)}…` : prompt;
+
+      if (commands.agent) {
+        await reply(`🤖 Запускаю агента <b>${escapeHtml(activeAgent)}</b> в <code>${escapeHtml(projectDir)}</code>…\n\n<i>${escapeHtml(promptPreview)}</i>`);
+        fire(async () => {
+          try {
+            const res = await commands.agent({ agent: activeAgent, prompt, projectDir, cfg: c });
+            const text = typeof res === 'string' ? res : (res?.text || 'Готово.');
+            await sayTo(chatId, `✅ <b>Агент ${escapeHtml(activeAgent)} завершил задачу:</b>\n\n${escapeHtml(text)}`);
+          } catch (e) {
+            await sayTo(chatId, `❌ <b>Агент ${escapeHtml(activeAgent)}:</b> ${escapeHtml(e.message)}`);
+          }
+        });
+        return;
+      }
+
+      await runAgentViaBot({ agentName: activeAgent, prompt, projectDir, d, parsed });
+      return;
+    }
+
     await reply('Неизвестная команда. Введи /help для списка доступных команд.');
   } catch (e) {
     log(`${stamp()} команда ${name} упала: ${e.message}`);
     await reply(`❌ Ошибка: ${escapeHtml(e.message)}`);
   }
+}
+
+async function runAgentViaBot({ agentName, prompt, projectDir, d, parsed }) {
+  const { sayTo, c, fire, spawnAgentImpl = spawnAgent, activeAgents } = d;
+  const chatId = parsed.chatId;
+
+  if (!existsSync(projectDir)) {
+    await sayTo(chatId, `❌ Каталог проекта не найден: <code>${escapeHtml(projectDir)}</code>`);
+    return;
+  }
+
+  let agent;
+  try {
+    agent = resolveAgent(c, agentName);
+  } catch (err) {
+    await sayTo(chatId, `❌ ${escapeHtml(err.message)}`);
+    return;
+  }
+
+  const promptPreview = prompt.length > 200 ? `${prompt.slice(0, 200)}…` : prompt;
+  await sayTo(chatId, `🤖 Запускаю агента <b>${escapeHtml(agent.name)}</b> в <code>${escapeHtml(projectDir)}</code>…\n\n<i>${escapeHtml(promptPreview)}</i>`);
+
+  fire(async () => {
+    try {
+      const isAgy = agent.family === 'agy';
+      const streamJson = isAgy || (agent.family === 'claude' && !agent.args.includes('--output-format'));
+      const extraArgs =
+        isAgy ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '-p=']
+        : streamJson ? ['--output-format', 'stream-json', '--verbose', '-p']
+        : ['-p'];
+
+      const fullPrompt = [
+        'Ты автономный AI-разработчик в проекте fitstars-frontend.',
+        'Рабочая директория: текущий каталог проекта.',
+        'Тебе доступны любые действия: чтение и изменение файлов, запуск команд в терминале (npm, git, тесты, линтеры) и CLI утилита `fsh` (FS-Harness).',
+        'Справка по fsh: `fsh agent-guide`, `fsh mrs`, `fsh mr <id>`, `fsh jobs <id>`, `fsh deploy <id>`, `fsh task start|push|submit`, `fsh jira <KEY>`, `fsh commit`.',
+        '',
+        'Задача от пользователя:',
+        prompt,
+        '',
+        'Выполни задачу полностью и дай краткий структурированный отчёт о том, что было сделано.',
+      ].join('\n');
+
+      const input = isAgy
+        ? `${JSON.stringify({ event: 'user', message: { role: 'user', content: fullPrompt } })}\n`
+        : fullPrompt;
+
+      const proc = spawnAgentImpl({
+        bin: agent.bin,
+        args: [...agent.args, ...extraArgs],
+        input,
+        cwd: projectDir,
+        env: {
+          ...process.env,
+          ...agent.env,
+          GL_HELPER_REPO: c.repo || '',
+          GL_HELPER_HOST: c.host || '',
+          FS_HARNESS_PROJECT: c.activeProject || '',
+        },
+      });
+
+      if (activeAgents) activeAgents.add(proc);
+
+      const out = [];
+      let resultText = null;
+
+      proc.events?.on?.((ev) => {
+        if (ev.t !== 'log') return;
+        if (ev.stream === 'stdout' && streamJson) {
+          const parsedLine = isAgy ? parseAgyLine(ev.text) : parseClaudeLine(ev.text);
+          if (parsedLine.result !== null) {
+            resultText = parsedLine.result;
+            return;
+          }
+          if (parsedLine.passthrough) {
+            out.push(parsedLine.passthrough);
+          }
+          return;
+        }
+        if (ev.stream === 'stdout') out.push(ev.text);
+      });
+
+      let done;
+      try {
+        done = await proc.result;
+      } finally {
+        if (activeAgents) activeAgents.delete(proc);
+      }
+
+      if (!done?.ok) {
+        const how = done?.signal ? `прерван (${done.signal})` : `код ${done?.code ?? '?'}`;
+        const tail = out.slice(-10).join('\n');
+        await sayTo(chatId, `❌ <b>Агент ${escapeHtml(agent.name)}:</b> ${how}${tail ? `\n\n<pre>${escapeHtml(tail)}</pre>` : ''}`);
+        return;
+      }
+
+      const answer = (resultText || out.join('\n') || 'Задача выполнена.').trim();
+      const MAX_LEN = 3500;
+      const formatted = answer.length > MAX_LEN ? `${answer.slice(0, MAX_LEN)}\n… (ответ обрезан)` : answer;
+      await sayTo(chatId, `✅ <b>Агент ${escapeHtml(agent.name)} завершил задачу:</b>\n\n${escapeHtml(formatted)}`);
+    } catch (e) {
+      await sayTo(chatId, `❌ <b>Агент ${escapeHtml(agent.name)} упал:</b> ${escapeHtml(e.message)}`);
+    }
+  });
 }
 
 async function runCallback(cb, d) {

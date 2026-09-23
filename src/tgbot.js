@@ -374,6 +374,7 @@ export function formatHelpTelegram() {
     '• /ci_fix &lt;mr&gt; — починить упавший CI',
     '• /implement &lt;KEY&gt; — реализовать задачу Jira',
     '• /analyze &lt;KEY&gt; — проанализировать задачу Jira',
+    '• /agent [профиль] &lt;задача&gt; - запустить автономного агента (код + fsh)',
     '• /run &lt;действие&gt; &lt;цель&gt; — запустить любое действие',
     '',
     '<b>Мониторинг:</b>',
