@@ -28,6 +28,7 @@ import { cmdResume } from './commands/resume.js';
 import { cmdPublish } from './commands/publish.js';
 import { cmdRevise } from './commands/revise.js';
 import { cmdBot } from './commands/bot.js';
+import { cmdAuto } from './commands/auto.js';
 import { cmdMM } from './commands/mm.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
@@ -476,6 +477,14 @@ export const COMMANDS = [
     example: 'fsh bot',
     // Демон ходит по конфигу сам; MCP-инструмента нет — бот и есть поверхность человека.
     run: (ctx, args, opts) => cmdBot(opts),
+  },
+  {
+    name: 'auto',
+    usage: 'auto <KEY> | status [KEY] | stop <KEY>',
+    description: 'Сквозной автомат жизненного цикла задачи: от Jira до MR, CI и тредов',
+    example: 'fsh auto FD-7647',
+    // Без MCP: запуск и остановка автомата — решение человека.
+    run: (ctx, args, opts) => withProject(ctx, () => cmdAuto(ctx, args, opts)),
   },
   {
     name: 'tui',

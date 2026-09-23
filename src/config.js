@@ -89,6 +89,9 @@ export const DEFAULTS = {
   watch: { enabled: true, intervalSeconds: 300, ttlSeconds: 86400 },
   // Починка CI: сколько раз ci-fix возьмётся за один и тот же MR, прежде чем отдать его человеку.
   ci: { maxRetries: 2 },
+  // Автоматизация сквозного цикла задачи (fsh auto / watch daemon --auto-execute).
+  // enabled по умолчанию строго false: без явного включения ни одна задача не выполняется автоматически.
+  automation: { enabled: false, autoStart: false, maxCostPerTask: 2.0, maxRetries: 3, maxSteps: 30 },
   // Пустой chat_id / bot_token — уведомления просто не шлются: интеграция необязательная.
   // approvals — гейт pre-push ждёт кнопку в Telegram, а не пушит сам.
   // allowed_user_ids пуст — бот не стартует: пустой список это «никто», не «все».
@@ -207,6 +210,7 @@ export function loadConfig(env = process.env, { project, file } = {}) {
     },
     watch: { ...DEFAULTS.watch, ...(v2.watch || {}), ...(p.watch || {}) },
     ci: { ...DEFAULTS.ci, ...(v2.ci || {}), ...(p.ci || {}) },
+    automation: { ...DEFAULTS.automation, ...(v2.automation || {}), ...(p.automation || {}) },
     telegram: { ...DEFAULTS.telegram, ...(v2.telegram || {}), ...(p.telegram || {}) },
     mattermost: {
       ...DEFAULTS.mattermost,

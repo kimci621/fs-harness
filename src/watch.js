@@ -32,12 +32,24 @@ export function writeSnapshot(file, snap) {
 
 // Что изменилось против прошлого снимка. Первого снимка нет — событий нет:
 // иначе первый же опрос вывалил бы в канал весь список открытых MR.
-export function diffSnapshots(prev, next) {
+export function diffSnapshots(prev, next, { meUsername = null, ignoredShas = [] } = {}) {
   if (!prev) return [];
   const was = new Map(prev.mrs.map((m) => [m.iid, m]));
   const events = [];
+  const ignoredShaSet = new Set(ignoredShas);
   // sha нужен ключу идемпотентности очереди: одно и то же событие на одном и том же коммите — одно задание.
-  const push = (mr, kind, detail) => events.push({ id: `e${events.length + 1}`, source: 'gitlab', kind, mr: mr.iid, sha: mr.sha ?? null, title: mr.title, url: mr.web_url, detail, age: mr.updated_at });
+  const push = (mr, kind, detail) => events.push({
+    id: `e${events.length + 1}`,
+    source: 'gitlab',
+    kind,
+    mr: mr.iid,
+    sha: mr.sha ?? null,
+    author: mr.author_username ?? mr.author ?? null,
+    title: mr.title,
+    url: mr.web_url,
+    detail,
+    age: mr.updated_at,
+  });
 
   for (const mr of next.mrs) {
     const old = was.get(mr.iid);
@@ -47,10 +59,19 @@ export function diffSnapshots(prev, next) {
     }
     const from = old.pipeline?.status ?? 'нет';
     const to = mr.pipeline?.status ?? 'нет';
-    if (from !== to) push(mr, 'pipeline', `пайплайн ${from} → ${to} ${statusIcon(to)}`);
+    if (from !== to) {
+      if (!ignoredShaSet.has(mr.sha)) {
+        push(mr, 'pipeline', `пайплайн ${from} → ${to} ${statusIcon(to)}`);
+      }
+    }
     const openNow = mr.comments?.open ?? 0;
     const openWas = old.comments?.open ?? 0;
-    if (openNow > openWas) push(mr, 'threads', `новых открытых тредов: ${openNow - openWas} (было ${openWas}, стало ${openNow})`);
+    if (openNow > openWas) {
+      const author = mr.author_username ?? mr.author ?? null;
+      if (!meUsername || author !== meUsername) {
+        push(mr, 'threads', `новых открытых тредов: ${openNow - openWas} (было ${openWas}, стало ${openNow})`);
+      }
+    }
     if (mr.has_conflicts && !old.has_conflicts) push(mr, 'conflict', 'появился конфликт с целевой веткой');
   }
   for (const old of prev.mrs) {
@@ -89,10 +110,17 @@ export function formatEvents(kept, { verdict } = {}) {
 }
 
 // Один опрос: снимок → дифф → триаж. Уведомляет вызывающий, запускать действия watcher не умеет.
-export async function pollOnce({ g, repo, cfg, file = stateFile(repo), makeProvider, signal } = {}) {
+export async function pollOnce({ g, repo, cfg, file = stateFile(repo), makeProvider, signal, meUsername, ignoredShas = [] } = {}) {
+  let me = meUsername;
+  if (!me && g?.me) {
+    try {
+      const u = await g.me();
+      me = u?.username ?? null;
+    } catch {}
+  }
   const prev = readSnapshot(file);
   const next = await snapshot(g, repo);
-  const events = diffSnapshots(prev, next);
+  const events = diffSnapshots(prev, next, { meUsername: me, ignoredShas });
   writeSnapshot(file, next);
 
   let verdict = null;

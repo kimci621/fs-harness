@@ -6,16 +6,29 @@ import { enqueue, jobFromEvent, pruneQueue, DEFAULT_TTL_SECONDS } from '../queue
 import { loadConfig } from '../config.js';
 import { createGlab } from '../glab.js';
 import { createCtx } from '../registry.js';
+import { listAuto, advanceTask } from '../auto.js';
 import { CliError } from '../errors.js';
 
 // fsh watch — один опрос: что изменилось с прошлого раза, что из этого важно.
 // Действия по-прежнему не запускает: важные события кладутся в очередь заданий,
 // а исполнителя у неё нет (PLAN, фазы 12-15).
-export async function cmdWatch(ctx, { json, asObject, file, queueRoot } = {}) {
+export async function cmdWatch(ctx, { json, asObject, file, queueRoot, autoRoot } = {}) {
+  const autoTasks = listAuto(autoRoot);
+  const ignoredShas = autoTasks.map((t) => t.head_sha).filter(Boolean);
+  let meUsername = null;
+  if (ctx.g?.me) {
+    try {
+      const u = await ctx.g.me();
+      meUsername = u?.username ?? null;
+    } catch {}
+  }
+
   const { first, events, kept, verdict, triageError, snapshot } = await pollOnce({
     g: ctx.g,
     repo: ctx.repo,
     cfg: ctx.cfg,
+    meUsername,
+    ignoredShas,
     ...(file ? { file } : {}),
   });
 
@@ -30,7 +43,7 @@ export async function cmdWatch(ctx, { json, asObject, file, queueRoot } = {}) {
     }
   }
 
-  const queued = enqueueKept(kept, ctx, queueRoot);
+  const queued = enqueueKept(kept, ctx, queueRoot, { meUsername, ignoredShas });
 
   const result = {
     ok: true,
@@ -63,11 +76,14 @@ export async function cmdWatch(ctx, { json, asObject, file, queueRoot } = {}) {
 
 // Важные события → задания. Дубль по ключу идемпотентности молча пропускается,
 // поэтому один и тот же конфликт не ставится в очередь каждым опросом.
-function enqueueKept(kept, ctx, root) {
+function enqueueKept(kept, ctx, root, { meUsername = null, ignoredShas = [] } = {}) {
   const ttlSeconds = ctx.cfg?.watch?.ttlSeconds ?? DEFAULT_TTL_SECONDS;
   pruneQueue({ ...(root ? { root } : {}) });
   const queued = [];
+  const ignoredShaSet = new Set(ignoredShas);
   for (const e of kept) {
+    if (e.kind === 'pipeline' && e.sha && ignoredShaSet.has(e.sha)) continue;
+    if (e.author && meUsername && e.author === meUsername) continue;
     const job = jobFromEvent(e, { project: ctx.cfg?.activeProject ?? '', repo: ctx.repo });
     const { added, key } = enqueue(job, { ...(root ? { root } : {}), ttlSeconds });
     if (added) queued.push(key);
@@ -133,11 +149,68 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
         last.set(name, now());
         waitSec = Math.min(waitSec, intervalSec);
         try {
-          const r = await poll(makeCtx(cfg), { asObject: true, queueRoot: opts.queueRoot });
+          const r = await poll(makeCtx(cfg), { asObject: true, queueRoot: opts.queueRoot, autoRoot: opts.autoRoot });
           log(`${stamp()} ${cfg.repo}: событий ${r.events.length}, важных ${r.kept.length}, в очередь ${r.queued.length}`);
         } catch (err) {
           // Опрос одного проекта упал — это не повод ронять демон: сеть моргает, токены протухают.
           log(`${stamp()} ${cfg.repo || name}: опрос упал — ${err.message}`);
+        }
+
+        // Если включена автоматика и передан флаг --auto-execute — двигаем активные задачи
+        if (cfg.automation?.enabled && opts.autoExecute) {
+          const autoRoot = opts.autoRoot;
+          const advance = deps.advanceTaskImpl || advanceTask;
+          const activeTasks = listAuto(autoRoot).filter((t) =>
+            ['start', 'implement', 'review', 'ci', 'threads', 'conflict'].includes(t.step),
+          );
+          for (const t of activeTasks) {
+            if (stopped) break;
+            try {
+              log(`${stamp()} ${cfg.repo}: авто-шаг для ${t.key} (шаг ${t.step})…`);
+              const adv = await advance(t.key, {
+                cfg,
+                ctx: makeCtx(cfg),
+                root: autoRoot,
+                runsDir: opts.runsDir,
+                costsRoot: opts.costsRoot,
+                makeProvider: deps.makeProvider,
+                spawnAgentImpl: deps.spawnAgentImpl,
+                fetchImpl: deps.fetchImpl,
+                now,
+              });
+              if (adv.state?.step !== t.step) {
+                log(`${stamp()} ${cfg.repo}: задача ${t.key} перешла ${t.step} → ${adv.state?.step}`);
+              }
+            } catch (aErr) {
+              log(`${stamp()} ${cfg.repo}: ошибка автомата ${t.key} — ${aErr.message}`);
+            }
+          }
+
+          if (cfg.jira?.baseUrl && cfg.automation?.autoStart) {
+            try {
+              const projectCtx = makeCtx(cfg);
+              const knownKeys = new Set(listAuto(autoRoot).map((t) => t.key));
+              const res = await projectCtx.jira().searchJql('assignee = currentUser() AND status = "В работе"');
+              for (const iss of res.issues || []) {
+                if (!knownKeys.has(iss.key)) {
+                  log(`${stamp()} ${cfg.repo}: новая задача ${iss.key} «В работе», запускаю автомат…`);
+                  await advance(iss.key, {
+                    cfg,
+                    ctx: projectCtx,
+                    root: autoRoot,
+                    runsDir: opts.runsDir,
+                    costsRoot: opts.costsRoot,
+                    makeProvider: deps.makeProvider,
+                    spawnAgentImpl: deps.spawnAgentImpl,
+                    fetchImpl: deps.fetchImpl,
+                    now,
+                  });
+                }
+              }
+            } catch {
+              // Игнорируем сбои поиска Jira
+            }
+          }
         }
       }
       if (stopped) break;

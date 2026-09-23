@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createEventStream } from './agent/events.js';
 import { parseClaudeLine, parseAgyLine } from './agent/stream.js';
 import { createRun, saveArtifact, readRun, appendEvent, patchRunMeta, runIsActive } from './agent/journal.js';
+import { appendCost } from './costs.js';
 import { spawnAgent } from './agent/spawn.js';
 import { renderTemplate } from './prompts.js';
 import { judge, isApproved, formatVerdict } from './judge/index.js';
@@ -96,7 +97,8 @@ export async function spawnSession(x, text, { resume = false, agentName, session
   x.phase?.('agent', 'start', agent.name);
   x.say?.(`🤖 ${resume ? 'Возвращаю задачу' : 'Запускаю'} ${agent.name}…`);
   const startedAt = Date.now();
-  const proc = spawnAgent({
+  const spawn = x.opts?.spawnAgentImpl || spawnAgent;
+  const proc = spawn({
     bin: agent.bin,
     args: [...agent.args, ...sessionArgs, ...extraArgs],
     input,
@@ -105,11 +107,16 @@ export async function spawnSession(x, text, { resume = false, agentName, session
     signal: x.signal,
   });
   const out = [];
+  const errOut = [];
   let resultText = null;
+  let lastEnvelope = null;
   proc.events.on((ev) => {
     if (ev.t !== 'log') return;
+    if (ev.stream === 'stderr') errOut.push(ev.text);
     if (ev.stream === 'stdout' && streamJson) {
-      const { activity, result, passthrough, session: sess } = isAgy ? parseAgyLine(ev.text) : parseClaudeLine(ev.text);
+      const parsed = isAgy ? parseAgyLine(ev.text) : parseClaudeLine(ev.text);
+      const { activity, result, passthrough, session: sess, envelope } = parsed;
+      if (envelope) lastEnvelope = envelope;
       if (sess && !x.sessions[sessionKey]) x.sessions[sessionKey] = sess;
       if (result !== null) {
         resultText = result;
@@ -134,10 +141,34 @@ export async function spawnSession(x, text, { resume = false, agentName, session
   } catch (err) {
     throw new CliError(`Не удалось запустить ${agent.name}: ${err.message}`, 1, 'agent_failed');
   }
+  if (lastEnvelope) {
+    const costUsd = isAgy
+      ? (lastEnvelope.result?.cost ?? lastEnvelope.cost ?? null)
+      : (lastEnvelope.total_cost_usd ?? null);
+    const usage = isAgy
+      ? (lastEnvelope.result?.usage ?? lastEnvelope.usage ?? null)
+      : (lastEnvelope.usage ?? null);
+    const durationMs = isAgy
+      ? (lastEnvelope.result?.duration_ms ?? lastEnvelope.duration_ms ?? null)
+      : (lastEnvelope.duration_ms ?? null);
+    x.agentCost = {
+      cost_usd: costUsd,
+      usage,
+      duration_ms: durationMs,
+    };
+  }
   if (!done.ok) {
     if (sessionKey === 'main') x.sessionId = x.sessions.main ?? null;
     const how = done.signal ? `прерван (${done.signal})` : `завершился с кодом ${done.code}`;
     const where = ws?.created ? `\nWorktree сохранён: ${ws.dir}` : '';
+    const combined = [...errOut, ...out].join('\n');
+    if (/rate.?limit|429|overloaded/i.test(combined)) {
+      const retryAfter = extractRetryAfter(combined);
+      const err = new CliError(`Агент ${agent.name} превысил рейт-лимит (retry after ${retryAfter}s).${where}`, 1, 'agent_rate_limited');
+      err.retry_after = retryAfter;
+      err.keepWorktree = true;
+      throw err;
+    }
     const err = new CliError(`Агент ${agent.name} ${how} за ${fmtDuration(Date.now() - startedAt)}.${where}`, 1, 'agent_failed');
     err.keepWorktree = true;
     throw err;
@@ -145,6 +176,16 @@ export async function spawnSession(x, text, { resume = false, agentName, session
   if (sessionKey === 'main') x.sessionId = x.sessions.main ?? null;
   x.phase?.('agent', 'done');
   return resultText ?? out.join('\n');
+}
+
+// Извлечение retry_after из текста ошибки провайдера (в секундах)
+export function extractRetryAfter(text) {
+  const mSec = String(text ?? '').match(/retry.?(?:after|in)\s*:?\s*(\d+)\s*(?:s|sec|seconds?)/i);
+  if (mSec) return parseInt(mSec[1], 10);
+  const mMin = String(text ?? '').match(/retry.?(?:after|in)\s*:?\s*(\d+)\s*(?:m|min|minutes?)/i);
+  if (mMin) return parseInt(mMin[1], 10) * 60;
+  // ponytail: дефолт 30 минут (1800с), если провайдер не указал явный интервал
+  return 1800;
 }
 
 // Движок действия. Порядок фаз один на все действия, различия живут в хуках декларации:
@@ -182,12 +223,35 @@ export function runAction(spec, ctx, input, opts = {}) {
     },
   };
 
+  function recordRunCost() {
+    if (!runDir) return;
+    try {
+      appendCost({
+        root: opts.costsRoot,
+        record: {
+          at: new Date().toISOString(),
+          run: runDir.id,
+          action: spec.name,
+          project: ctx.cfg?.activeProject ?? null,
+          issue: x.target?.key ?? meta?.issue ?? null,
+          mr: x.target?.iid ?? meta?.mr ?? null,
+          profile: opts.agent,
+          agent_cost: x.agentCost ?? null,
+          judge_cost: x.verdict?.meta?.cost ?? null,
+        },
+      });
+    } catch {
+      // Не роняем ран из-за сбоя записи статистики расхода
+    }
+  }
+
   const result = go().then(
     async (res) => {
       // Кнопки аппрува и есть уведомление: вторая строка в чат не нужна.
       if (!res?.pending_approval) await notify(true);
       emit({ t: 'done', ok: true, result: res });
       events.close();
+      recordRunCost();
       return res;
     },
     async (err) => {
@@ -198,15 +262,17 @@ export function runAction(spec, ctx, input, opts = {}) {
         patchRunMeta(runDir, {
           state: 'failed',
           pid: null,
-          error: { code, message: err.message, phase: currentPhase, at: new Date().toISOString() },
+          error: { code, message: err.message, retry_after: err.retry_after ?? null, phase: currentPhase, at: new Date().toISOString() },
           session_id: x.sessionId ?? x.sessions?.main ?? null,
+          agent_cost: x.agentCost ?? null,
         });
         err.run = runDir.id;
         err.runDir = runDir.dir;
       }
       await notify(false, err);
-      emit({ t: 'error', code, message: err.message });
+      emit({ t: 'error', code, message: err.message, retry_after: err.retry_after ?? null });
       events.close();
+      recordRunCost();
       throw err;
     },
   );
@@ -318,7 +384,7 @@ export function runAction(spec, ctx, input, opts = {}) {
 
       const res = a.result(x);
       keep = Boolean(opts.keepWorktree);
-      patchRunMeta(runDir, { state: 'done', pid: null, error: null });
+      patchRunMeta(runDir, { state: 'done', pid: null, error: null, agent_cost: x.agentCost ?? null });
       saveArtifact(runDir, 'result.json', res);
       return res;
     } finally {
@@ -385,7 +451,7 @@ export function runAction(spec, ctx, input, opts = {}) {
 
     const res = a.result(x);
     keep = Boolean(opts.keepWorktree);
-    patchRunMeta(runDir, { state: 'done', pid: null, error: null });
+    patchRunMeta(runDir, { state: 'done', pid: null, error: null, agent_cost: x.agentCost ?? null });
     saveArtifact(runDir, 'result.json', res);
     return res;
   }
@@ -401,6 +467,7 @@ export function runAction(spec, ctx, input, opts = {}) {
     saveArtifact(runDir, 'meta.json', {
       ...meta,
       session_id: x.sessionId ?? null,
+      agent_cost: x.agentCost ?? null,
       head_sha: x.facts.head_sha,
       facts: { ...x.facts, diff: undefined },
       goal: x.goal,

@@ -218,3 +218,29 @@ test('watch install: юнит зовёт fsh watch --daemon, несёт PATH и 
   assert.match(linux.text, /Environment=PATH=\/usr\/local\/bin/);
   assert.match(linux.text, /Environment=FS_HARNESS_TELEGRAM=/);
 });
+
+test('diffSnapshots: отфильтровывает события автора=me и pipeline на своём sha', () => {
+  const prev = snap([
+    mr({ iid: 1, sha: 'my-sha-1', pipeline: { id: 1, status: 'running' } }),
+    mr({ iid: 2, comments: { total: 1, open: 1, resolved: 0 }, author_username: 'my-user' }),
+    mr({ iid: 3, comments: { total: 1, open: 1, resolved: 0 }, author_username: 'other-user' }),
+  ]);
+  const next = snap([
+    mr({ iid: 1, sha: 'my-sha-1', pipeline: { id: 1, status: 'success' } }),
+    mr({ iid: 2, comments: { total: 2, open: 2, resolved: 0 }, author_username: 'my-user' }),
+    mr({ iid: 3, comments: { total: 2, open: 2, resolved: 0 }, author_username: 'other-user' }),
+  ]);
+
+  const events = diffSnapshots(prev, next, {
+    meUsername: 'my-user',
+    ignoredShas: ['my-sha-1'],
+  });
+
+  // Событие pipeline на ignoredSha отфильтровано
+  assert.equal(events.some((e) => e.kind === 'pipeline' && e.mr === 1), false);
+  // Событие threads от my-user отфильтровано
+  assert.equal(events.some((e) => e.kind === 'threads' && e.mr === 2), false);
+  // Событие threads от other-user осталось
+  assert.equal(events.some((e) => e.kind === 'threads' && e.mr === 3), true);
+});
+
