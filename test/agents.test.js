@@ -53,3 +53,10 @@ test('--agent=значение разбирается наравне с --agent 
   const res = spawnSync(process.execPath, [bin, 'commit', '--agent=нетпрофиля', '--dry-run'], { encoding: 'utf8' });
   assert.match(res.stdout + res.stderr, /Неизвестный агент "нетпрофиля"/);
 });
+
+test('resolveAgent: co работает как алиас cco', () => {
+  const a = resolveAgent({ agents: { cco: { bin: 'claude' } } }, 'co');
+  assert.equal(a.name, 'cco');
+  assert.equal(a.bin, 'claude');
+});
+

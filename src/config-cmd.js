@@ -36,7 +36,8 @@ export function cmdConfig(args, opts = {}) {
   return 0;
 }
 
-function handleAgent(name, opts = {}) {
+function handleAgent(rawName, opts = {}) {
+  const name = rawName === 'co' ? 'cco' : rawName;
   const cfg = loadConfig(process.env, opts);
   const names = agentNames(cfg);
   if (!name) {

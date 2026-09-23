@@ -243,20 +243,21 @@ export function configInit() {
   return writeDefaultConfig(file);
 }
 
-// Запись v2 на диск: рядом остаётся .v1.bak, чтобы откат был копированием файла.
 export function writeMigrated(file = configPath()) {
-  const raw = readRawConfig(file);
-  if (!raw) throw new CliError(`Конфига нет: ${file}. Сначала fsh config init.`, 1, 'config_invalid');
-  if (raw.version === 2) return { file, already: true };
-  copyFileSync(file, `${file}.v1.bak`);
-  writeFileSync(file, JSON.stringify(migrateConfig(raw), null, 2) + '\n');
-  return { file, backup: `${file}.v1.bak` };
+  const target = file || configPath();
+  const raw = readRawConfig(target);
+  if (!raw) throw new CliError(`Конфига нет: ${target}. Сначала fsh config init.`, 1, 'config_invalid');
+  if (raw.version === 2) return { file: target, already: true };
+  copyFileSync(target, `${target}.v1.bak`);
+  writeFileSync(target, JSON.stringify(migrateConfig(raw), null, 2) + '\n');
+  return { file: target, backup: `${target}.v1.bak` };
 }
 
 // Запись выбранного агента в рабочий конфиг (поддерживает v1 и v2).
 export function setConfigAgent(name, { file = configPath(), project } = {}) {
-  const raw = readRawConfig(file);
-  if (!raw) throw new CliError(`Конфига нет: ${file}. Сначала fsh config init.`, 1, 'config_invalid');
+  const target = file || configPath();
+  const raw = readRawConfig(target);
+  if (!raw) throw new CliError(`Конфига нет: ${target}. Сначала fsh config init.`, 1, 'config_invalid');
   if (raw.version === 2) {
     const projName = project || raw.activeProject || Object.keys(raw.projects ?? {})[0];
     if (projName && raw.projects?.[projName]) {
@@ -266,7 +267,7 @@ export function setConfigAgent(name, { file = configPath(), project } = {}) {
   } else {
     raw.agent = name;
   }
-  writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
-  return { file, agent: name };
+  writeFileSync(target, JSON.stringify(raw, null, 2) + '\n');
+  return { file: target, agent: name };
 }
 

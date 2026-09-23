@@ -14,7 +14,7 @@ import { makeGit } from '../workspace.js';
 // и коммитит все изменения. Push НЕ делает.
 export async function cmdCommit(args, opts = {}) {
   const log = opts.asObject ? () => {} : makeLogger(opts.json);
-  const agent = resolveAgent(opts.cfg, opts.agent);
+  const agent = resolveAgent(opts.cfg, opts.agent || opts.cfg?.agent || 'cc');
 
   const dir = expandHome(opts.projectDir || process.cwd());
   if (!existsSync(path.join(dir, '.git'))) {
@@ -59,11 +59,14 @@ export async function cmdCommit(args, opts = {}) {
 
   const before = git(['rev-parse', 'HEAD']);
   log(`🤖 Запускаю ${agent.name}…`);
-  // Промпт в stdin, вывод агента остаётся на терминале.
-  const res = spawnSync(agent.bin, [...agent.args, '-p'], {
+  // Промпт в stdin (claude) или флагом (agy), вывод агента остаётся на терминале.
+  const isAgy = agent.family === 'agy';
+  const spawnArgs = isAgy ? [...agent.args, '-p', prompt] : [...agent.args, '-p'];
+  const spawn = opts.spawnSyncImpl || spawnSync;
+  const res = spawn(agent.bin, spawnArgs, {
     cwd: dir,
-    input: prompt,
-    stdio: ['pipe', 'inherit', 'inherit'],
+    input: isAgy ? undefined : prompt,
+    stdio: isAgy ? ['inherit', 'inherit', 'inherit'] : ['pipe', 'inherit', 'inherit'],
     env: { ...process.env, ...agent.env, GL_HELPER_COMMIT: '1' },
   });
   if (res.error) throw new CliError(`Не удалось запустить ${agent.name}: ${res.error.message}`, 1, 'agent_failed');

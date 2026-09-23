@@ -267,6 +267,7 @@ test('formatStatusTelegram, formatWatchTelegram, formatHelpTelegram: оформ�
   assert.match(help, /FSH Telegram Bot/);
   assert.match(help, /\/mrs/);
   assert.match(help, /\/task/);
+  assert.match(help, /\/agent/);
 });
 
 test('sendMessage: фолбэк на stripHtml при ошибке разметки Telegram', async () => {

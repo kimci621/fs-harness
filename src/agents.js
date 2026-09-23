@@ -6,16 +6,17 @@ import { CliError } from './errors.js';
 // В шелле у владельца это алиасы и функции (cc, ccq, cco, ccd); spawn их не видит,
 // поэтому провайдер описывается здесь, а ключ читается из файла на месте запуска.
 export function resolveAgent(cfg, name) {
+  const target = (name === 'co' && !cfg?.agents?.co) ? 'cco' : name;
   const agents = allAgents(cfg);
-  const profile = agents[name];
+  const profile = agents[target];
   if (!profile) {
     throw new CliError(`Неизвестный агент "${name}". Есть: ${Object.keys(agents).sort().join(', ')}.`, 1, 'usage');
   }
   // agentArgs остаётся: в старых конфигах флаги агента лежат там.
-  const args = cfg?.agentArgs?.[name] ?? profile.args ?? [];
+  const args = cfg?.agentArgs?.[target] ?? profile.args ?? [];
   const env = { ...(profile.env ?? {}) };
-  if (profile.keyFile) env.ANTHROPIC_AUTH_TOKEN = readKey(expandHome(profile.keyFile), name);
-  return { name, bin: profile.bin ?? name, args, env, family: profile.family ?? 'claude' };
+  if (profile.keyFile) env.ANTHROPIC_AUTH_TOKEN = readKey(expandHome(profile.keyFile), target);
+  return { name: target, bin: profile.bin ?? target, args, env, family: profile.family ?? 'claude' };
 }
 
 export const agentNames = (cfg) => Object.keys(allAgents(cfg)).sort();

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { cmdBot } from '../src/commands/bot.js';
 import { createRun, saveArtifact } from '../src/agent/journal.js';
+import { createEventStream } from '../src/agent/events.js';
 
 let root;
 let origin;
@@ -375,4 +376,93 @@ test('bot: команды задач Jira (/tasks, /task, /task start, /task mov
   assert.deepEqual(moveCalled, { key: 'FD-7719', to: 'Done' });
   rmSync(localState, { recursive: true, force: true });
 });
+
+test('bot: команда /agent — вызов автономного агента в проекте', async () => {
+  const f = makeFetch();
+  const localState = mkdtempSync(path.join(tmpdir(), 'fs-harness-bot-agent-'));
+  f.pushUpdates([]); // начальный снос
+  f.pushUpdates([
+    { update_id: 60, message: { text: '/agent', chat: { id: 5 }, from: { id: MY_ID } } },
+    { update_id: 61, message: { text: '/agent почини баг в коде', chat: { id: 5 }, from: { id: MY_ID } } },
+    { update_id: 62, message: { text: '/agent cc сделай рефакторинг', chat: { id: 5 }, from: { id: MY_ID } } },
+  ]);
+  f.pushUpdates([]);
+  f.setResult('sendMessage', { message_id: 20 });
+
+  let agentCalls = [];
+  await cmdBot({}, {
+    env: {},
+    loadCfg: () => cfgBase(),
+    fetchImpl: f.fetchImpl,
+    sleep,
+    log,
+    cycles: 2,
+    runsDir,
+    stateRoot: localState,
+    commands: {
+      agent: async ({ agent, prompt, projectDir }) => {
+        agentCalls.push({ agent, prompt, projectDir });
+        return { text: `Успешно сделано: ${prompt}` };
+      },
+    },
+  });
+
+  const sends = f.log.filter((x) => x.method === 'sendMessage');
+  assert.ok(sends.some((s) => s.body.text.includes('Использование: /agent')));
+  assert.ok(sends.some((s) => s.body.text.includes('Запускаю агента') && s.body.text.includes('почини баг в коде')));
+  assert.ok(sends.some((s) => s.body.text.includes('Успешно сделано: почини баг в коде')));
+  assert.equal(agentCalls.length, 2);
+  assert.equal(agentCalls[0].agent, 'agy');
+  assert.equal(agentCalls[0].prompt, 'почини баг в коде');
+  assert.equal(agentCalls[1].agent, 'cc');
+  assert.equal(agentCalls[1].prompt, 'сделай рефакторинг');
+  rmSync(localState, { recursive: true, force: true });
+});
+
+test('bot: runAgentViaBot через spawnAgentImpl — стрим и отчёт', async () => {
+  const f = makeFetch();
+  const localState = mkdtempSync(path.join(tmpdir(), 'fs-harness-bot-agent-spawn-'));
+  f.pushUpdates([]); // начальный снос
+  f.pushUpdates([
+    { update_id: 70, message: { text: '/agent напиши код', chat: { id: 5 }, from: { id: MY_ID } } },
+  ]);
+  f.pushUpdates([]);
+  f.setResult('sendMessage', { message_id: 25 });
+
+  let spawnOpts = null;
+  const fakeSpawn = (opts) => {
+    spawnOpts = opts;
+    const events = createEventStream();
+    events.push({
+      t: 'log',
+      stream: 'stdout',
+      text: JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'Код написан, тесты зеленые' } }),
+    });
+    return {
+      events,
+      result: Promise.resolve({ ok: true, code: 0 }),
+      abort: () => {},
+    };
+  };
+
+  await cmdBot({}, {
+    env: {},
+    loadCfg: () => cfgBase(),
+    fetchImpl: f.fetchImpl,
+    sleep,
+    log,
+    cycles: 2,
+    runsDir,
+    stateRoot: localState,
+    spawnAgentImpl: fakeSpawn,
+  });
+
+  const sends = f.log.filter((x) => x.method === 'sendMessage');
+  assert.ok(sends.some((s) => s.body.text.includes('Код написан, тесты зеленые')));
+  assert.equal(spawnOpts.cwd, project);
+  assert.ok(spawnOpts.input.includes('Ты автономный AI-разработчик'));
+  assert.ok(spawnOpts.input.includes('напиши код'));
+  rmSync(localState, { recursive: true, force: true });
+});
+
 
