@@ -16,8 +16,10 @@ src/resolve.js          поиск MR: по номеру или части им�
 src/pipeline.js         ensureMRPipeline, findJob, deployJobName, mapLimit
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
-src/errors.js           CliError (сообщение без stack trace)
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto
+src/costs.js          накопитель расходов по ранам и задачам (costs.jsonl), sumCosts / appendCost
+src/auto.js           автоматика жизненного цикла задачи (auto/<KEY>.json), advanceTask, load/save/list/stopAuto
+src/commands/auto.js  команда fsh auto: запуск, статус, остановка задачи в автомате
 src/publish.js          publishRun/reviseRun: доигрывание pending_approval из meta.json, проверки HEAD/ls-remote/merge-tree, dodelka в той же сессии
 src/tgbot.js            двусторонний Telegram: tgCall, getUpdates (long-polling), inline-кнопки, allowlist, handleUpdate, offset в tgbot.json
 src/commands/bot.js     fsh bot: демон бота (цикл getUpdates, команды /mrs /watch /status /run, кнопки appr/rev/rej, sweepExpiredApprovals)
