@@ -280,7 +280,7 @@ export const ciFixAction = {
       const freshMR = await g.getMR(repo, mr.iid);
       const pipeline = await ensureMRPipeline(g, repo, freshMR);
       const jobs = await g.getJobs(repo, pipeline.id);
-      const results = [];
+      const jobsToWait = [];
       for (const name of pre.failed.map((j) => j.name)) {
         const job = findJob(jobs, name);
         if (!job) {
@@ -289,14 +289,21 @@ export const ciFixAction = {
         }
         const started = await startJob(g, repo, job);
         say(`▶ ${name} (#${(started ?? job).id}) в пайплайне #${pipeline.id}${started ? `: ${job.status} → ${started.status}` : ''}`);
-        const final = await waitJob({
-          g, repo, pipelineId: pipeline.id, jobId: (started ?? job).id,
-          label: name, quiet: opts.quiet, onTick: opts.onTick,
-          onManual: (j) => startJob(g, repo, j),
-          ...(opts.intervalMs ? { intervalMs: opts.intervalMs } : {}),
-        });
-        results.push(jobJSON(final, final.status));
+        jobsToWait.push({ name, activeId: (started ?? job).id });
       }
+
+      const results = await Promise.all(
+        jobsToWait.map(async ({ name, activeId }) => {
+          const final = await waitJob({
+            g, repo, pipelineId: pipeline.id, jobId: activeId,
+            label: name, quiet: opts.quiet, onTick: opts.onTick,
+            onManual: (j) => startJob(g, repo, j),
+            signal: opts.signal,
+            ...(opts.intervalMs ? { intervalMs: opts.intervalMs } : {}),
+          });
+          return jobJSON(final, final.status);
+        }),
+      );
       const red = results.filter((r) => r.status !== 'success');
       if (red.length) {
         throw new CliError(

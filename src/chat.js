@@ -96,11 +96,42 @@ export function startChat({ agent, cwd, env, readOnly = false, onEvent = () => {
       return session;
     },
 
-    send(text) {
+    send(text, { signal, timeoutMs = null } = {}) {
       if (pending) throw new CliError('Предыдущая реплика ещё в работе.', 1, 'usage');
       turnText = '';
+      let timer = null;
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        if (signal) signal.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        cleanup();
+        proc?.abort?.();
+        settle('reject', new CliError('Ход прерван.', 1, 'canceled'));
+      };
+      if (signal) {
+        if (signal.aborted) throw new CliError('Ход прерван.', 1, 'canceled');
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
       const answer = new Promise((resolve, reject) => {
-        pending = { resolve, reject };
+        if (timeoutMs && timeoutMs > 0) {
+          timer = setTimeout(() => {
+            cleanup();
+            proc?.abort?.();
+            settle('reject', new CliError(`Таймаут ожидания ответа агента (${Math.round(timeoutMs / 1000)}с).`, 1, 'agent_timeout'));
+          }, timeoutMs);
+          timer.unref?.();
+        }
+        pending = {
+          resolve: (val) => {
+            cleanup();
+            resolve(val);
+          },
+          reject: (err) => {
+            cleanup();
+            reject(err);
+          },
+        };
       });
       if (wire.mode === 'spawn') {
         launch(text);

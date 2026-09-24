@@ -8,7 +8,8 @@ export const MAX_ARCHIVES = 50;
 
 // Удаляет старые архивы ранов сверх лимита keep (все архивы максимум 50 шт)
 // или старше olderThanDays.
-// pending_approval не трогаем: ран ждёт кнопку, ретеншн его съесть не должен.
+// pending_approval не трогаем, пока не протухнет (сутки): свежий ран ждёт кнопку,
+// а просроченный гасится sweepExpiredApprovals и попадает в ротацию.
 export function pruneRuns({
   root = RUNS_DIR,
   keep = MAX_ARCHIVES,
@@ -81,11 +82,17 @@ export function sweepExpiredApprovals({ root = RUNS_DIR, now = Date.now(), ttlMs
       continue;
     }
     if (meta.state !== 'pending_approval') continue;
-    const issued = new Date(meta.approval?.issued_at ?? 0).getTime();
+    if (!meta.approval?.issued_at) continue;
+    const issued = new Date(meta.approval.issued_at).getTime();
     if (!Number.isFinite(issued) || now - issued < ttlMs) continue;
     const run = { id, dir };
     patchRunMeta(run, { state: 'expired' });
-    try { onExpired?.(run); } catch { /* уборка не должна ронять обход */ }
+    try {
+      if (meta.worktree && existsSync(meta.worktree)) {
+        rmSync(meta.worktree, { recursive: true, force: true });
+      }
+      onExpired?.(run);
+    } catch { /* уборка не должна ронять обход */ }
     expired.push(id);
   }
   return expired;

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync } from 'node:fs';
-import { listRuns, readRun, readEvents, runIsActive } from '../agent/journal.js';
+import { listRuns, readRun, readEvents, runIsActive, sweepExpiredApprovals } from '../agent/journal.js';
 import { eventLine } from './ask.js';
 import { table } from '../format.js';
 import { finish } from '../output.js';
@@ -11,6 +11,7 @@ export function cmdRuns(ctx, args, opts = {}) {
   const [sub = 'list', id, ...rest] = args;
   if (rest.length) throw new CliError('Использование: fsh runs [list|show <runId>].', 1, 'usage');
   const at = opts.runsDir ? { root: opts.runsDir } : {};
+  try { sweepExpiredApprovals(at); } catch {}
 
   if (sub === 'list') {
     const runs = listRuns({ ...at, limit: 50 });

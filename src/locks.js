@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -46,10 +46,8 @@ export function acquireLock({
 
   function tryWriteExclusive() {
     try {
-      const fd = openSync(file, 'wx');
       const record = { pid, at: new Date(now).toISOString() };
-      writeFileSync(fd, JSON.stringify(record, null, 2) + '\n');
-      closeSync(fd);
+      writeFileSync(file, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
       return { success: true };
     } catch (err) {
       if (err.code === 'EEXIST') return { success: false, code: 'EEXIST' };

@@ -14,7 +14,12 @@ import { createEventStream } from './events.js';
 // килобайт, а argv на macOS ограничен мегабайтом на весь вызов.
 export function spawnAgent({ bin, args = [], cwd, env, signal, input = null, keepStdin = false, killGraceMs = 5000 }) {
   const events = createEventStream();
-  const child = spawn(bin, args, { cwd, env, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+  const child = spawn(bin, args, {
+    cwd,
+    env,
+    detached: process.platform !== 'win32',
+    stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+  });
   if (input !== null) {
     child.stdin.on('error', () => {}); // агент мог закрыться раньше, чем дочитал: это не наша авария
     // keepStdin — чат: ходов много, поток ввода закрывать нельзя, реплики дописываются write().
@@ -30,12 +35,27 @@ export function spawnAgent({ bin, args = [], cwd, env, signal, input = null, kee
     });
   const drained = Promise.all([pipe(child.stdout, 'stdout'), pipe(child.stderr, 'stderr')]);
 
+  const killProc = (sig) => {
+    if (child.exitCode !== null || child.signalCode) return;
+    try {
+      if (process.platform !== 'win32' && child.pid) {
+        process.kill(-child.pid, sig);
+        return;
+      }
+    } catch {}
+    try { child.kill(sig); } catch {}
+  };
+
   let killTimer = null;
   const abort = () => {
-    if (child.exitCode !== null || child.signalCode) return;
-    child.kill('SIGTERM');
-    killTimer = setTimeout(() => child.kill('SIGKILL'), killGraceMs);
-    killTimer.unref?.();
+    killProc('SIGTERM');
+    if (!killTimer) {
+      killTimer = setTimeout(() => killProc('SIGKILL'), killGraceMs);
+      killTimer.unref?.();
+    }
+  };
+  const cleanupSignal = () => {
+    if (signal) signal.removeEventListener('abort', abort);
   };
   if (signal) {
     if (signal.aborted) abort();
@@ -44,11 +64,14 @@ export function spawnAgent({ bin, args = [], cwd, env, signal, input = null, kee
 
   const result = new Promise((resolve, reject) => {
     child.on('error', (err) => {
+      cleanupSignal();
+      clearTimeout(killTimer);
       events.push({ t: 'error', code: 'spawn_failed', message: err.message });
       events.close();
       reject(err);
     });
     child.on('close', async (code, sig) => {
+      cleanupSignal();
       await drained;
       clearTimeout(killTimer);
       const done = { ok: code === 0, code, signal: sig };
