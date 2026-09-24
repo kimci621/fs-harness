@@ -234,6 +234,8 @@ export const ciFixAction = {
         branch_diff: branchDiff(ws, mr.target_branch),
         checks: (opts.cfg?.checks ?? []).map((c) => `  ${c}`).join('\n') || '  (в конфиге проекта проверок нет)',
         worktree: ws.dir,
+        backend_dir: opts.cfg?.backend?.dir ?? '',
+        backend_repo: opts.cfg?.backend?.repo ?? '',
       };
     },
 

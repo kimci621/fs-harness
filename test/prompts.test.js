@@ -140,3 +140,33 @@ test('checkTemplates: встроенные шаблоны без ошибок, �
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('analyze: с backend_dir содержит блок бэкенда, без него — скрывает', () => {
+  const baseVars = {
+    issue_key: 'FD-1234',
+    issue_summary: 'Тестовая задача',
+    issue_status: 'Open',
+    issue_description: 'Описание',
+    issue_comments: 'Комментариев нет.',
+    issue_url: 'https://j.example/FD-1234',
+    project_dir: '/path/to/frontend',
+    run_dir: '/path/to/run',
+  };
+
+  const withBe = renderTemplate('actions/analyze', {
+    ...baseVars,
+    backend_dir: '/path/to/backend',
+    backend_repo: 'org/backend',
+  });
+  assert.match(withBe.text, /Бэкенд этого проекта: \/path\/to\/backend/);
+  assert.match(withBe.text, /backend_refs\.json/);
+
+  const withoutBe = renderTemplate('actions/analyze', {
+    ...baseVars,
+    backend_dir: '',
+    backend_repo: '',
+  });
+  assert.doesNotMatch(withoutBe.text, /Бэкенд этого проекта/);
+  assert.doesNotMatch(withoutBe.text, /backend_refs\.json/);
+});
+

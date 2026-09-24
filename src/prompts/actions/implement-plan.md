@@ -1,6 +1,6 @@
 ---
 id: implement-plan
-vars: [repo, issue_key, issue_summary, issue_status, issue_description, issue_comments, issue_url, target_branch, branch, project_dir, worktree, checks]
+vars: [repo, issue_key, issue_summary, issue_status, issue_description, issue_comments, issue_url, target_branch, branch, project_dir, worktree, checks, backend_dir, backend_repo]
 ---
 
 Ты — планировщик. Рабочая директория {{worktree}} — git worktree проекта {{repo}}, ветка на базе
@@ -19,6 +19,14 @@ origin/{{target_branch}}. Твоя задача — **составить пла�
 Комментарии:
 
 {{issue_comments}}
+
+{{#backend_dir}}
+## Бэкенд
+Бэкенд этого проекта: {{backend_dir}} (репозиторий {{backend_repo}}).
+Контракт API подтверждай по коду бэкенда: роут → контроллер → Resource/Request → поля и
+типы, со ссылкой файл:строка. Сначала прочитай {{backend_dir}}/AGENTS.md. Расхождение
+описания задачи с кодом бэкенда называй вслух в отчёте.
+{{/backend_dir}}
 
 ## Что от тебя нужно
 

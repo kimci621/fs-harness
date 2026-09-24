@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { loadConfig, migrateConfig, pickProject, writeMigrated, setConfigAgent } from '../src/config.js';
+import { loadConfig, migrateConfig, pickProject, writeMigrated, setConfigAgent, resolveProject } from '../src/config.js';
 import { cmdConfig } from '../src/config-cmd.js';
+import { cmdJira } from '../src/commands/jira.js';
+import { createJira } from '../src/jira.js';
 
 const V1 = {
   repo: 'group/app',
@@ -146,4 +148,77 @@ test('cmdConfig agent: просмотр и смена активного аге�
     );
   });
 });
+
+test('resolveProject: с backend, без backend, битая ссылка и цикл', () => {
+  const cfg = {
+    version: 2,
+    projects: {
+      frontend: { repo: 'org/fe', dir: '~/fe', backend: 'backend' },
+      backend: { repo: 'org/be', dir: '~/be' },
+      solo: { repo: 'org/solo', dir: '~/solo' },
+      broken: { repo: 'org/broken', dir: '~/broken', backend: 'nonexistent' },
+      cycleA: { repo: 'org/a', dir: '~/a', backend: 'cycleB' },
+      cycleB: { repo: 'org/b', dir: '~/b', backend: 'cycleA' },
+    },
+  };
+
+  const fe = resolveProject(cfg, 'frontend');
+  assert.equal(fe.name, 'frontend');
+  assert.equal(fe.backend?.name, 'backend');
+  assert.equal(fe.backend?.repo, 'org/be');
+  assert.match(fe.backend?.dir, /\/be$/);
+
+  const solo = resolveProject(cfg, 'solo');
+  assert.equal(solo.name, 'solo');
+  assert.equal(solo.backend, null);
+
+  assert.throws(
+    () => resolveProject(cfg, 'broken'),
+    (e) => e.code === 'config_invalid' && /projects\.broken\.backend/.test(e.message),
+  );
+
+  assert.throws(
+    () => resolveProject(cfg, 'cycleA'),
+    (e) => e.code === 'config_invalid' && /Цикл бэкенда/.test(e.message),
+  );
+});
+
+test('loadConfig: backend на плоском уровне конфига и выбор -P', () => {
+  const withBe = {
+    version: 2,
+    activeProject: 'fe',
+    projects: {
+      fe: { repo: 'org/fe', host: 'gitlab.example', dir: '~/fe', backend: 'be' },
+      be: { repo: 'org/be', host: 'gitlab.example', dir: '~/be' },
+    },
+  };
+  withFile(withBe, (file) => {
+    const cfg = loadConfig({}, { file });
+    assert.equal(cfg.backend?.name, 'be');
+    assert.equal(cfg.backend?.repo, 'org/be');
+
+    const beOnly = loadConfig({}, { file, project: 'be' });
+    assert.equal(beOnly.backend, null);
+    assert.equal(beOnly.activeProject, 'be');
+    assert.equal(beOnly.repo, 'org/be');
+  });
+});
+
+test('проект без jira: вызов jira падает с config_invalid', async () => {
+  const withoutJira = {
+    version: 2,
+    projects: {
+      be: { repo: 'org/be', host: 'gitlab.example', dir: '~/be' },
+    },
+  };
+  await withFile(withoutJira, async (file) => {
+    const cfg = loadConfig({}, { file, project: 'be' });
+    const ctx = { cfg, jira: () => createJira({ ...cfg.jira }) };
+    await assert.rejects(
+      () => cmdJira(ctx, []),
+      (e) => e.code === 'config_invalid',
+    );
+  });
+});
+
 

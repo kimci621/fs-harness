@@ -6,6 +6,7 @@ import { buildAcceptancePayload } from '../judge/payload.js';
 import { checksFact, runChecks } from '../checks.js';
 import { getTelegramTarget, postTelegram } from '../notify.js';
 import { branchFor, isProtected } from '../commands/task.js';
+import { readBackendRefs } from './analyze.js';
 import { CliError } from '../errors.js';
 
 // Планировщик и исполнитель — разные профили: план на opus, реализация на gemini flash.
@@ -116,13 +117,16 @@ export const implementAction = {
         project_dir: pre.projectDir,
         worktree: ws.dir,
         checks: (opts.cfg?.checks ?? []).map((c) => `  ${c}`).join('\n') || '  (в конфиге проекта проверок нет)',
+        backend_dir: opts.cfg?.backend?.dir ?? '',
+        backend_repo: opts.cfg?.backend?.repo ?? '',
+        run_dir: run?.dir ?? '',
       };
     },
 
     goal: ({ target: issue, pre }) =>
       `Реализовать задачу ${issue.key} «${issue.fields?.summary ?? ''}» в ветке ${pre.branch} и открыть черновик MR в ${pre.target}.`,
 
-    verify({ ws, opts, say }) {
+    verify({ ws, opts, run, say }) {
       const { git, dir, base } = ws;
       const commitsAhead = Number(git(['rev-list', '--count', `${base}..HEAD`], dir));
       if (commitsAhead === 0) {
@@ -136,6 +140,7 @@ export const implementAction = {
         diff: git(['diff', `${base}..HEAD`, '--', ...ACCEPTANCE_PATHSPECS], dir),
         diff_title: 'Дифф реализации (base..HEAD)',
         checks: checksFact(opts.cfg?.checks ?? [], ws.deps.available) ?? runChecks(opts.cfg.checks, dir, { say }),
+        backend_refs: readBackendRefs(run?.dir, { say }),
       };
     },
 
