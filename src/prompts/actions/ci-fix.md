@@ -1,6 +1,6 @@
 ---
 id: ci-fix
-vars: [repo, mr_iid, mr_title, mr_url, source_branch, target_branch, pipeline_id, pipeline_url, failed_count, failed_jobs, job_logs, branch_diff, checks, worktree]
+vars: [repo, mr_iid, mr_title, mr_url, source_branch, target_branch, pipeline_id, pipeline_url, failed_count, failed_jobs, job_logs, branch_diff, checks, worktree, backend_dir, backend_repo]
 judge: ci-acceptance
 ---
 Ты работаешь в GitLab-проекте {{repo}}. Текущая директория {{worktree}} — временный git worktree с веткой на базе origin/{{source_branch}}. Основной чекаут проекта не трогай.
@@ -19,6 +19,13 @@ judge: ci-acceptance
 ```diff
 {{branch_diff}}
 ```
+
+{{#backend_dir}}
+Бэкенд этого проекта: {{backend_dir}} (репозиторий {{backend_repo}}).
+Контракт API подтверждай по коду бэкенда: роут → контроллер → Resource/Request → поля и
+типы, со ссылкой файл:строка. Сначала прочитай {{backend_dir}}/AGENTS.md. Расхождение
+описания задачи с кодом бэкенда называй вслух в отчёте.
+{{/backend_dir}}
 
 Шаги:
 1. Прочитай логи и дифф выше и найди причину падения в коде ветки. Причина почти всегда в этом диффе: до него джобы были зелёными. Если по выжимке не ясно, посмотри файлы, на которые указывают ошибки, и историю ветки ("git log --oneline -20"); обрезанный дифф добери сам.

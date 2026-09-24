@@ -82,6 +82,7 @@ function show({ project }) {
     `  dir:        ${cfg.projectDir}${cfg.projectDir ? ` (${expandHome(cfg.projectDir)})` : ''}`,
     `  agent:      ${cfg.agent} (профили: ${agentNames(cfg).join(', ')})`,
     `  jira:       ${cfg.jira.baseUrl || '—'}`,
+    `  backend:    ${cfg.backend ? `${cfg.backend.name} (${cfg.backend.dir})` : '—'}`,
     `  checks:     ${cfg.checks.length ? cfg.checks.join(', ') : '— (коды выхода судье не уходят)'}`,
     `  agentArgs:  ${JSON.stringify(cfg.agentArgs)}`,
   ].join('\n');

@@ -206,4 +206,47 @@ test('review publish: без --post молчит, с --post отправляет
   assert.match(notes[1], /🤖 \*\*FS-Harness Code Review\*\*/);
 });
 
+test('analyze verify: с backend_refs.json, без него и с битым JSON', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fsh-refs-'));
+  try {
+    const pre = { comments: [] };
+
+    // 1. Без файла
+    const withoutFile = analyzeAction.action.verify({ pre, agentText: 'разбор', run: { dir } });
+    assert.deepEqual(withoutFile.backend_refs, []);
+
+    // 2. Валидный backend_refs.json
+    writeFileSync(path.join(dir, 'backend_refs.json'), JSON.stringify([
+      'app/Http/Controllers/UserController.php:42',
+      'app/Http/Resources/UserResource.php:15',
+    ]));
+    const withFile = analyzeAction.action.verify({ pre, agentText: 'разбор', run: { dir } });
+    assert.deepEqual(withFile.backend_refs, [
+      'app/Http/Controllers/UserController.php:42',
+      'app/Http/Resources/UserResource.php:15',
+    ]);
+
+    // 3. Битый JSON
+    const warnings = [];
+    writeFileSync(path.join(dir, 'backend_refs.json'), '{ invalid json');
+    const broken = analyzeAction.action.verify({
+      pre, agentText: 'разбор', run: { dir }, say: (msg) => warnings.push(msg),
+    });
+    assert.deepEqual(broken.backend_refs, []);
+    assert.ok(warnings.some((w) => w.includes('backend_refs.json повреждён')));
+
+    // 4. Не массив
+    const notArrayWarnings = [];
+    writeFileSync(path.join(dir, 'backend_refs.json'), JSON.stringify({ not: 'an array' }));
+    const notArray = analyzeAction.action.verify({
+      pre, agentText: 'разбор', run: { dir }, say: (msg) => notArrayWarnings.push(msg),
+    });
+    assert.deepEqual(notArray.backend_refs, []);
+    assert.ok(notArrayWarnings.some((w) => w.includes('не является массивом')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 process.on('exit', () => rmSync(project, { recursive: true, force: true }));
+

@@ -33,7 +33,7 @@ src/commands/task.js    ветка задачи, push с открытием MR �
 src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/toggle/delete), fetch инжектируется (тесты)
 src/mattermost.js       Mattermost REST: вход по паролю, me, отправка в канал, fetch инжектируется (тесты)
 src/dict.js             REST словаря бэкенда (rest-token): CRUD + refresh кэша, fetch инжектируется (тесты)
-src/config.js           конфиг v1/v2 (~/.config/gl-helper/config.json), миграция v1 в памяти, выбор активного проекта
+src/config.js           конфиг v1/v2 (~/.config/gl-helper/config.json), миграция v1 в памяти, выбор активного проекта, resolveProject (бэкенд)
 src/config-cmd.js       команда config: init/show/migrate (запись миграции на диск с .v1.bak)
 src/workspace.js        makeGit и режимы изоляции (checkout, одноразовый worktree, worktree задачи) + стратегии node_modules
 src/secrets.js          ключи: env → keychain (security) → файл (~/.growthbook_apikey, REST_TOKEN из .env бэкенда) → ошибка с командой заведения
@@ -266,6 +266,16 @@ Push делает `fsh publish <runId>` (перепроверяет HEAD и `ls-
   в общий канал ушло бы мимо человека.
 - `fsh task push --post` зовёт ту же `postReview`, что и `fsh mm review`. Без флага пуш молчит:
   запись в чат не должна быть побочным эффектом пуша.
+
+## Бэкенд в контуре задачи (fitstars-api4)
+
+Агент подтверждает контракт API и тестовые данные по коду бэкенда (`routes/`, контроллеры, Resource/Request, `database/factories/`), а не догадывается по тексту тикета.
+
+- **Конфиг:** поле `projects.<имя>.backend` задаёт имя другого проекта конфига. `resolveProject(cfgV2, name)` возвращает `{name, project, backend}`, где `backend` это `{name, dir, repo}` или `null`. Запрещены битые ссылки и циклы (`config_invalid`). `loadConfig` кладёт `cfg.backend`.
+- **fsh doctor:** проверяет наличие каталога и `.git` бэкенда при заданном `cfg.backend` (некритично).
+- **Промпты и контекст:** переменные `backend_dir` и `backend_repo` передаются в `analyze`, `ci-fix`, `implement` (и сценарий `flows/backend-check.md`).
+- **Факты приёмки:** ссылки на бэкенд агент пишет в `<runDir>/backend_refs.json` (массив `путь:строка`), `readBackendRefs` читает их в `facts.backend_refs` (до 20 штук), и они уходят судье.
+- **Бэкенд-only:** проект бэкенда (`-P fitstars-api4 mrs`) работает штатно; вызов `jira` на проекте без Jira падает с понятным `config_invalid`.
 
 ## Чеклист перед коммитом
 

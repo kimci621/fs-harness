@@ -6,7 +6,7 @@ import { COMMANDS } from '../src/registry.js';
 
 test('flows: сценарии на месте и с описаниями', () => {
   const flows = listFlows();
-  assert.deepEqual(flows.map((f) => f.name).sort(), ['fill-jira', 'push-task', 'take-task']);
+  assert.deepEqual(flows.map((f) => f.name).sort(), ['backend-check', 'fill-jira', 'push-task', 'take-task']);
   for (const f of flows) assert.ok(f.description, `у сценария ${f.name} нет description во front-matter`);
 });
 
@@ -27,7 +27,7 @@ test('flow show: текст протокола, неизвестное имя �
   assert.match(res.body, /# Сценарий: взять задачу в работу/);
   assert.throws(() => cmdFlow(['show', 'нет-такого'], { asObject: true }), (e) => e.code === 'usage' && /take-task/.test(e.message));
   assert.throws(() => cmdFlow(['run'], { asObject: true }), (e) => e.code === 'usage');
-  assert.deepEqual(cmdFlow(['list'], { asObject: true }).flows.map((f) => f.name).sort(), ['fill-jira', 'push-task', 'take-task']);
+  assert.deepEqual(cmdFlow(['list'], { asObject: true }).flows.map((f) => f.name).sort(), ['backend-check', 'fill-jira', 'push-task', 'take-task']);
 });
 
 test('agent-guide: сценарии попадают в гайд', () => {

@@ -62,6 +62,12 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
   const dir = expandHome(projectDir || cfg?.projectDir || '~');
   add('projectDir', existsSync(path.join(dir, '.git')), `${dir}${existsSync(path.join(dir, '.git')) ? '' : ' — нет .git (conflict не заработает)'}`);
 
+  if (cfg?.backend) {
+    const bDir = expandHome(cfg.backend.dir || '');
+    const bGit = existsSync(path.join(bDir, '.git'));
+    add('бэкенд', bGit, `${cfg.backend.name} → ${bDir}${bGit ? '' : ' — нет .git или каталог не существует'}`);
+  }
+
   // Профили агентов: смотрим только те, которым нужен ключ на диске — остальные идут по подписке.
   for (const [name, a] of Object.entries(cfg?.agents ?? {})) {
     if (!a?.keyFile) continue;

@@ -1,8 +1,25 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { expandHome } from '../config.js';
 import { humanize } from '../format.js';
 import { CliError } from '../errors.js';
+
+export function readBackendRefs(runDir, { say } = {}) {
+  if (!runDir) return [];
+  const file = path.join(runDir, 'backend_refs.json');
+  if (!existsSync(file)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    if (Array.isArray(raw)) {
+      return raw.filter((x) => typeof x === 'string').slice(0, 20);
+    }
+    say?.('⚠ backend_refs.json не является массивом, игнорирую');
+    return [];
+  } catch (err) {
+    say?.(`⚠ backend_refs.json повреждён (${err.message}), игнорирую`);
+    return [];
+  }
+}
 
 export function formatComments(comments) {
   if (!comments?.length) return 'Комментариев нет.';
@@ -74,7 +91,7 @@ export const analyzeAction = {
       plan.steps.forEach((s, i) => log(`   ${i + 1}. ${s}`));
     },
 
-    context({ target: issue, pre, opts, say }) {
+    context({ target: issue, pre, opts, run, say }) {
       say(`📋 ${issue.key}: ${issue.fields?.summary ?? ''}`);
       say(`   Статус: ${issue.fields?.status?.name ?? '—'} · комментариев: ${pre.comments.length}`);
       say(`   Агент: ${opts.agent} · чекаут ${pre.projectDir} (только чтение)`);
@@ -86,14 +103,18 @@ export const analyzeAction = {
         issue_comments: formatComments(pre.comments),
         issue_url: pre.url,
         project_dir: pre.projectDir,
+        backend_dir: opts.cfg?.backend?.dir ?? '',
+        backend_repo: opts.cfg?.backend?.repo ?? '',
+        run_dir: run?.dir ?? '',
       };
     },
 
     goal: ({ target: issue }) => `Разобрать задачу ${issue.key} «${issue.fields?.summary ?? ''}» по коду проекта. Читающее действие: ничего не править.`,
 
-    verify: ({ pre, agentText }) => ({
+    verify: ({ pre, agentText, run, say }) => ({
       issue_comments: pre.comments.length,
       agent_chars: agentText.length,
+      backend_refs: readBackendRefs(run?.dir, { say }),
     }),
 
     result({ target: issue, run, agentText, say }) {

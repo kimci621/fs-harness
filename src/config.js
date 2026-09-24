@@ -13,7 +13,7 @@ export const CONFIG_PATH = CONFIG_PATHS[1];
 
 export const configPath = () => CONFIG_PATHS.find(existsSync) ?? CONFIG_PATH;
 
-const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'cc', buildJob: '', targetBranch: '', branchPattern: 'feature/{key}', checks: [], jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' }, growthbook: { baseUrl: '', project: '', env: 'production' }, dict: { baseUrl: '' } };
+const PROJECT_DEFAULT = { repo: '', host: '', dir: '', agent: 'cc', buildJob: '', targetBranch: '', branchPattern: 'feature/{key}', checks: [], jira: { baseUrl: '', email: '', projectKey: '', componentField: 'Компонент' }, growthbook: { baseUrl: '', project: '', env: 'production' }, dict: { baseUrl: '' }, backend: null };
 
 export const DEFAULTS = {
   version: 2,
@@ -180,13 +180,47 @@ export function pickProject(cfgV2, { project, env = process.env } = {}) {
   return { name: wanted, project: { ...PROJECT_DEFAULT, ...found, jira: { ...PROJECT_DEFAULT.jira, ...(found.jira || {}) } } };
 }
 
+// Резолв проекта и его связанного бэкенда.
+export function resolveProject(cfgV2, name) {
+  const opts = typeof name === 'object' && name !== null ? name : { project: name };
+  const { name: resolvedName, project } = pickProject(cfgV2, opts);
+  if (!resolvedName || !project.backend) {
+    return { name: resolvedName, project, backend: null };
+  }
+  const backendName = project.backend;
+  const backendProj = cfgV2.projects?.[backendName];
+  if (!backendProj) {
+    throw new CliError(
+      `Поле projects.${resolvedName}.backend указывает на несуществующий проект "${backendName}".`,
+      1,
+      'config_invalid',
+    );
+  }
+  if (backendProj.backend) {
+    throw new CliError(
+      `Цикл бэкенда: проект "${backendName}" сам имеет backend. Бэкенд не может иметь свой backend.`,
+      1,
+      'config_invalid',
+    );
+  }
+  return {
+    name: resolvedName,
+    project,
+    backend: {
+      name: backendName,
+      dir: expandHome(backendProj.dir || ''),
+      repo: backendProj.repo || '',
+    },
+  };
+}
+
 // Плоские поля (repo, host, projectDir, jira) — алиасы активного проекта:
 // команды про мультипроектность не знают и знать не должны.
 export function loadConfig(env = process.env, { project, file } = {}) {
   const targetFile = file || configPath();
   const raw = readRawConfig(targetFile);
   const v2 = migrateConfig(raw ?? {});
-  const { name, project: p } = pickProject(v2, { project, env });
+  const { name, project: p, backend } = resolveProject(v2, { project, env });
 
   const cfg = {
     version: 2,
@@ -194,6 +228,7 @@ export function loadConfig(env = process.env, { project, file } = {}) {
     activeProject: name,
     projects: v2.projects ?? {},
     project: p,
+    backend,
     repo: env.GL_HELPER_REPO || p.repo,
     host: env.GL_HELPER_HOST || p.host,
     projectDir: p.dir,

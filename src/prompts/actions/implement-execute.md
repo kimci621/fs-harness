@@ -1,6 +1,6 @@
 ---
 id: implement-execute
-vars: [repo, issue_key, issue_summary, issue_status, issue_description, issue_comments, issue_url, target_branch, branch, project_dir, worktree, plan, checks]
+vars: [repo, issue_key, issue_summary, issue_status, issue_description, issue_comments, issue_url, target_branch, branch, project_dir, worktree, plan, checks, backend_dir, backend_repo, run_dir]
 judge: task-review
 ---
 
@@ -23,6 +23,16 @@ judge: task-review
 Комментарии:
 
 {{issue_comments}}
+
+{{#backend_dir}}
+## Бэкенд
+Бэкенд этого проекта: {{backend_dir}} (репозиторий {{backend_repo}}).
+Контракт API подтверждай по коду бэкенда: роут → контроллер → Resource/Request → поля и
+типы, со ссылкой файл:строка. Сначала прочитай {{backend_dir}}/AGENTS.md. Расхождение
+описания задачи с кодом бэкенда называй вслух в отчёте.
+
+Ссылки на бэкенд, которыми подтвердил контракт, запиши в файл {{run_dir}}/backend_refs.json - массив строк `путь:строка`.
+{{/backend_dir}}
 
 ## Как работать
 
