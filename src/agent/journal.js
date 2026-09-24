@@ -6,9 +6,15 @@ import { CliError } from '../errors.js';
 export const RUNS_DIR = path.join(homedir(), '.local', 'state', 'fs-harness', 'runs');
 export const MAX_ARCHIVES = 50;
 
-// Удаляет старые архивы ранов сверх лимита keep (все архивы максимум 50 шт).
+// Удаляет старые архивы ранов сверх лимита keep (все архивы максимум 50 шт)
+// или старше olderThanDays.
 // pending_approval не трогаем: ран ждёт кнопку, ретеншн его съесть не должен.
-export function pruneRuns({ root = RUNS_DIR, keep = MAX_ARCHIVES } = {}) {
+export function pruneRuns({
+  root = RUNS_DIR,
+  keep = MAX_ARCHIVES,
+  olderThanDays = null,
+  now = Date.now(),
+} = {}) {
   if (!existsSync(root)) return [];
   const entries = readdirSync(root)
     .map((id) => {
@@ -31,9 +37,27 @@ export function pruneRuns({ root = RUNS_DIR, keep = MAX_ARCHIVES } = {}) {
     .filter(Boolean)
     .sort((a, b) => b.createdAt - a.createdAt);
 
-  const excess = entries.filter((e) => e.state !== 'pending_approval').slice(keep);
+  const candidates = entries.filter((e) => e.state !== 'pending_approval');
+  const toDelete = new Set();
+
+  // 1. Прун по возрасту: старше maxAgeDays удаляется даже внутри keep
+  if (olderThanDays !== null && olderThanDays !== undefined && olderThanDays > 0) {
+    const cutoff = now - olderThanDays * 24 * 3600 * 1000;
+    for (const e of candidates) {
+      if (e.createdAt < cutoff) toDelete.add(e);
+    }
+  }
+
+  // 2. Прун по количеству (keep)
+  const remaining = candidates.filter((e) => !toDelete.has(e));
+  if (typeof keep === 'number' && keep >= 0) {
+    for (const e of remaining.slice(keep)) {
+      toDelete.add(e);
+    }
+  }
+
   const deleted = [];
-  for (const item of excess) {
+  for (const item of toDelete) {
     try {
       rmSync(item.dir, { recursive: true, force: true });
       deleted.push(item.id);
@@ -68,9 +92,9 @@ export function sweepExpiredApprovals({ root = RUNS_DIR, now = Date.now(), ttlMs
 }
 
 // Каталог рана. meta.json не для красоты: без него --judge-only не на чем работать.
-export function createRun(action, { root = RUNS_DIR, keep = MAX_ARCHIVES } = {}) {
+export function createRun(action, { root = RUNS_DIR, keep = MAX_ARCHIVES, olderThanDays = null, now = Date.now() } = {}) {
   root = root || RUNS_DIR; // явный undefined из опций не должен обнулять дефолт
-  pruneRuns({ root, keep: keep - 1 });
+  pruneRuns({ root, keep: keep - 1, olderThanDays, now });
   const id = `${action}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const dir = path.join(root, id);
   mkdirSync(dir, { recursive: true });

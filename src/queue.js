@@ -94,3 +94,43 @@ export function clearQueue({ root = QUEUE_ROOT } = {}) {
   if (existsSync(root)) rmSync(root, { recursive: true, force: true });
   return keys;
 }
+
+// Удаление задания из очереди по завершении
+export function removeJob(first, second) {
+  let r = QUEUE_ROOT;
+  let k = first;
+  if (typeof second === 'string') {
+    r = first;
+    k = second;
+  } else if (second?.root) {
+    r = second.root;
+  }
+  const file = jobFile(k, r);
+  try {
+    if (existsSync(file)) {
+      rmSync(file, { force: true });
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+// Обновление полей задания (например, attempts при ошибке)
+export function updateJob(first, second, third) {
+  let r = QUEUE_ROOT;
+  let k = first;
+  let patch = second;
+  if (typeof first === 'string' && typeof second === 'string' && typeof third === 'object') {
+    r = first;
+    k = second;
+    patch = third;
+  } else if (third?.root) {
+    r = third.root;
+  }
+  const file = jobFile(k, r);
+  const existing = readJob(file);
+  if (!existing) return null;
+  const updated = { ...existing, ...patch };
+  writeFileSync(file, JSON.stringify(updated, null, 2) + '\n');
+  return updated;
+}

@@ -1,4 +1,5 @@
 import { listJobs, pruneQueue, clearQueue } from '../queue.js';
+import { listLocks, lockKey } from '../locks.js';
 import { table } from '../format.js';
 import { finish } from '../output.js';
 import { confirm } from '../ui.js';
@@ -27,7 +28,16 @@ export function cmdQueue(ctx, args, opts = {}) {
 
   pruneQueue(at);
   const jobs = listJobs(at);
-  const result = { ok: true, jobs };
+  const activeLocks = listLocks({ root: opts.locksRoot }).filter((l) => !l.stale);
+  const locksMap = new Map(activeLocks.map((l) => [l.key, l]));
+
+  const jobsWithLocks = jobs.map((j) => {
+    const key = lockKey({ repo: j.repo, mr: j.mr, branch: j.branch, task: j.task });
+    const lock = locksMap.get(key) || null;
+    return { ...j, lock: lock ? { pid: lock.pid, at: lock.at } : null };
+  });
+
+  const result = { ok: true, jobs: jobsWithLocks };
   if (opts.asObject) return result;
   if (opts.json) {
     finish(true, result);
@@ -38,9 +48,17 @@ export function cmdQueue(ctx, args, opts = {}) {
     return result;
   }
   console.log(table([
-    ['ВИД', 'ПРОЕКТ', 'MR', 'ДЕЙСТВИЕ', 'ВАЖНОСТЬ', 'ЧТО'],
-    ...jobs.map((j) => [j.kind, j.project || '—', j.mr ? `!${j.mr}` : '—', j.action ?? '—', j.level ?? '—', j.detail]),
+    ['ВИД', 'ПРОЕКТ', 'MR', 'ДЕЙСТВИЕ', 'ЛОК', 'ВАЖНОСТЬ', 'ЧТО'],
+    ...jobsWithLocks.map((j) => [
+      j.kind,
+      j.project || '—',
+      j.mr ? `!${j.mr}` : '—',
+      j.action ?? '—',
+      j.lock ? `🔒 pid:${j.lock.pid}` : '—',
+      j.level ?? '—',
+      j.detail,
+    ]),
   ]));
-  console.log(`\nВсего ${jobs.length}. Действия по ним пока запускает человек.`);
+  console.log(`\nВсего ${jobs.length}.`);
   return result;
 }

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { CliError } from './errors.js';
@@ -94,11 +94,17 @@ export async function acquireWorkspace({
   });
 }
 
-// Уборка worktree и ветки: одна на acquireWorkspace и на доигрывание упавшего рана.
-export function removeWorktree(git, dir, branch, onEvent = () => {}) {
+// Уборка worktree и ветки: одна на acquireWorkspace, gc и на доигрывание упавшего рана.
+export function removeWorktree(gitOrProjectDir, dir, branch, onEvent = () => {}) {
+  const git = typeof gitOrProjectDir === 'function' ? gitOrProjectDir : makeGit(gitOrProjectDir);
   try { git(['worktree', 'remove', '--force', dir]); } catch { /* уже удалён */ }
   try { git(['worktree', 'prune']); } catch { /* не критично */ }
-  try { git(['branch', '-D', branch]); } catch { /* не критично */ }
+  if (branch) {
+    try { git(['branch', '-D', branch]); } catch { /* не критично */ }
+  }
+  if (existsSync(dir)) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* не критично */ }
+  }
   onEvent('🧹 Временный worktree и ветка удалены.');
 }
 

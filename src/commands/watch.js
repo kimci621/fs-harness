@@ -3,7 +3,9 @@ import path from 'node:path';
 import { pollOnce, formatEvents, daemonSecretIssues, daemonKeychainJudges } from '../watch.js';
 import { getTelegramTarget, postTelegram } from '../notify.js';
 import { enqueue, jobFromEvent, pruneQueue, DEFAULT_TTL_SECONDS } from '../queue.js';
-import { loadConfig } from '../config.js';
+import { loadConfig, expandHome } from '../config.js';
+import { gcWorktrees } from '../worktrees.js';
+import { runWorker } from '../worker.js';
 import { createGlab } from '../glab.js';
 import { createCtx } from '../registry.js';
 import { listAuto, advanceTask } from '../auto.js';
@@ -129,11 +131,40 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
   process.on('SIGTERM', stop);
 
   const last = new Map();
+  let lastGc = 0;
   let cycle = 0;
   log(`${stamp()} watcher: проекты ${names.join(', ')}`);
   try {
     while (!stopped && cycle < cycles) {
       cycle++;
+
+      // Авто-gc worktree: не чаще раза в час
+      const rootCfg = loadCfg(env, {});
+      const gcDays = rootCfg.workspace?.gcOlderThanDays ?? 7;
+      if (gcDays > 0 && now() - lastGc >= 3600_000) {
+        lastGc = now();
+        const gc = deps.gcWorktreesImpl || gcWorktrees;
+        try {
+          const projectDirs = Object.values(rootCfg.projects ?? {})
+            .map((p) => (p.dir ? expandHome(p.dir) : null))
+            .filter(Boolean);
+          const cleaned = await gc({
+            root: rootCfg.workspace?.root ? expandHome(rootCfg.workspace.root) : undefined,
+            runsRoot: opts.runsDir ? expandHome(opts.runsDir) : undefined,
+            projectDirs,
+            olderThanDays: gcDays,
+            dryRun: false,
+            now: now(),
+            say: (msg) => log(`${stamp()} ${msg}`),
+          });
+          if (cleaned?.length) {
+            log(`${stamp()} gc: удалено ${cleaned.length} устаревших worktree`);
+          }
+        } catch (err) {
+          log(`${stamp()} gc worktrees не удался: ${err.message}`);
+        }
+      }
+
       let waitSec = 60;
       for (const name of Object.keys(loadCfg(env, {}).projects ?? {})) {
         if (stopped) break;
@@ -154,6 +185,26 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
         } catch (err) {
           // Опрос одного проекта упал — это не повод ронять демон: сеть моргает, токены протухают.
           log(`${stamp()} ${cfg.repo || name}: опрос упал — ${err.message}`);
+        }
+
+        // Если включены воркеры — забираем задания из очереди
+        if (cfg.workers?.enabled) {
+          const runWorkerFn = deps.runWorkerImpl || runWorker;
+          try {
+            await runWorkerFn({
+              cfg,
+              g: makeCtx(cfg).g,
+              queueRoot: opts.queueRoot,
+              locksRoot: opts.locksRoot,
+              once: true,
+              concurrency: cfg.workers?.concurrency ?? 2,
+              log,
+              signal: opts.signal,
+              deps: deps.workerDeps,
+            });
+          } catch (wErr) {
+            log(`${stamp()} ${cfg.repo || name}: воркер упал — ${wErr.message}`);
+          }
         }
 
         // Если включена автоматика и передан флаг --auto-execute — двигаем активные задачи

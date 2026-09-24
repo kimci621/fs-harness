@@ -100,7 +100,9 @@ fsh config show
 | `ask "<вопрос>" [--run <id>]` | Мастер по самому fsh: разбирает упавший ран и отвечает про инструмент. Диалог — клавиша `A` в TUI |
 | `mcp` | MCP-сервер (stdio): те же команды как типизированные инструменты для AI-клиентов |
 | `watch [install] [--daemon]` | Что изменилось в MR с прошлого опроса: триаж судьёй, уведомление в Telegram, важное — в очередь заданий. Действия не запускает. `--daemon` — фоновый цикл по всем проектам, `install` печатает юнит автозапуска |
-| `queue [list\|clear]` | Очередь заданий watcher: что требует работы. Исполнителя нет — действия запускает человек |
+| `queue [list\|clear]` | Очередь заданий watcher: что требует работы |
+| `worktrees [list\|gc]` | Временные каталоги worktree: список, возраст, статус и очистка (`--dry-run`, `--older-than`, `--sizes`) |
+| `worker [--once] [--concurrency N]` | Пул воркеров: параллельное исполнение заданий из очереди с файловыми локами |
 | `publish <runId>` | Доопубликовать ран: упавший на push/build или ждущий кнопки Approve. Перепроверяет HEAD и `ls-remote` |
 | `revise <runId>` | Доделать ран в той же сессии агента (кнопка Revise из Telegram), потом заново судья |
 | `bot` | Telegram-бот (long-polling): `/mrs` `/watch` `/status` `/run` и кнопки Approve/Revise/Reject |
@@ -108,7 +110,7 @@ fsh config show
 | `config init\|show\|migrate` | Конфиг: создать, показать активный проект, перевести старый файл на v2 (с бэкапом `.v1.bak`) |
 | `help` | Справка |
 
-Флаги: `-R/--repo`, `--host`, `-P/--project`, `--json` (read-команды), `--agent <профиль>` (`cc`, `ccq`, `cco`, `ccd`, `agy` — живут в конфиге, `agents.<имя>`), `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit/jira/mm — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show), `--file <путь|->` и `--attach` (jira field), `--post` и `--channel` (task push, mm), `--daemon` (watch, doctor).
+Флаги: `-R/--repo`, `--host`, `-P/--project`, `--json` (read-команды), `--agent <профиль>` (`cc`, `ccq`, `cco`, `ccd`, `agy` — живут в конфиге, `agents.<имя>`), `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit/jira/mm — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show), `--file <путь|->` и `--attach` (jira field), `--post` и `--channel` (task push, mm), `--daemon` (watch, doctor), `--sizes` и `--older-than` (worktrees), `--once` и `--concurrency` (worker).
 
 Полный список — `fsh help`; он генерируется из того же реестра, что и сами команды.
 

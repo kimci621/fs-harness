@@ -148,3 +148,38 @@ test('sweepExpiredApprovals: протухший гасит, свежий не т
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('pruneRuns: прун по возрасту удаляет старые даже внутри keep, кроме pending_approval', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-prune-age-'));
+  try {
+    const now = Date.parse('2026-09-23T12:00:00.000Z');
+    // Старый ран (40 дней назад)
+    const old = createRun('conflict', { root: dir, keep: 10 });
+    saveArtifact(old, 'meta.json', {
+      id: old.id, action: 'conflict', state: 'done',
+      created_at: new Date(now - 40 * 86400000).toISOString(),
+    });
+
+    // Старый ран в pending_approval (40 дней назад)
+    const waiting = createRun('conflict', { root: dir, keep: 10 });
+    saveArtifact(waiting, 'meta.json', {
+      id: waiting.id, action: 'conflict', state: 'pending_approval',
+      created_at: new Date(now - 40 * 86400000).toISOString(),
+    });
+
+    // Свежий ран (1 день назад)
+    const fresh = createRun('conflict', { root: dir, keep: 10 });
+    saveArtifact(fresh, 'meta.json', {
+      id: fresh.id, action: 'conflict', state: 'done',
+      created_at: new Date(now - 1 * 86400000).toISOString(),
+    });
+
+    // keep=10 (все помещаются), но olderThanDays=30
+    const deleted = pruneRuns({ root: dir, keep: 10, olderThanDays: 30, now });
+    assert.deepEqual(deleted, [old.id]);
+    assert.ok(listRuns({ root: dir, limit: 10 }).some((r) => r.id === waiting.id), 'pending_approval остался');
+    assert.ok(listRuns({ root: dir, limit: 10 }).some((r) => r.id === fresh.id), 'fresh остался');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

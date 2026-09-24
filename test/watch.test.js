@@ -244,3 +244,28 @@ test('diffSnapshots: отфильтровывает события автора=
   assert.equal(events.some((e) => e.kind === 'threads' && e.mr === 3), true);
 });
 
+test('демон: worker-цикл при workers.enabled: false не запускает воркер', async () => {
+  let workerRan = false;
+  const cfg = {
+    projects: { front: {} },
+    repo: 'org/front',
+    watch: { enabled: true, intervalSeconds: 10 },
+    workers: { enabled: false },
+    judge: { roles: {}, profiles: {} },
+    telegram: {},
+  };
+  await cmdWatchDaemon({}, {
+    env: {},
+    loadCfg: () => cfg,
+    makeCtx: () => ({ cfg, repo: 'org/front' }),
+    poll: async () => ({ events: [], kept: [], queued: [] }),
+    sleep: async () => {},
+    now: () => 0,
+    cycles: 1,
+    log: () => {},
+    runWorkerImpl: async () => { workerRan = true; },
+  });
+  assert.equal(workerRan, false, 'воркер не запускался при workers.enabled: false');
+});
+
+

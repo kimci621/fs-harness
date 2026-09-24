@@ -81,7 +81,12 @@ export const DEFAULTS = {
   workspace: {
     root: '~/.local/state/fs-harness/worktrees',
     deps: { strategy: 'clone' },
+    gcOlderThanDays: 7,
   },
+  // Журнал ранов: ретеншн по числу и возрасту
+  journal: { maxRuns: 50, maxAgeDays: 30 },
+  // Воркеры очереди: параллельное выполнение заданий из очереди
+  workers: { enabled: false, concurrency: 2 },
   // Watcher: опрос по команде и фоновый демон (fsh watch --daemon). enabled и intervalSeconds
   // можно переопределить на проект, ttlSeconds — окно дедупликации заданий в очереди.
   // 300 с, а не 60: один опрос большого репозитория занимает под минуту, и на 60 демон
