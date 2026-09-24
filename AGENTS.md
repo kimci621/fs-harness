@@ -16,7 +16,12 @@ src/resolve.js          поиск MR: по номеру или части им�
 src/pipeline.js         ensureMRPipeline, findJob, deployJobName, mapLimit
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto, worktrees, worker
+src/worktrees.js        инвентаризация и gc временных worktree (orphan, run-done, task)
+src/commands/worktrees.js команда fsh worktrees: список и очистка (gc)
+src/locks.js            файловые локи по ветке/MR (<repo>:<branch>|<repo>:mr<iid>) для сериализации
+src/worker.js           пул воркеров: параллельное исполнение заданий очереди (concurrency, attempts)
+src/commands/worker.js  команда fsh worker: ручной и фоновый запуск воркеров
 src/costs.js          накопитель расходов по ранам и задачам (costs.jsonl), sumCosts / appendCost
 src/auto.js           автоматика жизненного цикла задачи (auto/<KEY>.json), advanceTask, load/save/list/stopAuto
 src/commands/auto.js  команда fsh auto: запуск, статус, остановка задачи в автомате

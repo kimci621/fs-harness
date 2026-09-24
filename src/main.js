@@ -51,6 +51,10 @@ const FLAGS_USAGE = `Флаги:
   --default <значение>    В growthbook create: дефолтное значение флага
   --check                 В init: сверить скилл в проекте с реестром, ничего не писать
   --resolved / --open     В mr-comments: только решённые / нерешённые треды
+  --sizes                 В worktrees: считать размер каталогов на диске
+  --older-than <дни>      В worktrees gc: порог возраста для очистки
+  --once                  В worker: выполнить текущие задания и выйти
+  --concurrency <N>       В worker: число параллельных слотов (дефолт 2)
 
 Режим агента (env):
   GL_HELPER_JSON=1        JSON-вывод и структурированные ошибки для агентов
@@ -209,6 +213,10 @@ function parseArgs(argv) {
     else if (a === '--pipeline') opts.pipeline = av[++i];
     else if (a === '--resolved' || a === '-resolved') opts.resolved = true;
     else if (a === '--open' || a === '-open') opts.open = true;
+    else if (a === '--sizes') opts.sizes = true;
+    else if (a === '--older-than') opts['older-than'] = av[++i];
+    else if (a === '--once') opts.once = true;
+    else if (a === '--concurrency') opts.concurrency = Number(av[++i]);
     else if (a === '-h' || a === '--help') opts.help = true;
     else if (a.startsWith('-')) throw new CliError(`Неизвестный флаг "${a}". См. fsh help.`);
     else rest.push(a);

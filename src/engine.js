@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createEventStream } from './agent/events.js';
 import { parseClaudeLine, parseAgyLine } from './agent/stream.js';
-import { createRun, saveArtifact, readRun, appendEvent, patchRunMeta, runIsActive } from './agent/journal.js';
+import { createRun, saveArtifact, readRun, appendEvent, patchRunMeta, runIsActive, MAX_ARCHIVES } from './agent/journal.js';
 import { appendCost } from './costs.js';
 import { spawnAgent } from './agent/spawn.js';
 import { renderTemplate } from './prompts.js';
@@ -310,7 +310,11 @@ export function runAction(spec, ctx, input, opts = {}) {
         return x.pre.result;
       }
 
-      runDir = createRun(spec.name, { root: opts.runsDir });
+      runDir = createRun(spec.name, {
+        root: opts.runsDir,
+        keep: opts.cfg?.journal?.maxRuns ?? MAX_ARCHIVES,
+        olderThanDays: opts.cfg?.journal?.maxAgeDays ?? null,
+      });
       x.run = runDir;
 
       // Изоляция до контекста: промпту нужны и путь worktree, и доступность зависимостей.

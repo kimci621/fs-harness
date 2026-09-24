@@ -22,6 +22,8 @@ import { cmdFlow } from './commands/flow.js';
 import { cmdInit } from './commands/init.js';
 import { cmdWatch, cmdWatchDaemon, cmdWatchInstall } from './commands/watch.js';
 import { cmdQueue } from './commands/queue.js';
+import { cmdWorktrees } from './commands/worktrees.js';
+import { cmdWorker } from './commands/worker.js';
 import { cmdRuns } from './commands/runs.js';
 import { cmdRetry } from './commands/retry.js';
 import { cmdResume } from './commands/resume.js';
@@ -408,6 +410,31 @@ export const COMMANDS = [
     description: 'Очередь заданий watcher: что требует работы (исполнителя пока нет — запускает человек)',
     example: 'fsh queue',
     run: (ctx, args, opts) => cmdQueue(ctx, args, opts),
+  },
+  {
+    name: 'worktrees',
+    usage: 'worktrees [list|gc] [--sizes] [--older-than N] [--dry-run]',
+    description: 'Временные каталоги worktree: список, возраст, статус и очистка',
+    example: 'fsh worktrees list\n  fsh worktrees gc --dry-run',
+    run: (ctx, args, opts) => cmdWorktrees(ctx, args, opts),
+    mcp: {
+      description: 'Список временных каталогов worktree, их статус (run-alive, run-done, orphan, task) и возраст. Только чтение.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sizes: { type: 'boolean', description: 'Считать ли размер каталогов на диске' },
+        },
+        additionalProperties: false,
+      },
+      call: (ctx, a) => cmdWorktrees(ctx, ['list'], { ...a, json: true, asObject: true }),
+    },
+  },
+  {
+    name: 'worker',
+    usage: 'worker [--once] [--concurrency N]',
+    description: 'Обработчик очереди заданий: параллельное выполнение действий',
+    example: 'fsh worker --once\n  fsh worker --concurrency 3',
+    run: (ctx, args, opts) => cmdWorker(ctx, args, opts),
   },
   {
     name: 'runs',
