@@ -182,6 +182,16 @@ test('waitJob: терминальный статус возвращает джо
     }),
     (e) => e instanceof CliError && e.code === 'job_timeout',
   );
+
+  const ctrl = new AbortController();
+  ctrl.abort();
+  await assert.rejects(
+    () => waitJob({
+      g: { getJobs: async () => [job('running')], getJob: async () => job('running') },
+      repo: 'r/repo', pipelineId: 1, jobId: 9, intervalMs: 1, quiet: true, label: 'build', signal: ctrl.signal,
+    }),
+    (e) => e instanceof CliError && e.code === 'canceled',
+  );
 });
 
 test('waitJob: джоба, ставшая manual после created, играется сама, а не ждётся час', async () => {

@@ -103,3 +103,17 @@ test('spawnAgent: input уезжает агенту в stdin, а не в argv', 
   assert.equal((await run.result).ok, true);
   assert.equal(events.find((e) => e.t === 'log')?.text, `прочитал ${big.length}`);
 });
+
+test('spawnAgent: слушатель signal удаляется после завершения процесса (нет утечки)', async () => {
+  const ctrl = new AbortController();
+  const run = spawnAgent({
+    bin: process.execPath,
+    args: ['-e', 'process.exit(0)'],
+    signal: ctrl.signal,
+  });
+  await run.result;
+  const { getEventListeners } = await import('node:events');
+  const listeners = getEventListeners(ctrl.signal, 'abort');
+  assert.equal(listeners.length, 0, 'слушатель abort должен быть удален');
+});
+

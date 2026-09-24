@@ -165,3 +165,49 @@ test('WIRE: у agy промпт-флаг последний — иначе он 
   assert.equal(WIRE.agy.args.at(-1), '-p=');
   assert.equal(WIRE.claude.args.at(-1), '-p');
 });
+
+test('чат: таймаут хода прерывает ожидание и вызывает abort у процесса', async () => {
+  let aborted = false;
+  const impl = () => {
+    const listeners = new Set();
+    return {
+      written: [],
+      emit: (e) => { for (const fn of listeners) fn(e); },
+      events: { on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); } },
+      result: new Promise(() => {}),
+      abort: () => { aborted = true; },
+      write: () => {},
+    };
+  };
+  const chat = startChat({ agent: agyAgent, cwd: '/repo', spawnImpl: impl });
+  await assert.rejects(
+    () => chat.send('зависший вопрос', { timeoutMs: 20 }),
+    (e) => e.code === 'agent_timeout' && /Таймаут/.test(e.message),
+  );
+  assert.equal(aborted, true, 'процесс агента должен быть прерван по таймауту');
+});
+
+test('чат: signal прерывает ход', async () => {
+  let aborted = false;
+  const impl = () => {
+    const listeners = new Set();
+    return {
+      written: [],
+      emit: (e) => { for (const fn of listeners) fn(e); },
+      events: { on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); } },
+      result: new Promise(() => {}),
+      abort: () => { aborted = true; },
+      write: () => {},
+    };
+  };
+  const chat = startChat({ agent: agyAgent, cwd: '/repo', spawnImpl: impl });
+  const ac = new AbortController();
+  const q = chat.send('вопрос', { signal: ac.signal });
+  ac.abort();
+  await assert.rejects(
+    () => q,
+    (e) => e.code === 'canceled',
+  );
+  assert.equal(aborted, true, 'процесс агента должен быть прерван при abort');
+});
+

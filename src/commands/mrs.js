@@ -57,10 +57,14 @@ export async function cmdMRS(g, repo, { json, asObject, ...filters } = {}) {
   const all = await mapLimit(mrs, 6, async (mr) => {
     mr.head_pipeline = pipes[mr.iid] || null;
     let discussions = null;
-    try {
-      discussions = await g.getDiscussions(repo, mr.iid);
-    } catch {
-      // API тредов недоступен — покажем только общее число комментов.
+    if (mr.user_notes_count === 0) {
+      discussions = [];
+    } else {
+      try {
+        discussions = await g.getDiscussions(repo, mr.iid);
+      } catch {
+        // API тредов недоступен — покажем только общее число комментов.
+      }
     }
     let approved = null;
     try {

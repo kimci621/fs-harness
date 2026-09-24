@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRun, saveArtifact, appendEvent, readEvents, listRuns, pruneRuns, sweepExpiredApprovals, patchRunMeta, setRunState, pidAlive, runIsActive, MAX_ARCHIVES } from '../src/agent/journal.js';
@@ -122,10 +122,13 @@ test('pruneRuns: pending_approval переживает keep=0', () => {
 test('sweepExpiredApprovals: протухший гасит, свежий не трогает', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-sweep-'));
   try {
+    const wtDir = path.join(dir, 'wt-old');
+    mkdirSync(wtDir);
     const old = createRun('conflict', { root: dir, keep: 10 });
     saveArtifact(old, 'meta.json', {
       id: old.id, action: 'conflict', state: 'pending_approval',
       approval: { nonce: 'n-old', issued_at: '2026-01-01T00:00:00.000Z' },
+      worktree: wtDir,
     });
     const fresh = createRun('conflict', { root: dir, keep: 10 });
     saveArtifact(fresh, 'meta.json', {
@@ -142,6 +145,7 @@ test('sweepExpiredApprovals: протухший гасит, свежий не т
     });
     assert.deepEqual(expired, [old.id]);
     assert.deepEqual(swept, [old.id]);
+    assert.equal(existsSync(wtDir), false, 'worktree протухшего рана должен удаляться');
     assert.equal(JSON.parse(readFileSync(path.join(old.dir, 'meta.json'), 'utf8')).state, 'expired');
     assert.equal(JSON.parse(readFileSync(path.join(fresh.dir, 'meta.json'), 'utf8')).state, 'pending_approval');
   } finally {

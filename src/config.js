@@ -90,8 +90,8 @@ export const DEFAULTS = {
   // Watcher: опрос по команде и фоновый демон (fsh watch --daemon). enabled и intervalSeconds
   // можно переопределить на проект, ttlSeconds — окно дедупликации заданий в очереди.
   // 300 с, а не 60: один опрос большого репозитория занимает под минуту, и на 60 демон
-  // опрашивал бы непрерывно.
-  watch: { enabled: true, intervalSeconds: 300, ttlSeconds: 86400 },
+  // опрашивал бы непрерывно. onlyMe: true — уведомлять только о связанных с пользователем MR.
+  watch: { enabled: true, intervalSeconds: 300, ttlSeconds: 86400, onlyMe: true },
   // Починка CI: сколько раз ci-fix возьмётся за один и тот же MR, прежде чем отдать его человеку.
   ci: { maxRetries: 2 },
   // Автоматизация сквозного цикла задачи (fsh auto / watch daemon --auto-execute).

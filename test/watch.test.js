@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { diffSnapshots, keepEvents, triagePayload, formatEvents, pollOnce, stateFile, daemonSecretIssues, daemonKeychainJudges } from '../src/watch.js';
+import { diffSnapshots, keepEvents, triagePayload, formatEvents, pollOnce, stateFile, daemonSecretIssues, daemonKeychainJudges, isMRRelatedToMe, isUserInList } from '../src/watch.js';
 import { cmdWatch, cmdWatchDaemon, serviceText, sleepFor } from '../src/commands/watch.js';
 import { listJobs } from '../src/queue.js';
 
@@ -267,5 +267,140 @@ test('демон: worker-цикл при workers.enabled: false не запус�
   });
   assert.equal(workerRan, false, 'воркер не запускался при workers.enabled: false');
 });
+
+test('isMRRelatedToMe: проверяет автора, исполнителей и ревьюеров', () => {
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'a.latipov' }), 'a.latipov'), true);
+  assert.equal(isMRRelatedToMe(mr({ author: 'a.latipov' }), 'a.latipov'), true);
+  assert.equal(isMRRelatedToMe(mr({ author: { username: 'a.latipov', name: 'Amir' } }), 'a.latipov'), true);
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'other' }), 'a.latipov'), false);
+
+  // Исполнители (строка и объект)
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', assignees: [{ username: 'a.latipov' }] }), 'a.latipov'), true);
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', assignees: ['a.latipov'] }), 'a.latipov'), true);
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', assignee: { username: 'a.latipov' } }), 'a.latipov'), true);
+
+  // Ревьюеры
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', reviewers: [{ username: 'a.latipov' }] }), 'a.latipov'), true);
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', reviewers: ['a.latipov'] }), 'a.latipov'), true);
+
+  // Регистронезависимость и пробелы
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'A.Latipov ' }), 'a.latipov'), true);
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'a.latipov' }), 'A.LATIPOV'), true);
+
+  // Без meUsername — всё разрешено
+  assert.equal(isMRRelatedToMe(mr({ author_username: 'other' }), null), true);
+});
+
+test('diffSnapshots: при onlyMe: true оставляет только события связанных MR и отсекает чужие', () => {
+  const prev = snap([
+    // MR 1: чужой (e.latypov), нет в assignees/reviewers
+    mr({ iid: 1, author_username: 'e.latypov', pipeline: { id: 1, status: 'success' }, has_conflicts: false }),
+    // MR 2: мой (a.latipov)
+    mr({ iid: 2, author_username: 'a.latipov', pipeline: { id: 2, status: 'success' }, has_conflicts: false, comments: { total: 1, open: 1, resolved: 0 } }),
+    // MR 3: чужой автор, но я ревьюер
+    mr({ iid: 3, author_username: 'other', reviewers: [{ username: 'a.latipov' }], has_conflicts: false }),
+  ]);
+
+  const next = snap([
+    // MR 1: появился конфликт и упал пайплайн (чужой MR!)
+    mr({ iid: 1, author_username: 'e.latypov', pipeline: { id: 1, status: 'failed' }, has_conflicts: true }),
+    // MR 2: появился конфликт и новые треды (мой MR!)
+    mr({ iid: 2, author_username: 'a.latipov', pipeline: { id: 2, status: 'success' }, has_conflicts: true, comments: { total: 3, open: 3, resolved: 0 } }),
+    // MR 3: появился конфликт (я ревьюер!)
+    mr({ iid: 3, author_username: 'other', reviewers: [{ username: 'a.latipov' }], has_conflicts: true }),
+    // MR 4: новый чужой MR
+    mr({ iid: 4, author_username: 'someone_else' }),
+  ]);
+
+  const events = diffSnapshots(prev, next, {
+    meUsername: 'a.latipov',
+    onlyMe: true,
+  });
+
+  // События чужого MR 1 не должны попасть в events вообще
+  assert.equal(events.some((e) => e.mr === 1), false, 'события чужого MR 1 не попали в events');
+  // События нового чужого MR 4 не должны попасть в events
+  assert.equal(events.some((e) => e.mr === 4), false, 'новый чужой MR 4 не попал в events');
+
+  // События моего MR 2 (конфликт и треды) должны быть
+  assert.equal(events.some((e) => e.mr === 2 && e.kind === 'conflict'), true, 'конфликт в моем MR зафиксирован');
+  assert.equal(events.some((e) => e.mr === 2 && e.kind === 'threads'), true, 'новые треды в моем MR зафиксированы');
+
+  // События MR 3 где я ревьюер должны быть
+  assert.equal(events.some((e) => e.mr === 3 && e.kind === 'conflict'), true, 'конфликт в MR где я ревьюер зафиксирован');
+});
+
+test('diffSnapshots: при onlyMe: true ловит назначение ревьюером на существующий MR', () => {
+  const prev = snap([
+    mr({ iid: 10, author_username: 'colleague', reviewers: [] }),
+  ]);
+  const next = snap([
+    mr({ iid: 10, author_username: 'colleague', reviewers: [{ username: 'a.latipov' }] }),
+  ]);
+
+  const events = diffSnapshots(prev, next, {
+    meUsername: 'a.latipov',
+    onlyMe: true,
+  });
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, 'mr_new');
+  assert.match(events[0].detail, /вас назначили ревьюером/);
+});
+
+test('pollOnce: уважает watch.onlyMe и отсекает чужие конфликты от отправки в триаж', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-watch-onlyme-'));
+  const file = path.join(dir, 'state.json');
+
+  let mrs = [
+    mr({ iid: 2739, author_username: 'e.latypov', has_conflicts: false }),
+    mr({ iid: 9999, author_username: 'a.latipov', has_conflicts: false }),
+  ];
+
+  const g = {
+    listOpenMRs: async () => mrs,
+    listMRPipelines: async () => [],
+    getDiscussions: async () => [],
+    me: async () => ({ username: 'a.latipov' }),
+  };
+
+  const cfg = {
+    watch: { onlyMe: true },
+    judge: { profiles: { fake: { provider: 'fake' } }, roles: { 'event-triage': ['fake'] } },
+  };
+
+  let judgeCalled = false;
+  const makeProvider = async () => ({
+    name: 'fake',
+    complete: async () => {
+      judgeCalled = true;
+      return {
+        text: JSON.stringify({
+          decision: 'approve', confidence: 0.9, summary: 'ок',
+          findings: [], checks: [], next: { action: 'none', hint: '' },
+        }),
+        cost: 0,
+      };
+    },
+  });
+
+  // Первый опрос — запись снимка
+  const first = await pollOnce({ g, repo: 'fitstars/fitstars-nuxt', cfg, file, makeProvider });
+  assert.equal(first.first, true);
+
+  // Конфликт появился ТОЛЬКО у чужого e.latypov (MR 2739)
+  mrs = [
+    mr({ iid: 2739, author_username: 'e.latypov', has_conflicts: true }),
+    mr({ iid: 9999, author_username: 'a.latipov', has_conflicts: false }),
+  ];
+
+  const second = await pollOnce({ g, repo: 'fitstars/fitstars-nuxt', cfg, file, makeProvider });
+  assert.equal(second.events.length, 0, 'событий нет, так как чужой конфликт отфильтрован');
+  assert.equal(second.kept.length, 0);
+  assert.equal(judgeCalled, false, 'судья не вызывался');
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
 
 

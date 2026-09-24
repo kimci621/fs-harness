@@ -17,8 +17,8 @@ import { CliError } from '../errors.js';
 export async function cmdWatch(ctx, { json, asObject, file, queueRoot, autoRoot } = {}) {
   const autoTasks = listAuto(autoRoot);
   const ignoredShas = autoTasks.map((t) => t.head_sha).filter(Boolean);
-  let meUsername = null;
-  if (ctx.g?.me) {
+  let meUsername = ctx.cfg?.watch?.username || ctx.cfg?.username || null;
+  if (!meUsername && ctx.g?.me) {
     try {
       const u = await ctx.g.me();
       meUsername = u?.username ?? null;
@@ -265,7 +265,10 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
         }
       }
       if (stopped) break;
-      await Promise.race([sleep(Math.max(1, waitSec) * 1000), new Promise((r) => { wake = r; })]);
+      const cancelSleep = {};
+      await Promise.race([sleep(Math.max(1, waitSec) * 1000, cancelSleep), new Promise((r) => { wake = r; })]);
+      cancelSleep.cancel?.();
+      wake = null;
     }
   } finally {
     process.off('SIGINT', stop);
@@ -290,7 +293,11 @@ const defaultCtx = (cfg) => createCtx({ g: createGlab(undefined, { host: cfg.hos
 
 // Таймер сна — единственное, что держит демон живым между опросами: с unref() цикл событий
 // пустеет и node молча выходит с кодом 13 сразу после первого круга.
-export const sleepFor = (ms) => new Promise((r) => { setTimeout(r, ms); });
+export const sleepFor = (ms, cancelHolder = {}) =>
+  new Promise((r) => {
+    const t = setTimeout(r, ms);
+    cancelHolder.cancel = () => clearTimeout(t);
+  });
 
 // fsh watch install — печатаем юнит, а не ставим: ~/Library/LaunchAgents это глобальный
 // конфиг, и трогать его сами мы не должны (CLAUDE.md).

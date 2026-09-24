@@ -113,7 +113,11 @@ export function listWorktrees({
     let size_mb;
     if (sizes) {
       try {
-        const out = execFileSync('du', ['-sk', item.dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        const out = execFileSync('du', ['-sk', item.dir], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 5000,
+        }).trim();
         const kb = parseInt(out.split(/\s+/)[0], 10);
         if (!Number.isNaN(kb)) size_mb = Math.round(kb / 1024);
       } catch {

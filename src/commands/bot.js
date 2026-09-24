@@ -76,12 +76,13 @@ export async function cmdBot(opts = {}, deps = {}) {
   process.on('SIGTERM', stop);
 
   // Долгие publish/revise не держат long-polling: кладём в очередь, дожидаемся на выходе.
-  const pending = [];
+  const pending = new Set();
   const fire = (fn) => {
     const p = Promise.resolve().then(fn).catch((e) => {
       log(`${stamp()} фоновая операция упала: ${e.message}`);
     });
-    pending.push(p);
+    pending.add(p);
+    p.finally(() => pending.delete(p));
     return p;
   };
 
@@ -203,12 +204,14 @@ function parseMRFilters(args = []) {
 }
 
 async function runActionViaBot(actionName, query, d, parsed) {
-  const { sayTo, ctxFor, fire, runsDir, fetchImpl } = d;
+  const { sayTo, ctxFor, fire, runsDir, fetchImpl, activeAgents } = d;
   const entry = ACTIONS.find((x) => x.name === actionName);
   if (!entry) return;
 
   await sayTo(parsed.chatId, `▶ Запускаю <b>${escapeHtml(actionName)}</b> для <code>${escapeHtml(query)}</code>…`);
   fire(async () => {
+    const ac = new AbortController();
+    if (activeAgents) activeAgents.add(ac);
     try {
       const ctx = ctxFor();
       const res = await runActionCLI(entry, ctx, [query], {
@@ -221,6 +224,7 @@ async function runActionViaBot(actionName, query, d, parsed) {
         quiet: true,
         runsDir,
         fetchImpl,
+        signal: ac.signal,
         approvalSink: undefined,
       });
       const text = res?.pending_approval
@@ -229,6 +233,8 @@ async function runActionViaBot(actionName, query, d, parsed) {
       await sayTo(parsed.chatId, text);
     } catch (e) {
       await sayTo(parsed.chatId, `❌ <b>${escapeHtml(entry.name)}</b>: ${escapeHtml(e.message)}`);
+    } finally {
+      if (activeAgents) activeAgents.delete(ac);
     }
   });
 }

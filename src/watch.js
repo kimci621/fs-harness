@@ -30,9 +30,41 @@ export function writeSnapshot(file, snap) {
   writeFileSync(file, JSON.stringify(snap, null, 2));
 }
 
+export function isUserInList(list, username) {
+  if (!list || !username) return false;
+  const target = String(username).toLowerCase().trim();
+  const arr = Array.isArray(list) ? list : [list];
+  return arr.some((u) => {
+    if (!u) return false;
+    if (typeof u === 'string') return u.toLowerCase().trim() === target;
+    const un = u.username ?? u.name;
+    return un && String(un).toLowerCase().trim() === target;
+  });
+}
+
+// Связан ли MR со мной: я автор, исполнитель или ревьюер.
+export function isMRRelatedToMe(mr, meUsername) {
+  if (!meUsername) return true;
+  const me = String(meUsername).toLowerCase().trim();
+
+  // Автор
+  const authorUser = mr.author_username ?? (typeof mr.author === 'string' ? mr.author : mr.author?.username);
+  if (authorUser && String(authorUser).toLowerCase().trim() === me) return true;
+  const authorName = typeof mr.author === 'object' ? mr.author?.name : null;
+  if (authorName && String(authorName).toLowerCase().trim() === me) return true;
+
+  // Исполнители (assignees / assignee)
+  if (isUserInList(mr.assignees, me) || isUserInList(mr.assignee, me)) return true;
+
+  // Ревьюеры (reviewers)
+  if (isUserInList(mr.reviewers, me) || isUserInList(mr.reviewer, me)) return true;
+
+  return false;
+}
+
 // Что изменилось против прошлого снимка. Первого снимка нет — событий нет:
 // иначе первый же опрос вывалил бы в канал весь список открытых MR.
-export function diffSnapshots(prev, next, { meUsername = null, ignoredShas = [] } = {}) {
+export function diffSnapshots(prev, next, { meUsername = null, ignoredShas = [], onlyMe = false } = {}) {
   if (!prev) return [];
   const was = new Map(prev.mrs.map((m) => [m.iid, m]));
   const events = [];
@@ -52,11 +84,19 @@ export function diffSnapshots(prev, next, { meUsername = null, ignoredShas = [] 
   });
 
   for (const mr of next.mrs) {
+    if (onlyMe && meUsername && !isMRRelatedToMe(mr, meUsername)) continue;
+
     const old = was.get(mr.iid);
     if (!old) {
       push(mr, 'mr_new', `новый MR ${mr.source_branch} → ${mr.target_branch}`);
       continue;
     }
+
+    // Назначение ревьюером на уже существующий MR
+    if (onlyMe && meUsername && isUserInList(mr.reviewers, meUsername) && !isUserInList(old.reviewers, meUsername)) {
+      push(mr, 'mr_new', `вас назначили ревьюером ${mr.source_branch} → ${mr.target_branch}`);
+    }
+
     const from = old.pipeline?.status ?? 'нет';
     const to = mr.pipeline?.status ?? 'нет';
     if (from !== to) {
@@ -68,13 +108,14 @@ export function diffSnapshots(prev, next, { meUsername = null, ignoredShas = [] 
     const openWas = old.comments?.open ?? 0;
     if (openNow > openWas) {
       const author = mr.author_username ?? mr.author ?? null;
-      if (!meUsername || author !== meUsername) {
+      if (onlyMe || !meUsername || author !== meUsername) {
         push(mr, 'threads', `новых открытых тредов: ${openNow - openWas} (было ${openWas}, стало ${openNow})`);
       }
     }
     if (mr.has_conflicts && !old.has_conflicts) push(mr, 'conflict', 'появился конфликт с целевой веткой');
   }
   for (const old of prev.mrs) {
+    if (onlyMe && meUsername && !isMRRelatedToMe(old, meUsername)) continue;
     if (!next.mrs.some((m) => m.iid === old.iid)) push(old, 'mr_gone', 'MR закрыт или смержен');
   }
   return events;
@@ -111,16 +152,17 @@ export function formatEvents(kept, { verdict } = {}) {
 
 // Один опрос: снимок → дифф → триаж. Уведомляет вызывающий, запускать действия watcher не умеет.
 export async function pollOnce({ g, repo, cfg, file = stateFile(repo), makeProvider, signal, meUsername, ignoredShas = [] } = {}) {
-  let me = meUsername;
+  let me = meUsername || cfg?.watch?.username || cfg?.username || null;
   if (!me && g?.me) {
     try {
       const u = await g.me();
       me = u?.username ?? null;
     } catch {}
   }
+  const onlyMe = cfg?.watch?.onlyMe ?? true;
   const prev = readSnapshot(file);
   const next = await snapshot(g, repo);
-  const events = diffSnapshots(prev, next, { meUsername: me, ignoredShas });
+  const events = diffSnapshots(prev, next, { meUsername: me, ignoredShas, onlyMe });
   writeSnapshot(file, next);
 
   let verdict = null;

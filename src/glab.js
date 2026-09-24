@@ -3,7 +3,7 @@ import { CliError } from './errors.js';
 
 // Все обращения к GitLab идут через `glab api` (JSON). exec инжектируется для тестов.
 export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
-  const api = async (repo, path, { method = 'GET', retries = method === 'GET' ? 5 : 2, input, raw = false } = {}) => {
+  const api = async (repo, path, { method = 'GET', retries = method === 'GET' ? 5 : 2, input, raw = false, signal, timeout } = {}) => {
     const args = ['api'];
     if (host) args.push('--hostname', host);
     // repo=null — путь не проектный (например /user): подставлять projects/ туда нельзя.
@@ -18,7 +18,7 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
     for (let attempt = 1; attempt <= retries; attempt++) {
       let out;
       try {
-        out = await run('glab', args, { input });
+        out = await run('glab', args, { input, signal, timeout });
       } catch (err) {
         lastErr = err;
         const stderr = String(err.stderr || err.message || '').trim();
@@ -134,9 +134,9 @@ export function createGlab(run = defaultRun, { sleepMs = 1000, host } = {}) {
 // иначе не проходит через --field.
 // Асинхронно, и это принципиально: execFileSync держит event loop, а с ним TUI не
 // перерисовывается и не слышит клавиш — экран выглядит зависшим на всё время запроса.
-export function defaultRun(bin, args, { input } = {}) {
+export function defaultRun(bin, args, { input, timeout = 60_000, signal } = {}) {
   return new Promise((resolve, reject) => {
-    const child = execFile(bin, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+    const child = execFile(bin, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout, signal }, (err, stdout, stderr) => {
       if (err) {
         err.stderr = stderr;
         reject(err);

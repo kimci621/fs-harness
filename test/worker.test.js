@@ -208,3 +208,24 @@ test('runWorker: attempts растёт при ошибках, после 3 по�
   jobs = listJobs({ root: qRoot });
   assert.equal(jobs.length, 0, 'Снято после 3 попыток');
 });
+
+test('runWorker: слушатель signal удаляется при завершении воркера (нет утечки)', async () => {
+  const qRoot = path.join(tempDir, 'q4');
+  const lRoot = path.join(tempDir, 'l4');
+  const ctrl = new AbortController();
+
+  await runWorker({
+    queueRoot: qRoot,
+    locksRoot: lRoot,
+    concurrency: 1,
+    once: true,
+    signal: ctrl.signal,
+    log: () => {},
+    deps: { actions: [], ctx: { repo: 'my/repo' } },
+  });
+
+  const { getEventListeners } = await import('node:events');
+  const listeners = getEventListeners(ctrl.signal, 'abort');
+  assert.equal(listeners.length, 0, 'слушатель abort должен быть удален');
+});
+

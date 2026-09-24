@@ -71,106 +71,110 @@ export async function runWorker({
   const excludeKeys = new Set();
   const failedInThisPass = new Set();
 
-  while (!stopped) {
-    // Наполняем доступные слоты параллельности
-    while (!stopped && activeJobs.size < concurrency) {
-      const taken = takeJobFn({
-        queueRoot,
-        locksRoot,
-        now: now(),
-        excludeKeys: new Set([...excludeKeys, ...failedInThisPass]),
-      });
-      if (!taken) break;
+  try {
+    while (!stopped) {
+      // Наполняем доступные слоты параллельности
+      while (!stopped && activeJobs.size < concurrency) {
+        const taken = takeJobFn({
+          queueRoot,
+          locksRoot,
+          now: now(),
+          excludeKeys: new Set([...excludeKeys, ...failedInThisPass]),
+        });
+        if (!taken) break;
 
-      const { job, release } = taken;
-      excludeKeys.add(job.key);
+        const { job, release } = taken;
+        excludeKeys.add(job.key);
 
-      const promise = (async () => {
-        try {
-          const spec = actionMap[job.action];
-          if (!spec) {
-            throw new CliError(`Действие "${job.action}" не найдено в реестре.`, 1, 'action_unknown');
-          }
-          log?.(`${stamp()} [worker] Старт ${job.action} для ${job.key}…`);
-          const targetArg = job.mr ? String(job.mr) : (job.task ? String(job.task) : String(job.key));
+        const promise = (async () => {
+          try {
+            const spec = actionMap[job.action];
+            if (!spec) {
+              throw new CliError(`Действие "${job.action}" не найдено в реестре.`, 1, 'action_unknown');
+            }
+            log?.(`${stamp()} [worker] Старт ${job.action} для ${job.key}…`);
+            const targetArg = job.mr ? String(job.mr) : (job.task ? String(job.task) : String(job.key));
 
-          const jobCfg = (job.project && ctx.cfg?.projects?.[job.project])
-            ? (deps.loadConfig || loadConfig)(process.env, { project: job.project })
-            : (ctx.cfg || {});
+            const jobCfg = (job.project && ctx.cfg?.projects?.[job.project])
+              ? (deps.loadConfig || loadConfig)(process.env, { project: job.project })
+              : (ctx.cfg || {});
 
-          const jobCtx = deps.makeCtx
-            ? deps.makeCtx(jobCfg)
-            : (jobCfg === ctx.cfg
-              ? ctx
-              : createCtx({
-                  g: (ctx.g && jobCfg.host === ctx.cfg?.host)
-                    ? ctx.g
-                    : (deps.createGlab || createGlab)(undefined, { host: jobCfg.host }),
-                  cfg: jobCfg,
-                  notify: () => {},
-                }));
+            const jobCtx = deps.makeCtx
+              ? deps.makeCtx(jobCfg)
+              : (jobCfg === ctx.cfg
+                ? ctx
+                : createCtx({
+                    g: (ctx.g && jobCfg.host === ctx.cfg?.host)
+                      ? ctx.g
+                      : (deps.createGlab || createGlab)(undefined, { host: jobCfg.host }),
+                    cfg: jobCfg,
+                    notify: () => {},
+                  }));
 
-          const agent = deps.actionOpts?.agent || jobCfg.agent || spec.action?.agent?.default || 'cc';
-          const projectDir = deps.actionOpts?.projectDir || jobCfg.projectDir || (jobCfg.activeProject && jobCfg.projects?.[jobCfg.activeProject]?.dir);
+            const agent = deps.actionOpts?.agent || jobCfg.agent || spec.action?.agent?.default || 'cc';
+            const projectDir = deps.actionOpts?.projectDir || jobCfg.projectDir || (jobCfg.activeProject && jobCfg.projects?.[jobCfg.activeProject]?.dir);
 
-          const runOpts = {
-            yes: true,
-            json: true,
-            quiet: true,
-            signal,
-            agent,
-            projectDir,
-            cfg: jobCfg,
-            ...deps.actionOpts,
-          };
+            const runOpts = {
+              yes: true,
+              json: true,
+              quiet: true,
+              signal,
+              agent,
+              projectDir,
+              cfg: jobCfg,
+              ...deps.actionOpts,
+            };
 
-          const runRes = runActionFn(
-            spec,
-            jobCtx,
-            [targetArg],
-            runOpts,
-          );
-          await (runRes?.result ?? runRes);
-          removeJob(job.key, { root: queueRoot });
-          log?.(`${stamp()} [worker] Задание ${job.key} выполнено успешно.`);
-        } catch (err) {
-          failedInThisPass.add(job.key);
-          const attempts = (job.attempts || 0) + 1;
-          if (attempts >= JOB_MAX_ATTEMPTS) {
+            const runRes = runActionFn(
+              spec,
+              jobCtx,
+              [targetArg],
+              runOpts,
+            );
+            await (runRes?.result ?? runRes);
             removeJob(job.key, { root: queueRoot });
-            log?.(`${stamp()} [worker] Задание ${job.key} снято после ${JOB_MAX_ATTEMPTS} попыток: ${err.message}`);
-          } else {
-            updateJob(job.key, { attempts }, { root: queueRoot });
-            log?.(`${stamp()} [worker] Задание ${job.key} упало (попытка ${attempts}/${JOB_MAX_ATTEMPTS}): ${err.message}`);
+            log?.(`${stamp()} [worker] Задание ${job.key} выполнено успешно.`);
+          } catch (err) {
+            failedInThisPass.add(job.key);
+            const attempts = (job.attempts || 0) + 1;
+            if (attempts >= JOB_MAX_ATTEMPTS) {
+              removeJob(job.key, { root: queueRoot });
+              log?.(`${stamp()} [worker] Задание ${job.key} снято после ${JOB_MAX_ATTEMPTS} попыток: ${err.message}`);
+            } else {
+              updateJob(job.key, { attempts }, { root: queueRoot });
+              log?.(`${stamp()} [worker] Задание ${job.key} упало (попытка ${attempts}/${JOB_MAX_ATTEMPTS}): ${err.message}`);
+            }
+          } finally {
+            try { release(); } catch {}
+            excludeKeys.delete(job.key);
           }
-        } finally {
-          try { release(); } catch {}
-          excludeKeys.delete(job.key);
-        }
-      })();
+        })();
 
-      activeJobs.set(job.key, promise);
-      promise.finally(() => activeJobs.delete(job.key));
+        activeJobs.set(job.key, promise);
+        promise.finally(() => activeJobs.delete(job.key));
+      }
+
+      if (activeJobs.size > 0) {
+        // Ждём освобождения хотя бы одного слота
+        await Promise.race(activeJobs.values());
+      } else {
+        // Свободных заданий нет
+        if (once) break;
+        failedInThisPass.clear(); // новый цикл опроса после сна
+        await new Promise((resolve) => {
+          wake = resolve;
+          const timer = setTimeout(resolve, intervalMs);
+          if (timer.unref) timer.unref();
+        });
+        wake = null;
+      }
     }
 
+    // Перед выходом дожидаемся завершения уже запущенных задач
     if (activeJobs.size > 0) {
-      // Ждём освобождения хотя бы одного слота
-      await Promise.race(activeJobs.values());
-    } else {
-      // Свободных заданий нет
-      if (once) break;
-      failedInThisPass.clear(); // новый цикл опроса после сна
-      await new Promise((resolve) => {
-        wake = resolve;
-        const timer = setTimeout(resolve, intervalMs);
-        if (timer.unref) timer.unref();
-      });
-      wake = null;
+      await Promise.all(activeJobs.values());
     }
-  }
-
-  // Перед выходом дожидаемся завершения уже запущенных задач
-  if (activeJobs.size > 0) {
-    await Promise.all(activeJobs.values());
+  } finally {
+    if (signal) signal.removeEventListener('abort', stop);
   }
 }

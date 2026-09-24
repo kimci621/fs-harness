@@ -167,3 +167,18 @@ test('createNote: отправляет POST с body в stdin', async () => {
   assert.ok(ok.calls[0].args[1].endsWith('/merge_requests/7/notes'));
   assert.equal(ok.calls[0].opts.input, JSON.stringify({ body: 'саммари' }));
 });
+
+test('defaultRun: уважает timeout и срубает зависший процесс', async () => {
+  await assert.rejects(
+    () => defaultRun(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { timeout: 50 }),
+    (err) => err.killed || err.code === 'ETIMEDOUT',
+  );
+});
+
+test('defaultRun: прерывается через signal (AbortSignal)', async () => {
+  const ctrl = new AbortController();
+  const promise = defaultRun(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { signal: ctrl.signal });
+  ctrl.abort();
+  await assert.rejects(promise, (err) => err.name === 'AbortError');
+});
+
