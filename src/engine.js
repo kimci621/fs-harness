@@ -15,6 +15,7 @@ import { ISSUE_KEY } from './jira.js';
 import { expandHome } from './config.js';
 import { acquireWorkspace, reopenRunWorkspace, MODES as ISOLATION_MODES } from './workspace.js';
 import { resolveAgent } from './agents.js';
+import { pickTier, tierAgents } from './tier.js';
 import { confirm } from './ui.js';
 import { makeLogger, finish } from './output.js';
 import { fmtDuration, hhmmss } from './format.js';
@@ -303,6 +304,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       if (opts.resumeOf) return await goResume();
       x.phase('context', 'start');
       x.target = await resolveTarget(a.target, ctx, input.query);
+      if (a.target === 'issue' && !opts.agentExplicit) await applyTier(x);
       x.pre = (await a.precheck(x)) ?? {};
       if (opts.dryRun) return a.dryRun(x);
       if (x.pre.skip) {
@@ -341,7 +343,7 @@ export function runAction(spec, ctx, input, opts = {}) {
       // Планировщик — отдельный агент и отдельная сессия до исполнителя. Его текст уходит
       // в переменную plan и в промпт исполнителя, а не в общий диалог с исполнителем.
       if (a.plan) {
-        const planAgent = a.plan.agent ?? a.agent.default;
+        const planAgent = opts.planAgent ?? a.plan.agent ?? a.agent.default;
         x.phase('plan', 'start', planAgent);
         const planRendered = renderTemplate(a.plan.prompt, x.vars, { projectDir: x.pre.projectDir });
         saveArtifact(runDir, 'plan-prompt.md', planRendered.text);
@@ -360,7 +362,8 @@ export function runAction(spec, ctx, input, opts = {}) {
         action: spec.name,
         created_at: new Date().toISOString(),
         agent: x.opts.agent,
-        plan_agent: a.plan ? (a.plan.agent ?? a.agent.default) : null,
+        plan_agent: a.plan ? (opts.planAgent ?? a.plan.agent ?? a.agent.default) : null,
+        tier: x.tier ?? null,
         prompt_source: rendered.source,
         state: 'running',
         pid: process.pid,
@@ -588,8 +591,25 @@ export function runAction(spec, ctx, input, opts = {}) {
     } catch (err) {
       // Агент успел поработать: его правки в worktree не выбрасываем даже при провале.
       if (err.keepWorktree) keep = true;
-      throw err;
+      // ponytail: доделку (resume) не переносим — у фолбэка нет сессии первого агента; её ждёт пауза auto
+      const fallback = err.code === 'agent_rate_limited' && !resume ? resolveAgent(opts.cfg, agentName).fallback : null;
+      if (!fallback) throw err;
+      x.say(`⏳ ${agentName} упёрся в лимит, передаю ${fallback}`);
+      delete x.sessions?.[sessionKey];
+      if (agentName === opts.agent) opts.agent = fallback;
+      return runAgent(x, { agentName: fallback, prompt: prompt ?? x.prompt, sessionKey });
     }
+  }
+
+  // Агента по сложности задачи выбирает jev: план и читающие действия — слот plan, код — exec.
+  async function applyTier(x) {
+    const tier = await pickTier(x.target, opts.cfg, opts.classifyImpl);
+    const agents = tier ? tierAgents(tier, opts.cfg) : null;
+    if (!agents) return;
+    x.tier = tier;
+    opts.agent = a.agent.tierSlot === 'plan' ? agents.plan : agents.exec;
+    if (a.plan) opts.planAgent = agents.plan;
+    x.say(`🎚 Сложность ${tier}: ${a.plan ? `план ${agents.plan} → ` : ''}${opts.agent}`);
   }
 
   return {

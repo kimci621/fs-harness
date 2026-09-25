@@ -40,7 +40,8 @@ export const analyzeAction = {
     writes: false,
     isolation: 'checkout',
     prompt: 'actions/analyze',
-    agent: { default: 'cc', pickByJudge: false },
+    // Разбор задачи — работа планировщика: по сложности берём агента слота plan.
+    agent: { default: 'cc', pickByJudge: false, tierSlot: 'plan' },
     judge: { gate: 'none', role: 'acceptance' },
     mcpDescription: 'Разобрать задачу Jira силами AI-агента: о чём она, где в коде править, что сломается, какие вопросы к постановщику. Только читает — ни код, ни Jira не меняет.',
     inputSchema: {

@@ -70,7 +70,14 @@ export const DEFAULTS = {
       },
     },
     // Планировщик задач: claude на opus с максимальным reasoning effort.
-    opus: { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'xhigh'] },
+    opus: { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'xhigh'], fallback: 'agy-high' },
+    // Профили уровней сложности (tiers ниже). fallback — профиль, на который ран уходит
+    // при рейт-лимите: кончился лимит claude — задачу доделывает agy.
+    'opus-high': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'high'], fallback: 'agy-high' },
+    'sonnet-xhigh': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'xhigh'], fallback: 'agy-high' },
+    'sonnet-low': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'low'], fallback: 'agy-low' },
+    'agy-high': { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-high'] },
+    'agy-low': { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-low'] },
     // agy (Antigravity CLI) — опционален: нет в PATH, мастер молча берёт cc.
     agy: { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions'] },
     // Исполнитель задач: gemini flash high через agy.
@@ -126,6 +133,18 @@ export const DEFAULTS = {
   // Классификатор выбора из списка (src/classify.js). Роль без профиля — шаг выключен,
   // действие работает как раньше. minP — порог вероятности выбранного варианта.
   // stateLimit в символах; API режет вход около 32k токенов, это ~40000 символов кириллицы.
+  // Выбор агента по сложности задачи Jira (src/tier.js). Работает, когда агент не задан
+  // флагом --agent; классификатор не уверен — остаётся прежний выбор (agent из конфига).
+  // plan — планировщик и читающие действия (analyze), exec — исполнитель.
+  tiers: {
+    enabled: true,
+    uncertain: 'medium',
+    map: {
+      easy: { plan: 'sonnet-low', exec: 'sonnet-low' },
+      medium: { plan: 'sonnet-xhigh', exec: 'sonnet-xhigh' },
+      hard: { plan: 'opus', exec: 'opus-high' },
+    },
+  },
   classify: {
     minP: 0.8,
     timeoutMs: 3000,
@@ -133,7 +152,7 @@ export const DEFAULTS = {
     profiles: {
       jev: { baseUrl: 'https://openrouter.ai/api/alpha/decisions', model: '~typesafe/jev-latest', secret: 'openrouter' },
     },
-    roles: { 'ci-failure': 'jev', 'event-triage': 'jev', 'thread-triage': 'jev' },
+    roles: { 'ci-failure': 'jev', 'event-triage': 'jev', 'thread-triage': 'jev', 'task-tier': 'jev' },
   },
 };
 
@@ -276,6 +295,11 @@ export function loadConfig(env = process.env, { project, file } = {}) {
       ...(v2.judge || {}),
       profiles: { ...DEFAULTS.judge.profiles, ...(v2.judge?.profiles || {}) },
       roles: { ...DEFAULTS.judge.roles, ...(v2.judge?.roles || {}) },
+    },
+    tiers: {
+      ...DEFAULTS.tiers,
+      ...(v2.tiers || {}),
+      map: { ...DEFAULTS.tiers.map, ...(v2.tiers?.map || {}) },
     },
     classify: {
       ...DEFAULTS.classify,

@@ -16,7 +16,7 @@ export function resolveAgent(cfg, name) {
   const args = cfg?.agentArgs?.[target] ?? profile.args ?? [];
   const env = { ...(profile.env ?? {}) };
   if (profile.keyFile) env.ANTHROPIC_AUTH_TOKEN = readKey(expandHome(profile.keyFile), target);
-  return { name: target, bin: profile.bin ?? target, args, env, family: profile.family ?? 'claude' };
+  return { name: target, bin: profile.bin ?? target, args, env, family: profile.family ?? 'claude', fallback: profile.fallback ?? null };
 }
 
 export const agentNames = (cfg) => Object.keys(allAgents(cfg)).sort();
