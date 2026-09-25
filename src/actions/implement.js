@@ -58,7 +58,7 @@ export const implementAction = {
       const status = issue.fields?.status?.name ?? '—';
       const url = `${(opts.cfg?.jira?.baseUrl || '').replace(/\/+$/, '')}/browse/${issue.key}`;
       say(`📋 ${issue.key}: ${issue.fields?.summary ?? ''}`);
-      say(`   ${status} · ветка ${branch} от origin/${target} · план ${PLAN_AGENT} → код ${opts.agent}`);
+      say(`   ${status} · ветка ${branch} от origin/${target} · план ${opts.planAgent ?? PLAN_AGENT} → код ${opts.agent}`);
       return {
         projectDir,
         target,
@@ -79,12 +79,12 @@ export const implementAction = {
         summary: issue.fields?.summary ?? '',
         branch: pre.branch,
         target: pre.target,
-        plan_agent: PLAN_AGENT,
+        plan_agent: opts.planAgent ?? PLAN_AGENT,
         agent: opts.agent,
         project_dir: pre.projectDir,
         steps: [
           `worktree от origin/${pre.target} (режим task-worktree, переживает ран)`,
-          `${PLAN_AGENT}: прочитать задачу и реальный код, составить план реализации`,
+          `${opts.planAgent ?? PLAN_AGENT}: прочитать задачу и реальный код, составить план реализации`,
           `${opts.agent}: реализовать по плану, прогнать проверки, закоммитить`,
           opts.noJudge ? 'судья отключён (--no-judge)' : `судья (роль task-review, до ${3} доделок): без approve push не произойдёт`,
           `push origin HEAD:${pre.branch}`,

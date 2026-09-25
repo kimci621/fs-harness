@@ -543,7 +543,7 @@ export function fromAction(spec) {
     ...spec,
     run: (ctx, args, opts) => withRepoHost(ctx, () => {
       const agent = opts.agent || ctx.cfg.agent || a.agent.default;
-      return runActionCLI(spec, ctx, args, optsFor(ctx, opts, agent));
+      return runActionCLI(spec, ctx, args, { ...optsFor(ctx, opts, agent), agentExplicit: Boolean(opts.agent) });
     }),
     mcp: {
       description: a.mcpDescription,
@@ -552,6 +552,7 @@ export function fromAction(spec) {
         const agent = args.agent || ctx.cfg.agent || a.agent.default;
         return runActionCLI(spec, ctx, [args.query], {
           ...optsFor(ctx, { json: true, asObject: true, quiet: true, yes: true }, agent),
+          agentExplicit: Boolean(args.agent),
           onTick: ctx.notify,
         });
       }),

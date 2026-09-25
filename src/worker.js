@@ -120,6 +120,7 @@ export async function runWorker({
               quiet: true,
               signal,
               agent,
+              agentExplicit: Boolean(deps.actionOpts?.agent),
               projectDir,
               cfg: jobCfg,
               ...deps.actionOpts,
