@@ -3,6 +3,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { cmdMRS } from './commands/mrs.js';
 import { judge } from './judge/index.js';
+import { classify } from './classify.js';
 import { statusIcon } from './format.js';
 import { envNames } from './secrets.js';
 
@@ -133,6 +134,28 @@ export function triagePayload(events, repo) {
 
 export const TRIAGE_LEVEL = { blocker: 'срочно', warning: 'к сведению', nit: 'шум' };
 
+// Те же уровни, что в рубрике event-triage.md, но для классификатора выбора.
+const TRIAGE_CRITERIA = {
+  blocker: 'The person is needed right now: broken pipeline, new merge conflict, new unresolved review threads.',
+  warning: 'Worth knowing, but can wait.',
+  nit: "Background noise: successful pipeline, someone else's new MR, closed or merged MR.",
+};
+
+// Триаж классификатором в форме вердикта судьи, чтобы keepEvents не менять.
+// null — классификатор выключен или молчит, дальше судья. Неуверенное событие — срочно.
+export async function triageByClassifier(events, repo, cfg, impl = classify) {
+  const questions = Object.fromEntries(
+    events.map((e) => [e.id, { instructions: `How urgent is event ${e.id} for the person watching these MRs?`, criteria: TRIAGE_CRITERIA }]),
+  );
+  const answers = await impl({ role: 'event-triage', state: triagePayload(events, repo), questions, cfg });
+  if (!answers) return null;
+  const findings = events.map((e) => {
+    const choice = answers[e.id]?.choice;
+    return { file: e.id, line: 0, severity: choice ?? 'blocker', body: choice ? '' : 'классификатор не уверен' };
+  });
+  return { summary: '', findings };
+}
+
 // Вердикт → что оставить. Судья кладёт id события в findings[].file; шум и всё,
 // что он не упомянул, до канала не доходит.
 export function keepEvents(events, verdict) {
@@ -151,7 +174,7 @@ export function formatEvents(kept, { verdict } = {}) {
 }
 
 // Один опрос: снимок → дифф → триаж. Уведомляет вызывающий, запускать действия watcher не умеет.
-export async function pollOnce({ g, repo, cfg, file = stateFile(repo), makeProvider, signal, meUsername, ignoredShas = [] } = {}) {
+export async function pollOnce({ g, repo, cfg, file = stateFile(repo), makeProvider, classifyImpl, signal, meUsername, ignoredShas = [] } = {}) {
   let me = meUsername || cfg?.watch?.username || cfg?.username || null;
   if (!me && g?.me) {
     try {
@@ -169,7 +192,9 @@ export async function pollOnce({ g, repo, cfg, file = stateFile(repo), makeProvi
   let triageError = null;
   if (events.length) {
     try {
-      verdict = await judge({ role: 'event-triage', payload: triagePayload(events, repo), cfg, makeProvider, signal });
+      verdict =
+        (await triageByClassifier(events, repo, cfg, classifyImpl)) ??
+        (await judge({ role: 'event-triage', payload: triagePayload(events, repo), cfg, makeProvider, signal }));
     } catch (err) {
       triageError = err.message; // без триажа шлём всё: терять сигнал хуже, чем шуметь
     }

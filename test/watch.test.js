@@ -404,3 +404,17 @@ test('pollOnce: уважает watch.onlyMe и отсекает чужие ко�
 
 
 
+
+test('triageByClassifier: уровни из классификатора, неуверенное — срочно, молчание — к судье', async () => {
+  const { triageByClassifier, keepEvents } = await import('../src/watch.js');
+  const events = [
+    { id: 'e1', kind: 'pipeline_failed', mr: 1, title: 'a', detail: 'd', age: '1m', url: 'u' },
+    { id: 'e2', kind: 'pipeline_ok', mr: 2, title: 'b', detail: 'd', age: '1m', url: 'u' },
+    { id: 'e3', kind: 'new_mr', mr: 3, title: 'c', detail: 'd', age: '1m', url: 'u' },
+  ];
+  const impl = async () => ({ e1: { choice: 'blocker', p: 0.99 }, e2: { choice: 'nit', p: 0.95 }, e3: { choice: null, p: 0.5 } });
+  const verdict = await triageByClassifier(events, 'r', {}, impl);
+  const kept = keepEvents(events, verdict);
+  assert.deepEqual(kept.map((e) => [e.id, e.level]), [['e1', 'срочно'], ['e3', 'срочно']]);
+  assert.equal(await triageByClassifier(events, 'r', {}, async () => null), null);
+});

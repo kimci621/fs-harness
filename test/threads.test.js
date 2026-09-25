@@ -106,3 +106,16 @@ test('publish: без коммитов не пушит, чужой тред пр
   assert.deepEqual(out.resolved, ['aaa1']);
   assert.deepEqual(calls.map((c) => c[0]), ['reply', 'resolve', 'reply']);
 });
+
+test('humanThreads: агенту не отдаём только уверенный question_to_human', async () => {
+  const { humanThreads } = await import('../src/actions/threads.js');
+  const threads = ['t1', 't2', 't3'].map((id) => ({ id, notes: [{ author: 'r', body: 'b' }] }));
+  const impl = async () => ({
+    t1: { choice: 'question_to_human', p: 0.9 },
+    t2: { choice: 'code_change', p: 0.95 },
+    t3: { choice: null, p: 0.5 },
+  });
+  assert.deepEqual([...(await humanThreads(threads, {}, impl))], ['t1']);
+  assert.deepEqual([...(await humanThreads(threads, {}, async () => null))], []);
+  assert.deepEqual([...(await humanThreads([], {}, impl))], []);
+});
