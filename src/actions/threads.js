@@ -5,6 +5,24 @@ import { ACCEPTANCE_PATHSPECS } from '../judge/payload.js';
 import { runChecks, checksFact } from '../checks.js';
 import { makeGit, WORKTREE_ROOT } from '../workspace.js';
 import { CliError } from '../errors.js';
+import { classify } from '../classify.js';
+
+const THREAD_CRITERIA = {
+  code_change: 'The reviewer asks to change the code: fix, rename, refactor, add a test, remove something.',
+  reply: 'Needs only a written answer from the code itself: a question about how or why the code works.',
+  question_to_human: 'Needs a decision or knowledge only the MR author or team has: product question, disagreement about the approach, request to discuss, question about intent the code cannot answer.',
+};
+
+// Треды, которые агенту не отдаём: решать их должен человек. Неуверенный тред остаётся агенту.
+export async function humanThreads(threads, cfg, impl = classify) {
+  if (!threads.length) return new Set();
+  const state = threads.map((t) => `## ${t.id}\n${t.notes.map((n) => `${n.author}: ${n.body}`).join('\n')}`).join('\n\n');
+  const questions = Object.fromEntries(
+    threads.map((t) => [t.id, { instructions: `What does review thread ${t.id} need?`, criteria: THREAD_CRITERIA }]),
+  );
+  const answers = await impl({ role: 'thread-triage', state, questions, cfg });
+  return new Set(threads.filter((t) => answers?.[t.id]?.choice === 'question_to_human').map((t) => t.id));
+}
 
 // Тред считается открытым, если в нём есть хоть одна нерешённая resolvable-заметка.
 // Системные записи («изменил статус») не в счёт.
@@ -90,17 +108,22 @@ export const threadsAction = {
         throw new CliError('Каталог проекта не настроен или не является git-репозиторием. Выполни fsh config init или передай --project-dir.', 1, 'config_invalid');
       }
       makeGit(projectDir)(['fetch', 'origin', `${mr.source_branch}:refs/remotes/origin/${mr.source_branch}`]);
-      const threads = openThreads(await ctx.g.getDiscussions(ctx.repo, mr.iid));
+      const open = openThreads(await ctx.g.getDiscussions(ctx.repo, mr.iid));
+      const human = await humanThreads(open, opts.cfg, opts.classify);
+      const threads = open.filter((t) => !human.has(t.id));
+      for (const t of open.filter((t) => human.has(t.id))) {
+        say(`🙋 Тред ${t.id} (${t.file ?? 'общий'}) требует решения человека, агенту не отдаю: ${t.notes[0]?.body.slice(0, 80) ?? ''}`);
+      }
       const skip = threads.length === 0;
-      if (skip) say(`✅ В MR !${mr.iid} нерешённых тредов нет.`);
+      if (skip) say(open.length ? `✅ В MR !${mr.iid} для агента тредов нет: все ${open.length} ждут человека.` : `✅ В MR !${mr.iid} нерешённых тредов нет.`);
 
       return {
         projectDir,
         threads,
         workspace: { project: projectDir, ref: mr.source_branch, baseRef: mr.target_branch, key: String(mr.iid), refs: [] },
         skip,
-        reason: 'нерешённых тредов нет',
-        result: { ok: true, mr: mr.iid, threads_open: 0, skipped: true },
+        reason: open.length ? 'все треды ждут решения человека' : 'нерешённых тредов нет',
+        result: { ok: true, mr: mr.iid, threads_open: open.length, human_threads: [...human], skipped: true },
         meta: {
           repo: ctx.repo,
           mr: mr.iid,
@@ -108,6 +131,7 @@ export const threadsAction = {
           target_branch: mr.target_branch,
           project_dir: projectDir,
           thread_ids: threads.map((t) => t.id),
+          human_thread_ids: [...human],
         },
       };
     },

@@ -172,3 +172,64 @@ test('декларация: пишущее действие с гейтом су
   assert.equal(a.judge.role, 'ci-acceptance');
   assert.equal(typeof a.publish, 'function');
 });
+
+// Классификатор падений: подменяем classify, сеть не нужна.
+const fakeClassify = (choice, p = 0.95) => async ({ questions }) =>
+  Object.fromEntries(Object.keys(questions).map((k) => [k, { choice, p }]));
+
+function retryFixture(file, classifyImpl) {
+  const x = fixture({ jobs: [{ id: 5, name: 'e2e', stage: 'test', status: 'failed', web_url: 'j' }], attemptsFile: file });
+  const retried = [];
+  x.ctx.g.retryJob = async (_repo, id) => { retried.push(id); return { id: id + 100, status: 'pending' }; };
+  x.opts.classify = classifyImpl;
+  return { x, retried };
+}
+
+test('precheck: flaky/infra — перезапуск без агента, один раз на sha', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-cifix-'));
+  try {
+    const file = path.join(dir, 'repo.json');
+    const first = retryFixture(file, fakeClassify('infra'));
+    const pre = await a.precheck(first.x);
+    assert.equal(pre.skip, true);
+    assert.deepEqual(first.retried, [5]);
+    assert.deepEqual(pre.result.retried, ['e2e']);
+
+    // Тот же sha снова красный — второй перезапуск не делаем, идём к агенту.
+    const second = retryFixture(file, fakeClassify('infra'));
+    const again = await a.precheck(second.x);
+    assert.ok(!again.skip);
+    assert.deepEqual(second.retried, []);
+    assert.equal(again.failed[0].kind.choice, 'infra');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('precheck: неуверенный или кодовый класс — к агенту, класс уходит в промпт', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-cifix-'));
+  try {
+    const file = path.join(dir, 'repo.json');
+    for (const impl of [fakeClassify('lint'), fakeClassify(null, 0.4), async () => null]) {
+      const { x, retried } = retryFixture(file, impl);
+      const pre = await a.precheck(x);
+      assert.ok(!pre.skip);
+      assert.deepEqual(retried, []);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('precheck: dry-run ничего не перезапускает', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-cifix-'));
+  try {
+    const { x, retried } = retryFixture(path.join(dir, 'repo.json'), fakeClassify('flaky'));
+    x.opts.dryRun = true;
+    const pre = await a.precheck(x);
+    assert.equal(pre.result.retry_only, true);
+    assert.deepEqual(retried, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -9,6 +9,7 @@ import { ACCEPTANCE_PATHSPECS, truncate } from '../judge/payload.js';
 import { runChecks, checksFact } from '../checks.js';
 import { WORKTREE_ROOT } from '../workspace.js';
 import { CliError } from '../errors.js';
+import { classify } from '../classify.js';
 
 export const ATTEMPTS_ROOT = path.join(homedir(), '.local', 'state', 'fs-harness', 'ci-fix');
 
@@ -51,6 +52,37 @@ export function recordAttempt(state, key, sha) {
   return { ...state, [key]: { attempts: rec.attempts + 1, shas: [...rec.shas, sha], at: new Date().toISOString() } };
 }
 
+// Перезапуск без агента — один раз на sha: упала снова, значит дальше обычный путь.
+export const wasRetried = (state, key, sha) => (state[key]?.retriedShas ?? []).includes(sha);
+
+export function recordRetry(state, key, sha) {
+  const rec = state[key] ?? { attempts: 0, shas: [] };
+  return { ...state, [key]: { ...rec, retriedShas: [...(rec.retriedShas ?? []), sha] } };
+}
+
+// Падения, которые чинит перезапуск, а не правка кода.
+export const RETRYABLE = new Set(['flaky', 'infra']);
+
+const FAILURE_CRITERIA = {
+  flaky: 'Nondeterministic test failure not caused by the branch code: timeout inside a test, race, intermittent network in a test.',
+  infra: 'Runner or environment problem: docker pull, npm registry or network errors, out of disk or memory, runner lost, cache errors, job killed before tests ran.',
+  lint: 'Linter or formatter errors (eslint, prettier, stylelint).',
+  typecheck: 'Type errors (tsc, vue-tsc, nuxt typecheck).',
+  test: 'Deterministic failing test assertion caused by the code.',
+  build: 'Build or compile error: bundler, syntax, missing import or module.',
+  unknown: 'None of the above, or the log is not enough to tell.',
+};
+
+// Класс падения каждой джобы: { choice, p } или null, если классификатор выключен или молчит.
+export async function classifyFailures(traces, cfg, impl = classify) {
+  const state = traces.map((t, i) => `## j${i}: ${t.name} (stage ${t.stage})\n${t.errors}\n---\n${t.tail.split('\n').slice(-40).join('\n')}`).join('\n\n');
+  const questions = Object.fromEntries(
+    traces.map((t, i) => [`j${i}`, { instructions: `Why did CI job j${i} "${t.name}" fail?`, criteria: FAILURE_CRITERIA }]),
+  );
+  const answers = await impl({ role: 'ci-failure', state, questions, cfg });
+  return traces.map((_, i) => answers?.[`j${i}`] ?? null);
+}
+
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
 const SECTION = /^section_(start|end):\d+:/;
 const ERROR_LINE = /(error|failed|failing|✖|✘|✗|×|\bFAIL\b)/i;
@@ -79,7 +111,8 @@ function branchDiff(ws, targetBranch) {
   return diff ? truncate(diff, BRANCH_DIFF_LINES) : `(ветка не расходится с ${targetBranch} либо дифф посчитать не удалось)`;
 }
 
-const jobBlock = (j) => [`### ${j.name} (stage ${j.stage}, джоба #${j.id})`, j.url, '', j.errors ? `Строки с ошибками:\n${j.errors}\n` : '', `Хвост лога:\n${j.tail}`].filter(Boolean).join('\n');
+const kindLine = (j) => (j.kind?.choice ? `Классификатор падения: ${j.kind.choice} (p=${j.kind.p.toFixed(2)}), это подсказка, не факт.\n` : '');
+const jobBlock = (j) => [`### ${j.name} (stage ${j.stage}, джоба #${j.id})`, j.url, kindLine(j), j.errors ? `Строки с ошибками:\n${j.errors}\n` : '', `Хвост лога:\n${j.tail}`].filter(Boolean).join('\n');
 
 export const ciFixAction = {
   name: 'ci-fix',
@@ -153,6 +186,21 @@ export const ciFixAction = {
       for (const j of failed) {
         const trace = await ctx.g.getJobTrace(ctx.repo, j.id);
         traces.push({ id: j.id, name: j.name, stage: j.stage, url: j.web_url, ...summarizeTrace(trace) });
+      }
+
+      const kinds = await classifyFailures(traces, opts.cfg, opts.classify);
+      traces.forEach((t, i) => { t.kind = kinds[i]; });
+      const labels = traces.map((t) => `${t.name}: ${t.kind?.choice ?? 'не определён'}${t.kind ? ` (p=${t.kind.p.toFixed(2)})` : ''}`).join(', ');
+      if (traces.some((t) => t.kind)) say(`🏷 Классификатор: ${labels}`);
+
+      if (traces.every((t) => RETRYABLE.has(t.kind?.choice)) && !wasRetried(readAttempts(file), key, sha)) {
+        if (opts.dryRun) return skipped(`MR !${mr.iid}: падение похоже на flaky/infra (${labels}), перезапустил бы джобы без агента.`, { retry_only: true });
+        for (const j of failed) await startJob(ctx.g, ctx.repo, j);
+        writeAttempts(file, recordRetry(readAttempts(file), key, sha));
+        return skipped(
+          `MR !${mr.iid}: падение похоже на flaky/infra (${labels}), джобы перезапущены без агента. Упадут снова — следующий ci-fix пойдёт к агенту.`,
+          { retried: failed.map((j) => j.name), kinds: traces.map((t) => ({ job: t.name, ...t.kind })) },
+        );
       }
 
       return {

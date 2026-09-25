@@ -123,6 +123,18 @@ export const DEFAULTS = {
       'event-triage': ['haiku-cli', 'opus-cli'],
     },
   },
+  // Классификатор выбора из списка (src/classify.js). Роль без профиля — шаг выключен,
+  // действие работает как раньше. minP — порог вероятности выбранного варианта.
+  // stateLimit в символах; API режет вход около 32k токенов, это ~40000 символов кириллицы.
+  classify: {
+    minP: 0.8,
+    timeoutMs: 3000,
+    stateLimit: 8000,
+    profiles: {
+      jev: { baseUrl: 'https://openrouter.ai/api/alpha/decisions', model: '~typesafe/jev-latest', secret: 'openrouter' },
+    },
+    roles: { 'ci-failure': 'jev', 'event-triage': 'jev', 'thread-triage': 'jev' },
+  },
 };
 
 // v1 → v2 в памяти. На диск ничего не пишется, пока владелец не скажет config migrate:
@@ -264,6 +276,12 @@ export function loadConfig(env = process.env, { project, file } = {}) {
       ...(v2.judge || {}),
       profiles: { ...DEFAULTS.judge.profiles, ...(v2.judge?.profiles || {}) },
       roles: { ...DEFAULTS.judge.roles, ...(v2.judge?.roles || {}) },
+    },
+    classify: {
+      ...DEFAULTS.classify,
+      ...(v2.classify || {}),
+      profiles: { ...DEFAULTS.classify.profiles, ...(v2.classify?.profiles || {}) },
+      roles: { ...DEFAULTS.classify.roles, ...(v2.classify?.roles || {}) },
     },
   };
   return cfg;
