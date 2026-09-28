@@ -88,6 +88,9 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
       return { token: fresh, user: await res.json() };
     },
 
+    // Последние посты канала, новые первыми: order — порядок id, posts — сами посты по id.
+    channelPosts: (id, { perPage = 200 } = {}) => api(`/channels/${id}/posts?per_page=${perPage}`),
+
     // rootId — ответ в тред; без него сообщение уходит в канал отдельным постом.
     post: (channelId, message, { rootId = '' } = {}) =>
       api('/posts', { method: 'POST', body: { channel_id: channelId, message, ...(rootId ? { root_id: rootId } : {}) } }),
