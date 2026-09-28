@@ -50,7 +50,8 @@ description: Use when в работе всплыл ключ задачи Jira (F
 | «заполни Technical details for QA», «положи в Контент» | \`fsh flow show fill-jira\` |
 | «запушь задачу», «открой MR» | \`fsh flow show push-task\` |
 | «мои MR», «что с MR», «где конфликты» | \`fsh mrs --author me\`, \`fsh mr <ветка>\` |
-| «реши конфликты», «разбери треды ревью» | \`fsh conflict <mr>\`, \`fsh threads <mr>\` |
+| «реши конфликты» | \`fsh conflict <mr>\` |
+| «разбери треды ревью», «ответь ревьюеру» | \`fsh flow show resolve-threads\` |
 | «что с пайплайном», «задеплой ветку» | \`fsh jobs <mr>\`, \`fsh deploy <ветка>\` |
 | «почини упавший пайплайн», «CI красный» | \`fsh ci-fix <mr>\` |
 | «включи флаг», «какие есть флаги» | \`fsh growthbook list\`, \`fsh growthbook toggle <id> on\` |
