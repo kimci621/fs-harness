@@ -200,6 +200,47 @@ test('postReview: отправляет заголовок первой стро�
   assert.equal(sent[0].message, 'FD-7785: FE: заголовок из GitLab\n• MR !20: https://gl/mr/20');
 });
 
+// Канал сценария review: свой пост задачи, чужой пост про неё же, ответ в треде и пост про соседний ключ.
+const REVIEW_ID = 'a'.repeat(26);
+const replyMM = (sent = []) => ({
+  me: async () => ({ id: 'me' }),
+  channelPosts: async () => ({
+    order: ['r2', 'x1', 'r1', 'o1', 'n1'],
+    posts: {
+      r2: { id: 'r2', root_id: 'r1', user_id: 'me', message: 'FD-7926 поправил' },
+      x1: { id: 'x1', root_id: '', user_id: 'me', message: 'FD-79261: другая задача' },
+      r1: { id: 'r1', root_id: '', user_id: 'me', message: 'FD-7926: FE. Предвыбор валюты\n• MR !2956: https://gl/mr/2956' },
+      o1: { id: 'o1', root_id: '', user_id: 'other', message: 'FD-7926: чужой пост' },
+      n1: { id: 'n1', root_id: '', user_id: 'me', message: 'FD-7926: старый пост' },
+    },
+  }),
+  post: async (channel, message, opts) => { sent.push({ channel, message, opts }); return { id: 'p9' }; },
+});
+const REPLY_CFG = { mattermost: { baseUrl: 'https://mm.example/', channels: { review: REVIEW_ID } } };
+
+test('mm reply: отвечает в тред своего последнего корневого поста задачи', async () => {
+  const sent = [];
+  const out = await cmdMM(ctxWith(replyMM(sent), REPLY_CFG), ['reply', 'FD-7926', 'замечание', 'поправил'], { asObject: true, yes: true });
+  assert.deepEqual(sent, [{ channel: REVIEW_ID, message: 'замечание поправил', opts: { rootId: 'r1' } }]);
+  assert.equal(out.root_id, 'r1');
+  assert.equal(out.post_id, 'p9');
+});
+
+test('mm reply --dry-run: находит корень, но не пишет', async () => {
+  const sent = [];
+  const out = await cmdMM(ctxWith(replyMM(sent), REPLY_CFG), ['reply', 'FD-7926', 'текст'], { asObject: true, dryRun: true });
+  assert.equal(out.dry_run, true);
+  assert.equal(out.root_id, 'r1');
+  assert.deepEqual(sent, []);
+});
+
+test('mm reply: поста задачи нет — not_found со ссылкой на mm review, без ключа — usage', async () => {
+  const ctx = ctxWith(replyMM(), REPLY_CFG);
+  await assert.rejects(() => cmdMM(ctx, ['reply', 'FD-1', 'текст'], { asObject: true, yes: true }), /fsh mm review FD-1/);
+  await assert.rejects(() => cmdMM(ctx, ['reply', 'текст'], { asObject: true, yes: true }), /fsh mm reply <KEY>/);
+  await assert.rejects(() => cmdMM(ctx, ['reply', 'FD-7926'], { asObject: true, yes: true }), /fsh mm reply <KEY>/);
+});
+
 // Пароль читается в отдельном процессе: подменить fd 0 у текущего node --test нельзя,
 // а именно чтение stdin здесь и ломалось (readSync в raw-режиме падал с EAGAIN).
 test('promptSecret: пароль из пайпа доходит целиком и не печатается', () => {

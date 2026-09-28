@@ -2,14 +2,14 @@ import { expandHome } from '../config.js';
 import { createMattermost, reviewMessage } from '../mattermost.js';
 import { writeSecret } from '../secrets.js';
 import { makeGit } from '../workspace.js';
-import { keyFromBranch } from '../jira.js';
+import { ISSUE_KEY, keyFromBranch } from '../jira.js';
 import { issueUrl } from './jira.js';
 import { finish } from '../output.js';
 import { table } from '../format.js';
 import { confirm, promptSecret } from '../ui.js';
 import { CliError } from '../errors.js';
 
-// fsh mm login|whoami|channels|post|review — сообщения в Mattermost от имени человека.
+// fsh mm login|whoami|channels|post|review|reply — сообщения в Mattermost от имени человека.
 // Сценарий здесь один (review): канал на сценарий берётся из mattermost.channels.
 export async function cmdMM(ctx, args, opts = {}) {
   const [sub, ...rest] = args;
@@ -19,7 +19,8 @@ export async function cmdMM(ctx, args, opts = {}) {
         : sub === 'channels' ? await channels(ctx, rest)
         : sub === 'post' ? await post(ctx, rest, opts)
           : sub === 'review' ? await review(ctx, rest, opts)
-            : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]].', 1, 'usage'); })();
+            : sub === 'reply' ? await reply(ctx, rest, opts)
+              : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY> "<текст>"].', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -134,6 +135,32 @@ export async function postReview(ctx, { iid, mrUrl, key, title }, opts = {}) {
   return send(ctx, resolveChannel(ctx.cfg, opts.channel || 'review'), text, opts);
 }
 
+// Ответ в тред задачи: корень — свой последний пост без root_id в канале сценария, где есть ключ.
+// Это сообщение `fsh mm review`; permalink не нужен, `mm post` отвечать в тред не умеет.
+async function reply(ctx, [key, ...words], opts) {
+  const text = words.join(' ').trim();
+  if (!ISSUE_KEY.test(key ?? '') || !text) {
+    throw new CliError('Использование: fsh mm reply <KEY> "<текст>".', 1, 'usage');
+  }
+  const { id, scenario } = resolveChannel(ctx.cfg, opts.channel || 'review');
+  const mm = ctx.mm();
+  const target = await channelId(ctx, id);
+  const me = await mm.me();
+  const { order = [], posts = {} } = await mm.channelPosts(target);
+  const mention = new RegExp(`\\b${key}\\b`);
+  const root = order.map((postId) => posts[postId])
+    .find((p) => p && !p.root_id && p.user_id === me.id && mention.test(p.message ?? ''));
+  if (!root) {
+    throw new CliError(`В ${scenario || target} нет твоего поста про ${key}: сначала fsh mm review ${key}.`, 1, 'not_found');
+  }
+  if (opts.dryRun) return { ok: true, dry_run: true, channel: target, scenario, root_id: root.id, text };
+  if (!opts.yes && !opts.asObject && !confirm(`Ответить в тред ${key} (${scenario || target})?\n${text}\n[y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  const created = await mm.post(target, text, { rootId: root.id });
+  return { ok: true, channel: target, scenario, root_id: root.id, text, post_id: created?.id ?? null };
+}
+
 // Запись в общий чат: как и все записи в харнессе — dry-run показывает, подтверждение спрашивает.
 async function send(ctx, { id, scenario }, text, opts) {
   if (opts.dryRun) return { ok: true, dry_run: true, channel: id, scenario, text };
@@ -154,5 +181,6 @@ function render(r) {
       ...r.channels.map((c) => [`${c.private ? '🔒 ' : ''}${c.title}`, c.name, c.id, c.team]),
     ]));
   }
-  console.log(`${r.dry_run ? '📝 план' : '✅ отправлено'} → ${r.scenario || r.channel}\n${r.text}`);
+  const thread = r.root_id ? `, тред ${r.root_id}` : '';
+  console.log(`${r.dry_run ? '📝 план' : '✅ отправлено'} → ${r.scenario || r.channel}${thread}\n${r.text}`);
 }
