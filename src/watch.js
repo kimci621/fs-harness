@@ -2,20 +2,16 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { cmdMRS } from './commands/mrs.js';
-import { judge } from './judge/index.js';
-import { classify } from './classify.js';
-import { statusIcon } from './format.js';
+import { openThreads, awaitingReply } from './actions/threads.js';
+import { mapLimit } from './pipeline.js';
 import { envNames } from './secrets.js';
 
 const STATE_ROOT = path.join(homedir(), '.local', 'state', 'fs-harness', 'watch');
+// Снимок старого формата (до трёх событий) сравнивать не с чем: считаем его отсутствующим.
+export const SNAPSHOT_VERSION = 2;
+export const DEFAULT_BEHIND_THRESHOLD = 10;
 
 export const stateFile = (repo, root = STATE_ROOT) => path.join(root, `${repo.replace(/\//g, '%2F')}.json`);
-
-// Снимок — ровно то, что показывает fsh mrs: второго источника правды не заводим.
-export async function snapshot(g, repo) {
-  const { mrs } = await cmdMRS(g, repo, { asObject: true });
-  return { at: new Date().toISOString(), repo, mrs };
-}
 
 export function readSnapshot(file) {
   if (!existsSync(file)) return null;
@@ -31,175 +27,65 @@ export function writeSnapshot(file, snap) {
   writeFileSync(file, JSON.stringify(snap, null, 2));
 }
 
-export function isUserInList(list, username) {
-  if (!list || !username) return false;
-  const target = String(username).toLowerCase().trim();
-  const arr = Array.isArray(list) ? list : [list];
-  return arr.some((u) => {
-    if (!u) return false;
-    if (typeof u === 'string') return u.toLowerCase().trim() === target;
-    const un = u.username ?? u.name;
-    return un && String(un).toLowerCase().trim() === target;
+const firstLine = (s) => String(s ?? '').split('\n').find((l) => l.trim())?.trim() ?? '';
+
+// Снимок моих открытых MR без черновиков: треды, ждущие моего ответа, файлы конфликта, отставание.
+// probe(mr) → {files, behind} считает git локально; нет probe — эти поля null.
+export async function snapshot(ctx, { probe = null, prev = null } = {}) {
+  const { mrs } = await cmdMRS(ctx.g, ctx.repo, { asObject: true, author: 'me' });
+  const me = (await ctx.g.me())?.username;
+  const mine = mrs.filter((m) => !m.draft);
+  const rows = await mapLimit(mine, 4, async (mr) => {
+    const threads = awaitingReply(openThreads(await ctx.g.getDiscussions(ctx.repo, mr.iid)), me).map((t) => {
+      const last = t.notes.at(-1) ?? {};
+      return { id: t.id, last: last.created_at ?? null, author: last.author ?? '?', text: firstLine(last.body) };
+    });
+    const git = probe ? probe(mr) : {};
+    return {
+      iid: mr.iid, title: mr.title, url: mr.web_url, branch: mr.source_branch, target: mr.target_branch,
+      threads, files: git.files ?? null, behind: git.behind ?? null,
+    };
   });
+  // Не посчитался MR — держим прошлое состояние, иначе следующий опрос выдал бы его старое за новое.
+  const was = new Map((prev?.v === SNAPSHOT_VERSION ? prev.mrs : []).map((m) => [m.iid, m]));
+  const errors = [];
+  const out = rows.flatMap((r, i) => {
+    if (!r.error) return [r];
+    errors.push({ iid: mine[i].iid, error: r.error.message ?? String(r.error) });
+    return was.has(mine[i].iid) ? [was.get(mine[i].iid)] : [];
+  });
+  return { v: SNAPSHOT_VERSION, at: new Date().toISOString(), repo: ctx.repo, mrs: out, errors };
 }
 
-// Связан ли MR со мной: я автор, исполнитель или ревьюер.
-export function isMRRelatedToMe(mr, meUsername) {
-  if (!meUsername) return true;
-  const me = String(meUsername).toLowerCase().trim();
-
-  // Автор
-  const authorUser = mr.author_username ?? (typeof mr.author === 'string' ? mr.author : mr.author?.username);
-  if (authorUser && String(authorUser).toLowerCase().trim() === me) return true;
-  const authorName = typeof mr.author === 'object' ? mr.author?.name : null;
-  if (authorName && String(authorName).toLowerCase().trim() === me) return true;
-
-  // Исполнители (assignees / assignee)
-  if (isUserInList(mr.assignees, me) || isUserInList(mr.assignee, me)) return true;
-
-  // Ревьюеры (reviewers)
-  if (isUserInList(mr.reviewers, me) || isUserInList(mr.reviewer, me)) return true;
-
-  return false;
-}
-
-// Что изменилось против прошлого снимка. Первого снимка нет — событий нет:
-// иначе первый же опрос вывалил бы в канал весь список открытых MR.
-export function diffSnapshots(prev, next, { meUsername = null, ignoredShas = [], onlyMe = false } = {}) {
-  if (!prev) return [];
+// Три события на MR: новые треды ждут меня, появился конфликт, отставание перешло порог.
+// Первого снимка нет — событий нет: иначе первый опрос вывалил бы в канал всё разом.
+export function diffSnapshots(prev, next, { behindThreshold = DEFAULT_BEHIND_THRESHOLD } = {}) {
+  if (prev?.v !== SNAPSHOT_VERSION) return [];
   const was = new Map(prev.mrs.map((m) => [m.iid, m]));
   const events = [];
-  const ignoredShaSet = new Set(ignoredShas);
-  // sha нужен ключу идемпотентности очереди: одно и то же событие на одном и том же коммите — одно задание.
-  const push = (mr, kind, detail) => events.push({
-    id: `e${events.length + 1}`,
-    source: 'gitlab',
-    kind,
-    mr: mr.iid,
-    sha: mr.sha ?? null,
-    author: mr.author_username ?? mr.author ?? null,
-    title: mr.title,
-    url: mr.web_url,
-    detail,
-    age: mr.updated_at,
-  });
-
   for (const mr of next.mrs) {
-    if (onlyMe && meUsername && !isMRRelatedToMe(mr, meUsername)) continue;
-
     const old = was.get(mr.iid);
-    if (!old) {
-      push(mr, 'mr_new', `новый MR ${mr.source_branch} → ${mr.target_branch}`);
-      continue;
+    // Новый тред или новая реплика в старом: последняя заметка сменилась.
+    const seen = new Map((old?.threads ?? []).map((t) => [t.id, t.last]));
+    const threads = mr.threads.filter((t) => !seen.has(t.id) || seen.get(t.id) !== t.last);
+    const conflict = mr.files?.length && !old?.files?.length ? mr.files : null;
+    const behind = mr.behind >= behindThreshold && !(old?.behind >= behindThreshold) ? mr.behind : null;
+    if (threads.length || conflict || behind != null) {
+      const { iid, title, url, branch, target } = mr;
+      events.push({ iid, title, url, branch, target, threads, conflict, behind });
     }
-
-    // Назначение ревьюером на уже существующий MR
-    if (onlyMe && meUsername && isUserInList(mr.reviewers, meUsername) && !isUserInList(old.reviewers, meUsername)) {
-      push(mr, 'mr_new', `вас назначили ревьюером ${mr.source_branch} → ${mr.target_branch}`);
-    }
-
-    const from = old.pipeline?.status ?? 'нет';
-    const to = mr.pipeline?.status ?? 'нет';
-    if (from !== to) {
-      if (!ignoredShaSet.has(mr.sha)) {
-        push(mr, 'pipeline', `пайплайн ${from} → ${to} ${statusIcon(to)}`);
-      }
-    }
-    const openNow = mr.comments?.open ?? 0;
-    const openWas = old.comments?.open ?? 0;
-    if (openNow > openWas) {
-      const author = mr.author_username ?? mr.author ?? null;
-      if (onlyMe || !meUsername || author !== meUsername) {
-        push(mr, 'threads', `новых открытых тредов: ${openNow - openWas} (было ${openWas}, стало ${openNow})`);
-      }
-    }
-    if (mr.has_conflicts && !old.has_conflicts) push(mr, 'conflict', 'появился конфликт с целевой веткой');
-  }
-  for (const old of prev.mrs) {
-    if (onlyMe && meUsername && !isMRRelatedToMe(old, meUsername)) continue;
-    if (!next.mrs.some((m) => m.iid === old.iid)) push(old, 'mr_gone', 'MR закрыт или смержен');
   }
   return events;
 }
 
-// Батч судье: одна строка на событие, id — чтобы вердикт можно было разложить обратно.
-export function triagePayload(events, repo) {
-  return [
-    `Репозиторий: ${repo}`,
-    '',
-    'События с прошлого опроса:',
-    ...events.map((e) => `- ${e.id} · ${e.kind} · MR !${e.mr} «${e.title}» · ${e.detail} · обновлён ${e.age} · ${e.url}`),
-  ].join('\n');
-}
-
-export const TRIAGE_LEVEL = { blocker: 'срочно', warning: 'к сведению', nit: 'шум' };
-
-// Те же уровни, что в рубрике event-triage.md, но для классификатора выбора.
-const TRIAGE_CRITERIA = {
-  blocker: 'The person is needed right now: broken pipeline, new merge conflict, new unresolved review threads.',
-  warning: 'Worth knowing, but can wait.',
-  nit: "Background noise: successful pipeline, someone else's new MR, closed or merged MR.",
-};
-
-// Триаж классификатором в форме вердикта судьи, чтобы keepEvents не менять.
-// null — классификатор выключен или молчит, дальше судья. Неуверенное событие — срочно.
-export async function triageByClassifier(events, repo, cfg, impl = classify) {
-  const questions = Object.fromEntries(
-    events.map((e) => [e.id, { instructions: `How urgent is event ${e.id} for the person watching these MRs?`, criteria: TRIAGE_CRITERIA }]),
-  );
-  const answers = await impl({ role: 'event-triage', state: triagePayload(events, repo), questions, cfg });
-  if (!answers) return null;
-  const findings = events.map((e) => {
-    const choice = answers[e.id]?.choice;
-    return { file: e.id, line: 0, severity: choice ?? 'blocker', body: choice ? '' : 'классификатор не уверен' };
-  });
-  return { summary: '', findings };
-}
-
-// Вердикт → что оставить. Судья кладёт id события в findings[].file; шум и всё,
-// что он не упомянул, до канала не доходит.
-export function keepEvents(events, verdict) {
-  if (!verdict) return events.map((e) => ({ ...e, level: 'срочно', why: 'триаж не сработал' }));
-  const byId = new Map((verdict.findings ?? []).map((f) => [f.file, f]));
-  return events
-    .map((e) => ({ ...e, finding: byId.get(e.id) }))
-    .filter((e) => e.finding && e.finding.severity !== 'nit')
-    .map((e) => ({ ...e, level: TRIAGE_LEVEL[e.finding.severity], why: e.finding.body }));
-}
-
-export function formatEvents(kept, { verdict } = {}) {
-  if (!kept.length) return 'Ничего важного.';
-  const lines = kept.map((e) => `- ${e.level}: MR !${e.mr} «${e.title}» — ${e.detail}${e.why ? ` (${e.why})` : ''}\n  ${e.url}`);
-  return [verdict?.summary ? `${verdict.summary}` : '', ...lines].filter(Boolean).join('\n');
-}
-
-// Один опрос: снимок → дифф → триаж. Уведомляет вызывающий, запускать действия watcher не умеет.
-export async function pollOnce({ g, repo, cfg, file = stateFile(repo), makeProvider, classifyImpl, signal, meUsername, ignoredShas = [] } = {}) {
-  let me = meUsername || cfg?.watch?.username || cfg?.username || null;
-  if (!me && g?.me) {
-    try {
-      const u = await g.me();
-      me = u?.username ?? null;
-    } catch {}
-  }
-  const onlyMe = cfg?.watch?.onlyMe ?? true;
+// Один опрос: снимок → дифф. Уведомляет вызывающий, ничего не запускает.
+export async function pollOnce({ ctx, probe = null, file = stateFile(ctx.repo), behindThreshold } = {}) {
   const prev = readSnapshot(file);
-  const next = await snapshot(g, repo);
-  const events = diffSnapshots(prev, next, { meUsername: me, ignoredShas, onlyMe });
-  writeSnapshot(file, next);
-
-  let verdict = null;
-  let triageError = null;
-  if (events.length) {
-    try {
-      verdict =
-        (await triageByClassifier(events, repo, cfg, classifyImpl)) ??
-        (await judge({ role: 'event-triage', payload: triagePayload(events, repo), cfg, makeProvider, signal }));
-    } catch (err) {
-      triageError = err.message; // без триажа шлём всё: терять сигнал хуже, чем шуметь
-    }
-  }
-  return { first: !prev, events, kept: keepEvents(events, verdict), verdict, triageError, snapshot: next };
+  const next = await snapshot(ctx, { probe, prev });
+  const events = diffSnapshots(prev, next, { behindThreshold });
+  const { errors, ...toSave } = next;
+  writeSnapshot(file, toSave);
+  return { first: prev?.v !== SNAPSHOT_VERSION, events, errors, snapshot: toSave };
 }
 
 // Демон работает и ночью, а на залоченном экране `security` ключей не отдаёт: секреты обязаны
@@ -211,21 +97,7 @@ export function daemonSecretIssues(cfg = {}, env = process.env) {
   if ((tg.chat_id || env.TELEGRAM_CHAT_ID) && !tg.bot_token) {
     needed.push({ name: 'telegram', why: tg.approvals ? 'бот и уведомления' : 'уведомления watcher' });
   }
-  for (const profile of cfg.judge?.roles?.['event-triage'] ?? []) {
-    const p = cfg.judge?.profiles?.[profile];
-    if (p?.secret) needed.push({ name: p.secret, why: `триаж событий (профиль ${profile})` });
-  }
   return needed
     .filter(({ name }) => !envNames(name).some((n) => env[n]))
     .map((n) => ({ ...n, envName: envNames(n.name)[0] }));
-}
-
-// Профили судьи, которые ходят за токеном в keychain сами (claude по OAuth). Запретить их
-// нельзя — под подпиской другого пути нет, но знать про это надо: на залоченном экране
-// триаж отвалится, и события уйдут в канал без разбора.
-export function daemonKeychainJudges(cfg = {}) {
-  return (cfg.judge?.roles?.['event-triage'] ?? []).filter((name) => {
-    const p = cfg.judge?.profiles?.[name];
-    return p?.provider === 'cli' && !p.secret;
-  });
 }

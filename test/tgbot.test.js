@@ -8,7 +8,7 @@ import {
   sendApprovalRequest, isAllowed, handleUpdate, loadBotState, saveBotState, approvalNonce,
   escapeHtml, stripHtml, formatMRTelegram, formatMRCard, formatJobsTelegram,
   formatCommentsTelegram, formatTasksListTelegram, formatTaskCardTelegram,
-  formatStatusTelegram, formatWatchTelegram, formatHelpTelegram, sendMessage,
+  formatStatusTelegram, formatWatchTelegram, formatHelpTelegram, sendMessage, formatResolveAllTelegram,
 } from '../src/tgbot.js';
 import { createRun, saveArtifact } from '../src/agent/journal.js';
 
@@ -158,6 +158,12 @@ test('handleUpdate: чужие молча ignored, свои — command/callback
   assert.equal(cb.callbackId, 'cb');
   assert.equal(cb.messageId, 1);
 
+  const fix = handleUpdate({ callback_query: { id: 'cb2', data: 'fix:42:n2', from: { id: 10 }, message: { chat: { id: 5 }, message_id: 3 } } }, { cfg });
+  assert.equal(fix.cmd, 'fix');
+  assert.equal(fix.iid, 42);
+  assert.equal(fix.nonce, 'n2');
+  assert.deepEqual(handleUpdate({ callback_query: { id: 'cb3', data: 'fix:42:n2', from: { id: 99 } } }, { cfg }), { kind: 'ignored' });
+
   assert.deepEqual(handleUpdate({ message: { text: 'просто текст', from: { id: 10 } } }, { cfg }), { kind: 'ignored' });
   assert.deepEqual(handleUpdate({}, { cfg }), { kind: 'ignored' });
   // /mrs@BotName → имя без суффикса
@@ -259,9 +265,10 @@ test('formatStatusTelegram, formatWatchTelegram, formatHelpTelegram: оформ�
   assert.match(status, /Заданий в очереди:.*1/);
   assert.match(status, /run-1/);
 
-  const watch = formatWatchTelegram({ kept: [{ kind: 'pipeline', mr: 123, detail: 'пайплайн упал' }] });
-  assert.match(watch, /Watcher.*важные события/);
-  assert.match(watch, /pipeline.*!123.*пайплайн упал/);
+  const watch = formatWatchTelegram({ events: [{ iid: 123, threads: [{}], conflict: ['a.js'], behind: null }] });
+  assert.match(watch, /MR с событиями \(1\)/);
+  assert.match(watch, /!123.*тредов ждут ответа: 1, конфликт/);
+  assert.match(formatWatchTelegram({ events: [] }), /нет/);
 
   const help = formatHelpTelegram();
   assert.match(help, /FSH Telegram Bot/);
@@ -291,3 +298,13 @@ test('sendMessage: фолбэк на stripHtml при ошибке размет�
   assert.equal(log[1].body.text, 'сломанный тег');
 });
 
+
+test('formatResolveAllTelegram: статусы sync/threads/mm, при падении runId и подсказка', () => {
+  const ok = formatResolveAllTelegram({ mrs: [{ iid: 5, sync: { status: 'done' }, threads: { status: 'done', replied: ['a', 'b'] }, mm: { status: 'sent' } }] }, 5);
+  assert.match(ok, /✅.*!5.*sync done · threads done \(2 ответов\) · mm sent/);
+  const bad = formatResolveAllTelegram({ mrs: [{ iid: 5, sync: { status: 'failed', error: 'хук упал\nхвост', runId: 'run-1', hint: 'fsh resume run-1' }, threads: { status: 'blocked' }, mm: { status: 'not_needed' } }] }, 5);
+  assert.match(bad, /❌/);
+  assert.match(bad, /sync: хук упал/);
+  assert.match(bad, /run-1.*fsh resume run-1/);
+  assert.match(formatResolveAllTelegram({ mrs: [] }, 5), /работы нет/);
+});

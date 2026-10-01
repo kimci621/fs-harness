@@ -142,11 +142,12 @@ export function handleUpdate(u, { cfg }) {
     const cq = u.callback_query;
     if (!isAllowed(cfg, cq.from?.id)) return { kind: 'ignored' };
     const parts = String(cq.data ?? '').split(':');
-    if (parts.length !== 3 || !['appr', 'rev', 'rej'].includes(parts[0])) return { kind: 'ignored' };
+    if (parts.length !== 3 || !['appr', 'rev', 'rej', 'fix'].includes(parts[0])) return { kind: 'ignored' };
     return {
       kind: 'callback',
       cmd: parts[0],
-      runId: parts[1],
+      // fix:<iid>:<nonce> — кнопка watcher «Обновить и разобрать», остальные несут id рана.
+      ...(parts[0] === 'fix' ? { iid: Number(parts[1]) } : { runId: parts[1] }),
       nonce: parts[2],
       chatId: cq.message?.chat?.id ?? null,
       messageId: cq.message?.message_id ?? null,
@@ -180,6 +181,66 @@ export function loadBotState(root) {
 export function saveBotState(root, state) {
   mkdirSync(root, { recursive: true });
   writeFileSync(path.join(root, 'tgbot.json'), JSON.stringify(state, null, 2) + '\n');
+}
+
+// Кнопки watcher живут сутки, как аппрув. Пишет демон watch, читает fsh bot: общий файл состояния.
+export const FIX_BUTTON_TTL_MS = 24 * 60 * 60 * 1000;
+const fixButtonsFile = (root) => path.join(root, 'fix-buttons.json');
+
+function readFixButtons(root) {
+  try {
+    return JSON.parse(readFileSync(fixButtonsFile(root), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+// nonce → {project, repo, iid}; заодно выкидывает протухшие, чтобы файл не рос.
+export function issueFixButton(root, { project, repo, iid }, now = Date.now()) {
+  const all = Object.fromEntries(Object.entries(readFixButtons(root)).filter(([, b]) => now - b.at < FIX_BUTTON_TTL_MS));
+  const nonce = approvalNonce();
+  all[nonce] = { project, repo, iid, at: now };
+  mkdirSync(root, { recursive: true });
+  writeFileSync(fixButtonsFile(root), JSON.stringify(all, null, 2) + '\n');
+  return nonce;
+}
+
+// Кнопка действительна, если nonce выдан на этот же iid и не протух.
+export function findFixButton(root, iid, nonce, now = Date.now()) {
+  const b = readFixButtons(root)[nonce];
+  return b && b.iid === iid && now - b.at < FIX_BUTTON_TTL_MS ? b : null;
+}
+
+export const fixButtons = (iid, nonce) => [[{ text: '🔧 Обновить и разобрать', callback_data: `fix:${iid}:${nonce}` }]];
+
+// Одно сообщение на MR за опрос: что случилось с ним с прошлого снимка.
+export function formatWatchEvent(e, repo) {
+  const lines = [
+    `🔔 <b>!${e.iid}</b> <code>${escapeHtml(e.branch)}</code> → <code>${escapeHtml(e.target)}</code>${repo ? ` · ${escapeHtml(repo)}` : ''}`,
+    e.url ? `<a href="${e.url}">${escapeHtml(e.title || e.url)}</a>` : escapeHtml(e.title || ''),
+  ];
+  if (e.threads?.length) {
+    lines.push('', `💬 <b>Ждут ответа (${e.threads.length}):</b>`);
+    for (const t of e.threads) lines.push(`• @${escapeHtml(t.author)}: ${escapeHtml(truncate(t.text, 160))}`);
+  }
+  if (e.conflict?.length) lines.push('', `⚠️ <b>Конфликт с ${escapeHtml(e.target)}:</b> ${e.conflict.map((f) => `<code>${escapeHtml(f)}</code>`).join(', ')}`);
+  if (e.behind != null) lines.push('', `⬇️ <b>Отстаёт от ${escapeHtml(e.target)}</b> на ${e.behind} коммит(ов)`);
+  return lines.join('\n');
+}
+
+// Итог resolve-all по одному MR после нажатия кнопки.
+export function formatResolveAllTelegram(res, iid) {
+  const e = (res?.mrs ?? []).find((m) => m.iid === iid);
+  if (!e) return `✅ !${iid}: работы нет — тредов, конфликта и отставания уже нет.`;
+  if (!e.sync) return `❌ !${iid}: ${escapeHtml(e.error ?? 'не удалось посчитать состояние')}`;
+  const failed = ['failed', 'locked'].includes(e.sync.status) || ['failed', 'locked'].includes(e.threads.status);
+  const lines = [`${failed ? '❌' : '✅'} <b>!${iid}</b> resolve-all: sync ${e.sync.status} · threads ${e.threads.status}${e.threads.replied ? ` (${e.threads.replied.length} ответов)` : ''} · mm ${e.mm.status}`];
+  for (const [name, s] of [['sync', e.sync], ['threads', e.threads]]) {
+    if (s.error) lines.push(`${name}: ${escapeHtml(truncate(s.error.split('\n')[0], 200))}`);
+    if (s.runId && s.hint) lines.push(`ран <code>${s.runId}</code>, дальше: <code>${escapeHtml(s.hint)}</code>`);
+  }
+  if (e.error) lines.push(escapeHtml(e.error));
+  return lines.join('\n');
 }
 
 // Форматирование одного MR для списка /mrs в Telegram
@@ -335,15 +396,19 @@ export function formatStatusTelegram(runs = [], jobs = [], pending = 0) {
 
 // Результаты watcher (/watch)
 export function formatWatchTelegram(r) {
-  const kept = r.kept ?? [];
-  if (!kept.length) {
-    return '👁 <b>Watcher:</b> изменений нет, всё тихо.';
+  const events = r.events ?? [];
+  if (!events.length) {
+    return '👁 <b>Watcher:</b> новых тредов, конфликтов и отставаний нет.';
   }
-  const lines = kept.map((e) => {
-    const mrStr = e.mr ? ` (!${e.mr})` : '';
-    return `▫️ <b>${escapeHtml(e.kind)}</b>${mrStr}: ${escapeHtml(e.detail || e.title || '')}`;
+  const lines = events.map((e) => {
+    const what = [
+      e.threads?.length ? `тредов ждут ответа: ${e.threads.length}` : '',
+      e.conflict?.length ? 'конфликт' : '',
+      e.behind != null ? `отстаёт на ${e.behind}` : '',
+    ].filter(Boolean).join(', ');
+    return `▫️ <b>!${e.iid}</b>: ${escapeHtml(what)}`;
   });
-  return `👁 <b>Watcher — важные события (${kept.length}):</b>\n\n${lines.join('\n')}`;
+  return `👁 <b>Watcher — MR с событиями (${events.length}):</b>\n\n${lines.join('\n')}`;
 }
 
 // Справка по командам (/help)

@@ -19,7 +19,10 @@ import {
   escapeHtml, formatMRTelegram, formatMRCard, formatJobsTelegram,
   formatCommentsTelegram, formatTasksListTelegram, formatTaskCardTelegram,
   formatStatusTelegram, formatWatchTelegram, formatHelpTelegram,
+  findFixButton, formatResolveAllTelegram,
 } from '../tgbot.js';
+import { cmdResolveAll } from './resolve-all.js';
+import { listLocks, lockKey } from '../locks.js';
 import { cmdMRS, anyFilter } from './mrs.js';
 import { cmdMR } from './mr.js';
 import { cmdJobs } from './jobs.js';
@@ -53,6 +56,8 @@ export async function cmdBot(opts = {}, deps = {}) {
     revise = reviseRun,
     commands = {},
     spawnAgentImpl = spawnAgent,
+    resolveAll = cmdResolveAll,
+    locksRoot,
   } = deps;
 
   let cfg = loadCfg(env, {});
@@ -77,6 +82,8 @@ export async function cmdBot(opts = {}, deps = {}) {
 
   // Долгие publish/revise не держат long-polling: кладём в очередь, дожидаемся на выходе.
   const pending = new Set();
+  // MR, по которым кнопка watcher уже запустила resolve-all в этом процессе.
+  const fixing = new Set();
   const fire = (fn) => {
     const p = Promise.resolve().then(fn).catch((e) => {
       log(`${stamp()} фоновая операция упала: ${e.message}`);
@@ -151,7 +158,7 @@ export async function cmdBot(opts = {}, deps = {}) {
         if (stopped) break;
         offset = u.update_id + 1;
         try {
-          await handleOne(u, { c, t, log, fire, sayTo, ctxFor, commands, publish, revise, runsDir, fetchImpl, now, env, loadCfg, makeCtx, sleep, spawnAgentImpl, activeAgents });
+          await handleOne(u, { c, t, log, fire, sayTo, ctxFor, commands, publish, revise, runsDir, fetchImpl, now, env, loadCfg, makeCtx, sleep, spawnAgentImpl, activeAgents, resolveAll, locksRoot, stateRoot, fixing });
         } catch (e) {
           log(`${stamp()} update ${u.update_id} упал: ${e.message}`);
         }
@@ -184,7 +191,47 @@ async function handleOne(u, d) {
     return;
   }
 
+  if (parsed.cmd === 'fix') {
+    await runFixCallback(parsed, d);
+    return;
+  }
   await runCallback(parsed, { c, t, sayTo, fire, publish, revise, runsDir, fetchImpl, log, makeCtx: d.makeCtx });
+}
+
+// Кнопка watcher «Обновить и разобрать»: resolve-all по одному MR в фоне, итог — отдельным сообщением.
+async function runFixCallback(cb, d) {
+  const { t, sayTo, fire, fetchImpl, env, loadCfg, makeCtx, resolveAll, locksRoot, stateRoot, fixing, activeAgents, runsDir, now } = d;
+  const answer = (text) => answerCallbackQuery(t.token, cb.callbackId, { text, fetchImpl }).catch(() => {});
+  const button = findFixButton(stateRoot, cb.iid, cb.nonce, now());
+  if (!button) {
+    await answer('Устарело');
+    return;
+  }
+  // Свой Set ловит повтор до того, как resolve-all возьмёт лок; файловый лок — прогон из CLI или воркера.
+  const key = lockKey({ repo: button.repo, mr: cb.iid });
+  const lockBusy = listLocks(locksRoot ? { root: locksRoot } : {}).some((l) => l.key === key && !l.stale);
+  if (fixing.has(key) || lockBusy) {
+    await answer('Уже идёт');
+    await sayTo(cb.chatId, `⏳ По !${cb.iid} resolve-all уже идёт, жду его итога.`);
+    return;
+  }
+  fixing.add(key);
+  await answer('Запускаю');
+  await sayTo(cb.chatId, `▶ resolve-all <b>!${cb.iid}</b>: merge target → треды → реплика в MM. Итог пришлю сюда.`);
+  fire(async () => {
+    const ac = new AbortController();
+    activeAgents?.add(ac);
+    try {
+      const ctx = makeCtx(loadCfg(env, button.project ? { project: button.project } : {}));
+      const res = await resolveAll(ctx, { only: [cb.iid], yes: true, asObject: true, runsDir, signal: ac.signal });
+      await sayTo(cb.chatId, formatResolveAllTelegram(res, cb.iid));
+    } catch (e) {
+      await sayTo(cb.chatId, `❌ resolve-all !${cb.iid} упал: ${escapeHtml(e.message)}\nПовтори кнопкой или <code>fsh resolve-all ${cb.iid}</code>.`);
+    } finally {
+      activeAgents?.delete(ac);
+      fixing.delete(key);
+    }
+  });
 }
 
 function parseMRFilters(args = []) {

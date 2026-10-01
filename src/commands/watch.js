@@ -1,96 +1,68 @@
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { pollOnce, formatEvents, daemonSecretIssues, daemonKeychainJudges } from '../watch.js';
-import { getTelegramTarget, postTelegram } from '../notify.js';
-import { enqueue, jobFromEvent, pruneQueue, DEFAULT_TTL_SECONDS } from '../queue.js';
+import { pollOnce, daemonSecretIssues, DEFAULT_BEHIND_THRESHOLD } from '../watch.js';
+import { getTelegramTarget } from '../notify.js';
+import { sendButtons, sendMessage, formatWatchEvent, fixButtons, issueFixButton, stripHtml } from '../tgbot.js';
+import { gitProbe } from './resolve-all.js';
 import { loadConfig, expandHome } from '../config.js';
 import { gcWorktrees } from '../worktrees.js';
-import { runWorker } from '../worker.js';
 import { createGlab } from '../glab.js';
 import { createCtx } from '../registry.js';
 import { listAuto, advanceTask } from '../auto.js';
 import { CliError } from '../errors.js';
 
-// fsh watch — один опрос: что изменилось с прошлого раза, что из этого важно.
-// Действия по-прежнему не запускает: важные события кладутся в очередь заданий,
-// а исполнителя у неё нет (PLAN, фазы 12-15).
-export async function cmdWatch(ctx, { json, asObject, file, queueRoot, autoRoot } = {}) {
-  const autoTasks = listAuto(autoRoot);
-  const ignoredShas = autoTasks.map((t) => t.head_sha).filter(Boolean);
-  let meUsername = ctx.cfg?.watch?.username || ctx.cfg?.username || null;
-  if (!meUsername && ctx.g?.me) {
-    try {
-      const u = await ctx.g.me();
-      meUsername = u?.username ?? null;
-    } catch {}
-  }
+const BOT_STATE_ROOT = path.join(homedir(), '.local', 'state', 'fs-harness');
 
-  const { first, events, kept, verdict, triageError, snapshot } = await pollOnce({
-    g: ctx.g,
-    repo: ctx.repo,
-    cfg: ctx.cfg,
-    meUsername,
-    ignoredShas,
+// fsh watch — один опрос моих MR: новые треды ко мне, появившийся конфликт, отставание через порог.
+// Только уведомляет: одно сообщение на MR с кнопкой resolve-all для fsh bot. Очередь и воркер не трогает.
+export async function cmdWatch(ctx, { json, asObject, file, probe, stateRoot = BOT_STATE_ROOT, fetchImpl = fetch } = {}) {
+  const projectDir = expandHome(ctx.cfg?.projectDir || '');
+  const gitOk = Boolean(projectDir) && existsSync(path.join(projectDir, '.git'));
+  const usedProbe = probe ?? (gitOk ? gitProbe(projectDir) : null);
+  const { first, events, errors, snapshot } = await pollOnce({
+    ctx,
+    probe: usedProbe,
+    behindThreshold: Number(ctx.cfg?.watch?.behindThreshold) || DEFAULT_BEHIND_THRESHOLD,
     ...(file ? { file } : {}),
   });
 
   const target = getTelegramTarget(ctx.cfg);
-  let notified = false;
-  if (target && kept.length) {
+  // Кнопку жмёт fsh bot, а он без allowlist не стартует: без списка кнопка была бы мёртвой.
+  const withButton = (ctx.cfg?.telegram?.allowed_user_ids ?? []).length > 0;
+  let notified = 0;
+  for (const e of target ? events : []) {
+    const text = formatWatchEvent(e, ctx.repo);
     try {
-      await postTelegram(target, `*${ctx.repo}*\n${formatEvents(kept, { verdict })}`);
-      notified = true;
+      if (withButton) {
+        const nonce = issueFixButton(stateRoot, { project: ctx.cfg?.activeProject ?? '', repo: ctx.repo, iid: e.iid });
+        await sendButtons(target.token, target.chatId, text, fixButtons(e.iid, nonce), { fetchImpl });
+      } else {
+        await sendMessage(target.token, target.chatId, text, { fetchImpl });
+      }
+      notified++;
     } catch (err) {
-      console.error(`⚠ Уведомление не ушло: ${err.message}`);
+      console.error(`⚠ Уведомление по !${e.iid} не ушло: ${err.message}`);
     }
   }
 
-  const queued = enqueueKept(kept, ctx, queueRoot, { meUsername, ignoredShas });
-
-  const result = {
-    ok: true,
-    first,
-    mrs: snapshot.mrs.length,
-    events: events.map(({ finding, ...e }) => e),
-    kept: kept.map(({ finding, ...e }) => e),
-    queued,
-    triage: verdict ? { decision: verdict.decision, summary: verdict.summary, cost: verdict.meta?.cost ?? 0 } : null,
-    triage_error: triageError,
-    notified,
-  };
+  const result = { ok: true, first, mrs: snapshot.mrs.length, events, errors, git: Boolean(usedProbe), notified };
   if (asObject) return result;
   if (json) {
     console.log(JSON.stringify(result, null, 2));
     return result;
   }
 
+  if (!usedProbe) console.log('⚠ Каталог проекта не настроен (projectDir) — конфликт и отставание не считаются.');
+  for (const er of errors) console.log(`⚠ !${er.iid}: не посчитать состояние — ${er.error}`);
   if (first) {
-    console.log(`Первый снимок ${ctx.repo}: ${snapshot.mrs.length} открытых MR. Сравнивать пока не с чем.`);
+    console.log(`Первый снимок ${ctx.repo}: ${snapshot.mrs.length} моих открытых MR. Сравнивать пока не с чем.`);
     return result;
   }
-  console.log(`${ctx.repo}: событий с прошлого опроса ${events.length}, важных ${kept.length}.`);
-  if (triageError) console.log(`⚠ Триаж не сработал (${triageError}) — показываю всё.`);
-  if (events.length) console.log(formatEvents(kept, { verdict }));
-  if (queued.length) console.log(`В очередь заданий добавлено ${queued.length} (fsh queue).`);
-  if (notified) console.log('Отправлено в Telegram.');
+  console.log(`${ctx.repo}: MR с событиями ${events.length}.`);
+  for (const e of events) console.log(`\n${stripHtml(formatWatchEvent(e))}`);
+  if (notified) console.log(`\nОтправлено в Telegram: ${notified}.`);
   return result;
-}
-
-// Важные события → задания. Дубль по ключу идемпотентности молча пропускается,
-// поэтому один и тот же конфликт не ставится в очередь каждым опросом.
-function enqueueKept(kept, ctx, root, { meUsername = null, ignoredShas = [] } = {}) {
-  const ttlSeconds = ctx.cfg?.watch?.ttlSeconds ?? DEFAULT_TTL_SECONDS;
-  pruneQueue({ ...(root ? { root } : {}) });
-  const queued = [];
-  const ignoredShaSet = new Set(ignoredShas);
-  for (const e of kept) {
-    if (e.kind === 'pipeline' && e.sha && ignoredShaSet.has(e.sha)) continue;
-    if (e.author && meUsername && e.author === meUsername) continue;
-    const job = jobFromEvent(e, { project: ctx.cfg?.activeProject ?? '', repo: ctx.repo });
-    const { added, key } = enqueue(job, { ...(root ? { root } : {}), ttlSeconds });
-    if (added) queued.push(key);
-  }
-  return queued;
 }
 
 const stamp = (d = new Date()) => d.toISOString().slice(11, 19);
@@ -180,31 +152,11 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
         last.set(name, now());
         waitSec = Math.min(waitSec, intervalSec);
         try {
-          const r = await poll(makeCtx(cfg), { asObject: true, queueRoot: opts.queueRoot, autoRoot: opts.autoRoot });
-          log(`${stamp()} ${cfg.repo}: событий ${r.events.length}, важных ${r.kept.length}, в очередь ${r.queued.length}`);
+          const r = await poll(makeCtx(cfg), { asObject: true });
+          log(`${stamp()} ${cfg.repo}: MR с событиями ${r.events.length}, отправлено ${r.notified}`);
         } catch (err) {
           // Опрос одного проекта упал — это не повод ронять демон: сеть моргает, токены протухают.
           log(`${stamp()} ${cfg.repo || name}: опрос упал — ${err.message}`);
-        }
-
-        // Если включены воркеры — забираем задания из очереди
-        if (cfg.workers?.enabled) {
-          const runWorkerFn = deps.runWorkerImpl || runWorker;
-          try {
-            await runWorkerFn({
-              cfg,
-              g: makeCtx(cfg).g,
-              queueRoot: opts.queueRoot,
-              locksRoot: opts.locksRoot,
-              once: true,
-              concurrency: cfg.workers?.concurrency ?? 2,
-              log,
-              signal: opts.signal,
-              deps: deps.workerDeps,
-            });
-          } catch (wErr) {
-            log(`${stamp()} ${cfg.repo || name}: воркер упал — ${wErr.message}`);
-          }
         }
 
         // Если включена автоматика и передан флаг --auto-execute — двигаем активные задачи
@@ -356,8 +308,7 @@ WantedBy=default.target`,
 
 export function cmdWatchInstall(ctx, { json } = {}) {
   const unit = serviceText(ctx.cfg);
-  const keychainJudges = daemonKeychainJudges(ctx.cfg);
-  const result = { ok: true, file: unit.file, text: unit.text, hint: unit.hint, keychain_judges: keychainJudges };
+  const result = { ok: true, file: unit.file, text: unit.text, hint: unit.hint };
   if (json) {
     console.log(JSON.stringify(result, null, 2));
     return result;
@@ -368,8 +319,5 @@ export function cmdWatchInstall(ctx, { json } = {}) {
   console.log(unit.text);
   console.error(`\nПотом:\n${unit.hint.map((h) => `  ${h}`).join('\n')}`);
   if (unit.text.includes('значение')) console.error('\nЗначения <значение> подставь сам: демон читает секреты только из env.');
-  if (keychainJudges.length) {
-    console.error(`Судья ${keychainJudges.join(', ')} ходит за токеном в keychain сам — на залоченном экране триаж молчит и события уйдут без разбора.`);
-  }
   return result;
 }

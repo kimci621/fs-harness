@@ -94,11 +94,11 @@ export const DEFAULTS = {
   journal: { maxRuns: 50, maxAgeDays: 30 },
   // Воркеры очереди: параллельное выполнение заданий из очереди
   workers: { enabled: false, concurrency: 2 },
-  // Watcher: опрос по команде и фоновый демон (fsh watch --daemon). enabled и intervalSeconds
-  // можно переопределить на проект, ttlSeconds — окно дедупликации заданий в очереди.
-  // 300 с, а не 60: один опрос большого репозитория занимает под минуту, и на 60 демон
-  // опрашивал бы непрерывно. onlyMe: true — уведомлять только о связанных с пользователем MR.
-  watch: { enabled: true, intervalSeconds: 300, ttlSeconds: 86400, onlyMe: true },
+  // Watcher: опрос по команде и фоновый демон (fsh watch --daemon). Все поля можно
+  // переопределить на проект. 300 с, а не 60: один опрос большого репозитория занимает под
+  // минуту, и на 60 демон опрашивал бы непрерывно. behindThreshold — с какого отставания
+  // от target слать событие (срабатывает на переходе через порог).
+  watch: { enabled: true, intervalSeconds: 300, behindThreshold: 10 },
   // Починка CI: сколько раз ci-fix возьмётся за один и тот же MR, прежде чем отдать его человеку.
   ci: { maxRetries: 2 },
   // Автоматизация сквозного цикла задачи (fsh auto / watch daemon --auto-execute).
@@ -127,7 +127,6 @@ export const DEFAULTS = {
       'mr-review': ['opus-cli'],
       'ci-acceptance': ['opus-cli'],
       'model-pick': ['haiku-cli', 'opus-cli'],
-      'event-triage': ['haiku-cli', 'opus-cli'],
     },
   },
   // Классификатор выбора из списка (src/classify.js). Роль без профиля — шаг выключен,
@@ -152,7 +151,7 @@ export const DEFAULTS = {
     profiles: {
       jev: { baseUrl: 'https://openrouter.ai/api/alpha/decisions', model: '~typesafe/jev-latest', secret: 'openrouter' },
     },
-    roles: { 'ci-failure': 'jev', 'event-triage': 'jev', 'thread-triage': 'jev', 'task-tier': 'jev' },
+    roles: { 'ci-failure': 'jev', 'thread-triage': 'jev', 'task-tier': 'jev' },
   },
 };
 

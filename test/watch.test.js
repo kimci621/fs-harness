@@ -3,136 +3,152 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { diffSnapshots, keepEvents, triagePayload, formatEvents, pollOnce, stateFile, daemonSecretIssues, daemonKeychainJudges, isMRRelatedToMe, isUserInList } from '../src/watch.js';
+import { diffSnapshots, pollOnce, stateFile, daemonSecretIssues, SNAPSHOT_VERSION } from '../src/watch.js';
 import { cmdWatch, cmdWatchDaemon, serviceText, sleepFor } from '../src/commands/watch.js';
-import { listJobs } from '../src/queue.js';
+import { findFixButton } from '../src/tgbot.js';
 
-const mr = (over) => ({
-  iid: 1, title: 'MR', source_branch: 'f', target_branch: 'dev', has_conflicts: false,
-  pipeline: { id: 1, status: 'success' }, comments: { total: 0, open: 0, resolved: 0 },
-  updated_at: '2026-09-11T10:00:00Z', web_url: 'https://gl/1', ...over,
-});
-const snap = (mrs) => ({ at: '2026-09-11T10:00:00Z', repo: 'a/b', mrs });
+const row = (over) => ({ iid: 1, title: 'MR', url: 'https://gl/1', branch: 'feature/FD-1', target: 'dev', threads: [], files: [], behind: 0, ...over });
+const snap = (mrs) => ({ v: SNAPSHOT_VERSION, at: '2026-10-01T10:00:00Z', repo: 'a/b', mrs });
+const th = (id, last, author = 'rev', text = 'поправь') => ({ id, last, author, text });
 
-test('diff: первый снимок молчит, дальше видит пайплайн, треды, конфликт, приход и уход', () => {
-  assert.deepEqual(diffSnapshots(null, snap([mr({})])), []);
-
-  const prev = snap([mr({}), mr({ iid: 2, web_url: 'https://gl/2' })]);
-  const next = snap([
-    mr({ pipeline: { id: 2, status: 'failed' }, comments: { total: 3, open: 2, resolved: 1 }, has_conflicts: true }),
-    mr({ iid: 3, web_url: 'https://gl/3' }),
-  ]);
-  const kinds = diffSnapshots(prev, next).map((e) => `${e.kind}:${e.mr}`);
-  assert.deepEqual(kinds, ['pipeline:1', 'threads:1', 'conflict:1', 'mr_new:3', 'mr_gone:2']);
+test('diff: первый снимок и снимок старого формата молчат', () => {
+  assert.deepEqual(diffSnapshots(null, snap([row({ threads: [th('d1', 't1')] })])), []);
+  assert.deepEqual(diffSnapshots({ at: 'x', repo: 'a/b', mrs: [] }, snap([row({ threads: [th('d1', 't1')] })])), []);
 });
 
-test('diff: без изменений событий нет, закрытые треды событием не считаются', () => {
-  const prev = snap([mr({ comments: { total: 3, open: 2, resolved: 1 } })]);
-  const next = snap([mr({ comments: { total: 3, open: 0, resolved: 3 } })]);
-  assert.deepEqual(diffSnapshots(prev, next), []);
-  assert.deepEqual(diffSnapshots(snap([mr({})]), snap([mr({})])), []);
+test('diff: новый тред и новая реплика ревьюера в старом — событие, тот же тред — нет', () => {
+  const prev = snap([row({ threads: [th('d1', 't1')] })]);
+  assert.deepEqual(diffSnapshots(prev, snap([row({ threads: [th('d1', 't1')] })])), []);
+  const [e] = diffSnapshots(prev, snap([row({ threads: [th('d1', 't2', 'rev', 'ещё раз'), th('d2', 't3')] })]));
+  assert.deepEqual(e.threads.map((t) => t.id), ['d1', 'd2']);
+  assert.equal(e.conflict, null);
+  assert.equal(e.behind, null);
 });
 
-test('триаж: nit и неупомянутые события до канала не доходят, провал триажа шлёт всё', () => {
-  const events = diffSnapshots(snap([mr({}), mr({ iid: 2 })]), snap([
-    mr({ pipeline: { id: 2, status: 'failed' } }),
-    mr({ iid: 2, comments: { total: 1, open: 1, resolved: 0 } }),
-  ]));
-  assert.equal(events.length, 2);
-  assert.match(triagePayload(events, 'a/b'), /e1 · pipeline · MR !1/);
-
-  const verdict = {
-    summary: 'один пайплайн упал',
-    findings: [
-      { severity: 'blocker', file: 'e1', line: 0, body: 'упал пайплайн' },
-      { severity: 'nit', file: 'e2', line: 0, body: 'чужой тред' },
-    ],
-  };
-  const kept = keepEvents(events, verdict);
-  assert.deepEqual(kept.map((e) => [e.id, e.level]), [['e1', 'срочно']]);
-  assert.match(formatEvents(kept, { verdict }), /срочно: MR !1/);
-
-  // Судья недоступен — сигнал не теряем.
-  assert.equal(keepEvents(events, null).length, 2);
-  assert.equal(formatEvents([]), 'Ничего важного.');
+test('diff: конфликт появился — событие с файлами, висит дальше — нет', () => {
+  const [e] = diffSnapshots(snap([row({})]), snap([row({ files: ['a.js', 'b.vue'] })]));
+  assert.deepEqual(e.conflict, ['a.js', 'b.vue']);
+  assert.deepEqual(diffSnapshots(snap([row({ files: ['a.js'] })]), snap([row({ files: ['a.js', 'c.js'] })])), []);
 });
 
-test('pollOnce: первый опрос только пишет снимок, второй уже сравнивает и судит', async () => {
+test('diff: отставание срабатывает на переходе через порог: 9→10 есть, 12→15 нет', () => {
+  const [e] = diffSnapshots(snap([row({ behind: 9 })]), snap([row({ behind: 10 })]));
+  assert.equal(e.behind, 10);
+  assert.deepEqual(diffSnapshots(snap([row({ behind: 12 })]), snap([row({ behind: 15 })])), []);
+  // Порог на проект.
+  assert.equal(diffSnapshots(snap([row({ behind: 2 })]), snap([row({ behind: 3 })]), { behindThreshold: 3 })[0].behind, 3);
+  // Новый MR: прошлого состояния нет, считаем от нуля.
+  assert.equal(diffSnapshots(snap([]), snap([row({ iid: 7, behind: 11 })]))[0].iid, 7);
+});
+
+// Фейковый GitLab: мои MR, треды и пайплайн меняются между опросами.
+const fakeG = (state) => ({
+  me: async () => ({ username: 'me' }),
+  listOpenMRs: async () => state.mrs.map((m) => ({ ...m })),
+  listMRPipelines: async (repo, iid) => (state.pipeline ? [{ id: 1, status: state.pipeline, sha: 'x' }] : []),
+  getApprovals: async () => ({}),
+  getDiscussions: async (repo, iid) => state.discussions[iid] ?? [],
+});
+const note = (author, created_at, body = 'поправь тут\nподробности') => ({ resolvable: true, resolved: false, system: false, author: { username: author }, created_at, body });
+const MR = (iid, over = {}) => ({ iid, title: `MR ${iid}`, source_branch: `feature/FD-${iid}`, target_branch: 'dev', web_url: `https://gl/${iid}`, user_notes_count: 1, ...over });
+
+test('pollOnce: чужой тред — событие, мой последний — нет, пайплайн и черновик — не события', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-watch-'));
   const file = path.join(dir, 'state.json');
-  let mrs = [mr({})];
-  const g = {
-    listOpenMRs: async () => mrs.map((m) => ({ ...m, sha: 'abc' })),
-    listMRPipelines: async () => [],
-    getDiscussions: async () => [],
-  };
-  const cfg = { judge: { profiles: { fake: { provider: 'fake' } }, roles: { 'event-triage': ['fake'] } } };
-  const makeProvider = async () => ({
-    name: 'fake',
-    complete: async () => ({
-      text: JSON.stringify({
-        decision: 'reject', confidence: 0.8, summary: 'конфликт',
-        findings: [{ severity: 'blocker', file: 'e1', line: 0, body: 'конфликт с dev' }],
-        checks: [], next: { action: 'none', hint: '' },
-      }),
-      cost: 0,
-    }),
-  });
+  const state = { mrs: [MR(1), MR(2), MR(3, { draft: true })], discussions: {}, pipeline: 'running' };
+  const ctx = { g: fakeG(state), repo: 'a/b', cfg: {} };
+  const git = { 1: { files: [], behind: 0 }, 2: { files: [], behind: 0 }, 3: { files: ['x'], behind: 50 } };
+  const probe = (mr) => git[mr.iid];
 
-  const first = await pollOnce({ g, repo: 'a/b', cfg, file, makeProvider });
+  const first = await pollOnce({ ctx, probe, file });
   assert.equal(first.first, true);
   assert.deepEqual(first.events, []);
 
-  mrs = [mr({ has_conflicts: true })];
-  const second = await pollOnce({ g, repo: 'a/b', cfg, file, makeProvider });
-  assert.equal(second.first, false);
-  assert.deepEqual(second.events.map((e) => e.kind), ['conflict']);
-  assert.deepEqual(second.kept.map((e) => e.level), ['срочно']);
+  state.pipeline = 'failed';
+  state.discussions = {
+    1: [{ id: 'd1', notes: [note('rev', 't1')] }],
+    2: [{ id: 'd2', notes: [note('rev', 't1'), note('me', 't2')] }],
+    3: [{ id: 'd3', notes: [note('rev', 't1')] }],
+  };
+  const second = await pollOnce({ ctx, probe, file });
+  assert.deepEqual(second.events.map((e) => e.iid), [1]);
+  assert.deepEqual(second.events[0].threads, [{ id: 'd1', last: 't1', author: 'rev', text: 'поправь тут' }]);
+
+  // Ревьюер ответил мне в треде d2 — тред снова ждёт меня.
+  state.discussions[2] = [{ id: 'd2', notes: [note('rev', 't1'), note('me', 't2'), note('rev', 't3', 'не согласен')] }];
+  const third = await pollOnce({ ctx, probe, file });
+  assert.deepEqual(third.events.map((e) => [e.iid, e.threads[0].text]), [[2, 'не согласен']]);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('pollOnce: MR, который не посчитался, держит прошлое состояние и не даёт ложных событий', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-watch-'));
+  const file = path.join(dir, 'state.json');
+  const state = { mrs: [MR(1)], discussions: { 1: [{ id: 'd1', notes: [note('rev', 't1')] }] } };
+  const ctx = { g: fakeG(state), repo: 'a/b', cfg: {} };
+  let broken = false;
+  const probe = () => { if (broken) throw new Error('fetch упал'); return { files: [], behind: 0 }; };
+  await pollOnce({ ctx, probe, file });
+  broken = true;
+  const r = await pollOnce({ ctx, probe, file });
+  assert.deepEqual(r.events, []);
+  assert.equal(r.errors[0].iid, 1);
+  broken = false;
+  assert.deepEqual((await pollOnce({ ctx, probe, file })).events, []);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('watch: одно сообщение на MR с кнопкой fix:<iid>:<nonce>, nonce находит бот', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-watch-'));
+  const file = path.join(dir, 'state.json');
+  const stateRoot = path.join(dir, 'st');
+  const state = { mrs: [MR(5)], discussions: {} };
+  const git = { files: [], behind: 3 };
+  const ctx = {
+    g: fakeG(state), repo: 'a/b',
+    cfg: { activeProject: 'front', watch: { behindThreshold: 10 }, telegram: { chat_id: '42', bot_token: 'tok', allowed_user_ids: [1] } },
+  };
+  const sent = [];
+  const fetchImpl = async (url, init) => {
+    sent.push({ method: /\/bot[^/]+\/(\w+)/.exec(url)[1], body: JSON.parse(init.body) });
+    return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 1 } }) };
+  };
+  const opts = { asObject: true, file, stateRoot, fetchImpl, probe: () => git };
+
+  await cmdWatch(ctx, opts);
+  assert.equal(sent.length, 0);
+  state.discussions[5] = [{ id: 'd1', notes: [note('rev', 't1', 'тут гонка')] }, { id: 'd2', notes: [note('rev2', 't2')] }];
+  git.files = ['a.js'];
+  git.behind = 12;
+  const r = await cmdWatch(ctx, opts);
+  assert.equal(r.notified, 1);
+  assert.equal(sent.length, 1, 'одно сообщение на MR, а не на событие');
+  const { body } = sent[0];
+  assert.equal(body.chat_id, '42');
+  assert.match(body.text, /!5/);
+  assert.match(body.text, /feature\/FD-5.*→.*dev/);
+  assert.match(body.text, /https:\/\/gl\/5/);
+  assert.match(body.text, /@rev: тут гонка/);
+  assert.match(body.text, /Конфликт с dev.*a\.js/);
+  assert.match(body.text, /на 12 коммит/);
+  const [btn] = body.reply_markup.inline_keyboard[0];
+  assert.equal(btn.text, '🔧 Обновить и разобрать');
+  const [cmd, iid, nonce] = btn.callback_data.split(':');
+  assert.deepEqual([cmd, iid], ['fix', '5']);
+  assert.ok(Buffer.byteLength(btn.callback_data) <= 64);
+  assert.deepEqual(findFixButton(stateRoot, 5, nonce), { project: 'front', repo: 'a/b', iid: 5, at: findFixButton(stateRoot, 5, nonce).at });
+  assert.equal(findFixButton(stateRoot, 6, nonce), null, 'nonce привязан к iid');
+
+  // Без allowlist бот не стартует — кнопку не вешаем.
+  ctx.cfg.telegram.allowed_user_ids = [];
+  state.discussions[5].push({ id: 'd3', notes: [note('rev', 't3')] });
+  await cmdWatch(ctx, opts);
+  assert.equal(sent[1].body.reply_markup, undefined);
   rmSync(dir, { recursive: true, force: true });
 });
 
 test('stateFile: слеш в имени репозитория не создаёт вложенных каталогов', () => {
   assert.equal(path.basename(stateFile('a/b', '/tmp/x')), 'a%2Fb.json');
-});
-
-test('событие несёт sha: ключ идемпотентности собирается из снимка', () => {
-  const events = diffSnapshots(snap([mr({ sha: 'aaa' })]), snap([mr({ sha: 'bbb', has_conflicts: true })]));
-  assert.deepEqual(events.map((e) => [e.kind, e.sha]), [['conflict', 'bbb']]);
-});
-
-test('watch кладёт важные события в очередь и не плодит дубли на повторном опросе', async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-watch-'));
-  const file = path.join(dir, 'state.json');
-  const queueRoot = path.join(dir, 'queue');
-  let mrs = [mr({ sha: 'aaa' })];
-  const g = {
-    listOpenMRs: async () => mrs.map((m) => ({ ...m })),
-    listMRPipelines: async () => [],
-    getDiscussions: async () => [],
-  };
-  const cfg = {
-    activeProject: 'front',
-    watch: { ttlSeconds: 3600 },
-    judge: { enabled: false },
-    telegram: { chat_id: '', bot_token: '' },
-  };
-  const ctx = { g, repo: 'a/b', cfg };
-
-  await cmdWatch(ctx, { asObject: true, file, queueRoot });
-  mrs = [mr({ sha: 'aaa', has_conflicts: true })];
-  const second = await cmdWatch(ctx, { asObject: true, file, queueRoot });
-  assert.deepEqual(second.queued, ['gitlab:conflict:mr1:aaa']);
-  assert.equal(listJobs({ root: queueRoot })[0].action, 'conflict');
-
-  // Тот же конфликт на том же коммите виден и следующим опросом, но задание уже есть.
-  mrs = [mr({ sha: 'aaa' })];
-  await cmdWatch(ctx, { asObject: true, file, queueRoot });
-  mrs = [mr({ sha: 'aaa', has_conflicts: true })];
-  const fourth = await cmdWatch(ctx, { asObject: true, file, queueRoot });
-  assert.deepEqual(fourth.kept.map((e) => e.kind), ['conflict']);
-  assert.deepEqual(fourth.queued, []);
-  assert.equal(listJobs({ root: queueRoot }).length, 1);
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test('демон: обходит все проекты, уважает свой интервал и выключатель, падение опроса не роняет цикл', async () => {
@@ -156,7 +172,7 @@ test('демон: обходит все проекты, уважает свой 
     poll: async (ctx) => {
       polled.push(`${ctx.repo}@${clock}`);
       if (ctx.repo === 'org/back') throw new Error('сеть моргнула');
-      return { events: [], kept: [], queued: [] };
+      return { events: [], notified: 0 };
     },
     sleep: async (ms) => { clock += ms; },
     now: () => clock,
@@ -170,23 +186,18 @@ test('демон: обходит все проекты, уважает свой 
 });
 
 test('демон: без секретов в env не стартует, а без проектов — тем более', async () => {
-  const cfgWithSecret = {
-    projects: { front: {} },
-    telegram: { chat_id: '1', bot_token: '' },
-    judge: { roles: { 'event-triage': ['remote'] }, profiles: { remote: { provider: 'openai', secret: 'openrouter' } } },
-  };
+  const cfgWithSecret = { projects: { front: {} }, telegram: { chat_id: '1', bot_token: '' } };
   const loadCfg = () => cfgWithSecret;
   await assert.rejects(
     cmdWatchDaemon({}, { env: {}, loadCfg, cycles: 1, log: () => {} }),
-    (err) => err.code === 'secret_missing' && /FS_HARNESS_TELEGRAM/.test(err.message) && /FS_HARNESS_OPENROUTER/.test(err.message),
+    (err) => err.code === 'secret_missing' && /FS_HARNESS_TELEGRAM/.test(err.message),
   );
 
   // Те же ключи в env — претензий нет.
-  const env = { FS_HARNESS_TELEGRAM: 't', FS_HARNESS_OPENROUTER: 'k' };
+  const env = { FS_HARNESS_TELEGRAM: 't' };
   assert.deepEqual(daemonSecretIssues(cfgWithSecret, env), []);
   // Токен бота лежит в конфиге — keychain не при делах, env не требуется.
   assert.deepEqual(daemonSecretIssues({ telegram: { chat_id: '1', bot_token: 'x' } }, {}), []);
-  assert.deepEqual(daemonKeychainJudges({ judge: { roles: { 'event-triage': ['opus-cli'] }, profiles: { 'opus-cli': { provider: 'cli' } } } }), ['opus-cli']);
 
   await assert.rejects(
     cmdWatchDaemon({}, { env: {}, loadCfg: () => ({ projects: {} }), cycles: 1, log: () => {} }),
@@ -203,12 +214,11 @@ test('сон демона держит цикл событий: с unref про�
 });
 
 test('watch install: юнит зовёт fsh watch --daemon, несёт PATH и просит секреты в env', () => {
-  const cfg = { telegram: { chat_id: '1' }, judge: { roles: { 'event-triage': ['r'] }, profiles: { r: { secret: 'openrouter' } } } };
+  const cfg = { telegram: { chat_id: '1' } };
   const mac = serviceText(cfg, { platform: 'darwin', node: '/n', script: '/s/fsh.js', home: '/h', path: '/opt/homebrew/bin:/usr/bin' });
   assert.match(mac.file, /LaunchAgents\/com\.fitstars\.fs-harness\.watch\.plist$/);
   assert.match(mac.text, /<string>watch<\/string>\s*<string>--daemon<\/string>/);
   assert.match(mac.text, /FS_HARNESS_TELEGRAM/);
-  assert.match(mac.text, /FS_HARNESS_OPENROUTER/);
   assert.match(mac.hint[0], /launchctl bootstrap/);
   // Без PATH launchd не найдёт glab: /usr/bin:/bin:/usr/sbin:/sbin — это всё, что он даёт.
   assert.match(mac.text, /<key>PATH<\/key><string>\/opt\/homebrew\/bin:\/usr\/bin<\/string>/);
@@ -219,202 +229,20 @@ test('watch install: юнит зовёт fsh watch --daemon, несёт PATH и 
   assert.match(linux.text, /Environment=FS_HARNESS_TELEGRAM=/);
 });
 
-test('diffSnapshots: отфильтровывает события автора=me и pipeline на своём sha', () => {
-  const prev = snap([
-    mr({ iid: 1, sha: 'my-sha-1', pipeline: { id: 1, status: 'running' } }),
-    mr({ iid: 2, comments: { total: 1, open: 1, resolved: 0 }, author_username: 'my-user' }),
-    mr({ iid: 3, comments: { total: 1, open: 1, resolved: 0 }, author_username: 'other-user' }),
-  ]);
-  const next = snap([
-    mr({ iid: 1, sha: 'my-sha-1', pipeline: { id: 1, status: 'success' } }),
-    mr({ iid: 2, comments: { total: 2, open: 2, resolved: 0 }, author_username: 'my-user' }),
-    mr({ iid: 3, comments: { total: 2, open: 2, resolved: 0 }, author_username: 'other-user' }),
-  ]);
 
-  const events = diffSnapshots(prev, next, {
-    meUsername: 'my-user',
-    ignoredShas: ['my-sha-1'],
-  });
-
-  // Событие pipeline на ignoredSha отфильтровано
-  assert.equal(events.some((e) => e.kind === 'pipeline' && e.mr === 1), false);
-  // Событие threads от my-user отфильтровано
-  assert.equal(events.some((e) => e.kind === 'threads' && e.mr === 2), false);
-  // Событие threads от other-user осталось
-  assert.equal(events.some((e) => e.kind === 'threads' && e.mr === 3), true);
-});
-
-test('демон: worker-цикл при workers.enabled: false не запускает воркер', async () => {
+test('демон: только уведомляет — воркер не зовёт даже при workers.enabled: true', async () => {
   let workerRan = false;
-  const cfg = {
-    projects: { front: {} },
-    repo: 'org/front',
-    watch: { enabled: true, intervalSeconds: 10 },
-    workers: { enabled: false },
-    judge: { roles: {}, profiles: {} },
-    telegram: {},
-  };
+  const cfg = { projects: { front: {} }, repo: 'org/front', watch: { enabled: true, intervalSeconds: 10 }, workers: { enabled: true }, telegram: {} };
   await cmdWatchDaemon({}, {
     env: {},
     loadCfg: () => cfg,
     makeCtx: () => ({ cfg, repo: 'org/front' }),
-    poll: async () => ({ events: [], kept: [], queued: [] }),
+    poll: async () => ({ events: [], notified: 0 }),
     sleep: async () => {},
     now: () => 0,
     cycles: 1,
     log: () => {},
     runWorkerImpl: async () => { workerRan = true; },
   });
-  assert.equal(workerRan, false, 'воркер не запускался при workers.enabled: false');
-});
-
-test('isMRRelatedToMe: проверяет автора, исполнителей и ревьюеров', () => {
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'a.latipov' }), 'a.latipov'), true);
-  assert.equal(isMRRelatedToMe(mr({ author: 'a.latipov' }), 'a.latipov'), true);
-  assert.equal(isMRRelatedToMe(mr({ author: { username: 'a.latipov', name: 'Amir' } }), 'a.latipov'), true);
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'other' }), 'a.latipov'), false);
-
-  // Исполнители (строка и объект)
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', assignees: [{ username: 'a.latipov' }] }), 'a.latipov'), true);
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', assignees: ['a.latipov'] }), 'a.latipov'), true);
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', assignee: { username: 'a.latipov' } }), 'a.latipov'), true);
-
-  // Ревьюеры
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', reviewers: [{ username: 'a.latipov' }] }), 'a.latipov'), true);
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'other', reviewers: ['a.latipov'] }), 'a.latipov'), true);
-
-  // Регистронезависимость и пробелы
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'A.Latipov ' }), 'a.latipov'), true);
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'a.latipov' }), 'A.LATIPOV'), true);
-
-  // Без meUsername — всё разрешено
-  assert.equal(isMRRelatedToMe(mr({ author_username: 'other' }), null), true);
-});
-
-test('diffSnapshots: при onlyMe: true оставляет только события связанных MR и отсекает чужие', () => {
-  const prev = snap([
-    // MR 1: чужой (e.latypov), нет в assignees/reviewers
-    mr({ iid: 1, author_username: 'e.latypov', pipeline: { id: 1, status: 'success' }, has_conflicts: false }),
-    // MR 2: мой (a.latipov)
-    mr({ iid: 2, author_username: 'a.latipov', pipeline: { id: 2, status: 'success' }, has_conflicts: false, comments: { total: 1, open: 1, resolved: 0 } }),
-    // MR 3: чужой автор, но я ревьюер
-    mr({ iid: 3, author_username: 'other', reviewers: [{ username: 'a.latipov' }], has_conflicts: false }),
-  ]);
-
-  const next = snap([
-    // MR 1: появился конфликт и упал пайплайн (чужой MR!)
-    mr({ iid: 1, author_username: 'e.latypov', pipeline: { id: 1, status: 'failed' }, has_conflicts: true }),
-    // MR 2: появился конфликт и новые треды (мой MR!)
-    mr({ iid: 2, author_username: 'a.latipov', pipeline: { id: 2, status: 'success' }, has_conflicts: true, comments: { total: 3, open: 3, resolved: 0 } }),
-    // MR 3: появился конфликт (я ревьюер!)
-    mr({ iid: 3, author_username: 'other', reviewers: [{ username: 'a.latipov' }], has_conflicts: true }),
-    // MR 4: новый чужой MR
-    mr({ iid: 4, author_username: 'someone_else' }),
-  ]);
-
-  const events = diffSnapshots(prev, next, {
-    meUsername: 'a.latipov',
-    onlyMe: true,
-  });
-
-  // События чужого MR 1 не должны попасть в events вообще
-  assert.equal(events.some((e) => e.mr === 1), false, 'события чужого MR 1 не попали в events');
-  // События нового чужого MR 4 не должны попасть в events
-  assert.equal(events.some((e) => e.mr === 4), false, 'новый чужой MR 4 не попал в events');
-
-  // События моего MR 2 (конфликт и треды) должны быть
-  assert.equal(events.some((e) => e.mr === 2 && e.kind === 'conflict'), true, 'конфликт в моем MR зафиксирован');
-  assert.equal(events.some((e) => e.mr === 2 && e.kind === 'threads'), true, 'новые треды в моем MR зафиксированы');
-
-  // События MR 3 где я ревьюер должны быть
-  assert.equal(events.some((e) => e.mr === 3 && e.kind === 'conflict'), true, 'конфликт в MR где я ревьюер зафиксирован');
-});
-
-test('diffSnapshots: при onlyMe: true ловит назначение ревьюером на существующий MR', () => {
-  const prev = snap([
-    mr({ iid: 10, author_username: 'colleague', reviewers: [] }),
-  ]);
-  const next = snap([
-    mr({ iid: 10, author_username: 'colleague', reviewers: [{ username: 'a.latipov' }] }),
-  ]);
-
-  const events = diffSnapshots(prev, next, {
-    meUsername: 'a.latipov',
-    onlyMe: true,
-  });
-
-  assert.equal(events.length, 1);
-  assert.equal(events[0].kind, 'mr_new');
-  assert.match(events[0].detail, /вас назначили ревьюером/);
-});
-
-test('pollOnce: уважает watch.onlyMe и отсекает чужие конфликты от отправки в триаж', async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-watch-onlyme-'));
-  const file = path.join(dir, 'state.json');
-
-  let mrs = [
-    mr({ iid: 2739, author_username: 'e.latypov', has_conflicts: false }),
-    mr({ iid: 9999, author_username: 'a.latipov', has_conflicts: false }),
-  ];
-
-  const g = {
-    listOpenMRs: async () => mrs,
-    listMRPipelines: async () => [],
-    getDiscussions: async () => [],
-    me: async () => ({ username: 'a.latipov' }),
-  };
-
-  const cfg = {
-    watch: { onlyMe: true },
-    judge: { profiles: { fake: { provider: 'fake' } }, roles: { 'event-triage': ['fake'] } },
-  };
-
-  let judgeCalled = false;
-  const makeProvider = async () => ({
-    name: 'fake',
-    complete: async () => {
-      judgeCalled = true;
-      return {
-        text: JSON.stringify({
-          decision: 'approve', confidence: 0.9, summary: 'ок',
-          findings: [], checks: [], next: { action: 'none', hint: '' },
-        }),
-        cost: 0,
-      };
-    },
-  });
-
-  // Первый опрос — запись снимка
-  const first = await pollOnce({ g, repo: 'fitstars/fitstars-nuxt', cfg, file, makeProvider });
-  assert.equal(first.first, true);
-
-  // Конфликт появился ТОЛЬКО у чужого e.latypov (MR 2739)
-  mrs = [
-    mr({ iid: 2739, author_username: 'e.latypov', has_conflicts: true }),
-    mr({ iid: 9999, author_username: 'a.latipov', has_conflicts: false }),
-  ];
-
-  const second = await pollOnce({ g, repo: 'fitstars/fitstars-nuxt', cfg, file, makeProvider });
-  assert.equal(second.events.length, 0, 'событий нет, так как чужой конфликт отфильтрован');
-  assert.equal(second.kept.length, 0);
-  assert.equal(judgeCalled, false, 'судья не вызывался');
-
-  rmSync(dir, { recursive: true, force: true });
-});
-
-
-
-
-test('triageByClassifier: уровни из классификатора, неуверенное — срочно, молчание — к судье', async () => {
-  const { triageByClassifier, keepEvents } = await import('../src/watch.js');
-  const events = [
-    { id: 'e1', kind: 'pipeline_failed', mr: 1, title: 'a', detail: 'd', age: '1m', url: 'u' },
-    { id: 'e2', kind: 'pipeline_ok', mr: 2, title: 'b', detail: 'd', age: '1m', url: 'u' },
-    { id: 'e3', kind: 'new_mr', mr: 3, title: 'c', detail: 'd', age: '1m', url: 'u' },
-  ];
-  const impl = async () => ({ e1: { choice: 'blocker', p: 0.99 }, e2: { choice: 'nit', p: 0.95 }, e3: { choice: null, p: 0.5 } });
-  const verdict = await triageByClassifier(events, 'r', {}, impl);
-  const kept = keepEvents(events, verdict);
-  assert.deepEqual(kept.map((e) => [e.id, e.level]), [['e1', 'срочно'], ['e3', 'срочно']]);
-  assert.equal(await triageByClassifier(events, 'r', {}, async () => null), null);
+  assert.equal(workerRan, false);
 });
