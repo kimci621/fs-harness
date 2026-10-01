@@ -272,6 +272,7 @@ fsh prompts check                                  # сверить front-matter
 ```bash
 fsh watch           # один опрос моих MR: снимок → дифф с прошлым → сообщение на MR в Telegram
 fsh watch --daemon  # то же по кругу и по всем проектам конфига
+fsh up              # бот + демон на переднем плане, токен из ~/.tg_fs_harness_bot; Ctrl+C гасит обоих
 fsh watch install   # готовый launchd-plist (или systemd-unit) для автозапуска — печатает, не ставит
 ```
 

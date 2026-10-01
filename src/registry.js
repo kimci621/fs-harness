@@ -42,6 +42,7 @@ import { readSecret } from './secrets.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdConfig } from './config-cmd.js';
 import { CliError } from './errors.js';
+import { cmdUp } from './commands/up.js';
 
 // Единый реестр команд — single source of truth для CLI и MCP.
 // Добавил запись сюда → команда появляется в dispatch, help, agent-guide и MCP tools/list.
@@ -505,6 +506,13 @@ export const COMMANDS = [
     example: 'fsh bot',
     // Демон ходит по конфигу сам; MCP-инструмента нет — бот и есть поверхность человека.
     run: (ctx, args, opts) => cmdBot(opts),
+  },
+  {
+    name: 'up',
+    usage: 'up',
+    description: 'Бот и демон watch на переднем плане одной командой; токен Telegram из ~/.tg_fs_harness_bot, Ctrl+C гасит обоих',
+    example: 'fsh up',
+    run: (ctx, args, opts) => cmdUp(opts),
   },
   {
     name: 'auto',
