@@ -232,7 +232,7 @@ export function editValueFor(meta, option) {
 export function fieldText(v) {
   if (v === null || v === undefined || v === '') return '';
   if (Array.isArray(v)) return v.map(fieldText).filter(Boolean).join(', ');
-  if (typeof v === 'object') return v.displayName ?? v.name ?? v.value ?? v.key ?? '';
+  if (typeof v === 'object') return v.displayName ?? v.name ?? v.value ?? v.key ?? v.accountId ?? '';
   return String(v);
 }
 
