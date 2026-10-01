@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 export const LOCKS_ROOT = path.join(homedir(), '.local', 'state', 'fs-harness', 'locks');
-export const DEFAULT_STALE_MS = 30 * 60 * 1000; // 30 минут
+export const DEFAULT_STALE_MS = 60 * 60 * 1000; // 60 минут
 
 // Ключ лока: <repo>:<branch> или <repo>:mr<iid>
 export function lockKey(target) {

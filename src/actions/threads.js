@@ -24,6 +24,9 @@ export async function humanThreads(threads, cfg, impl = classify) {
   return new Set(threads.filter((t) => answers?.[t.id]?.choice === 'question_to_human').map((t) => t.id));
 }
 
+// Ждут ответа треды, где последнее слово не моё: на остальные я уже ответил, ход за ревьюером.
+export const awaitingReply = (threads, me) => threads.filter((t) => t.notes.at(-1)?.author !== me);
+
 // Тред считается открытым, если в нём есть хоть одна нерешённая resolvable-заметка.
 // Системные записи («изменил статус») не в счёт.
 export function openThreads(discussions) {
@@ -108,7 +111,10 @@ export const threadsAction = {
         throw new CliError('Каталог проекта не настроен или не является git-репозиторием. Выполни fsh config init или передай --project-dir.', 1, 'config_invalid');
       }
       makeGit(projectDir)(['fetch', 'origin', `${mr.source_branch}:refs/remotes/origin/${mr.source_branch}`]);
-      const open = openThreads(await ctx.g.getDiscussions(ctx.repo, mr.iid));
+      const all = openThreads(await ctx.g.getDiscussions(ctx.repo, mr.iid));
+      // resolve-all: треды, где я ответил последним, не трогаем — иначе дубль ответа.
+      const open = opts.onlyAwaiting ? awaitingReply(all, (await ctx.g.me())?.username) : all;
+      if (all.length > open.length) say(`↩ В MR !${mr.iid} ${all.length - open.length} тред(ов) уже с моим ответом последним — ждут ревьюера.`);
       const human = await humanThreads(open, opts.cfg, opts.classify);
       const threads = open.filter((t) => !human.has(t.id));
       for (const t of open.filter((t) => human.has(t.id))) {

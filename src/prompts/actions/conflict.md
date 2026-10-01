@@ -1,15 +1,16 @@
 ---
 id: conflict
-vars: [repo, mr_iid, mr_title, mr_url, source_branch, target_branch, conflict_files, conflict_count, worktree, deps_available]
+vars: [repo, mr_iid, mr_title, mr_url, source_branch, target_branch, conflict_files, conflict_count, sync, behind, worktree, deps_available]
 judge: acceptance
 ---
 Ты работаешь в GitLab-проекте {{repo}}. Текущая директория {{worktree}} — временный git worktree с веткой на базе origin/{{source_branch}}. Основной чекаут проекта не трогай.
 
 Задача: решить конфликт в MR !{{mr_iid}} «{{mr_title}}» ({{mr_url}}), ветка {{source_branch}} → {{target_branch}}.
 
-Конфликтующие файлы (посчитано локально через git merge-tree, {{conflict_count}} шт.):
+{{#sync}}Конфликтов нет (посчитано локально через git merge-tree), но ветка отстаёт от {{target_branch}} на {{behind}} коммитов. Это синхронизация: нужен обычный merge, без правок кода.
+{{/sync}}{{^sync}}Конфликтующие файлы (посчитано локально через git merge-tree, {{conflict_count}} шт.):
 {{conflict_files}}
-
+{{/sync}}
 Данные о MR получай через glab, например:
   glab mr view {{mr_iid}} -R {{repo}}
   glab api 'projects/{{repo}}/merge_requests/{{mr_iid}}'
@@ -21,6 +22,6 @@ judge: acceptance
 {{#deps_available}}   Зависимости на месте: прогони линт и unit-тесты проекта (npm run lint, npm run test) перед коммитом.{{/deps_available}}{{^deps_available}}   node_modules недоступны (их нет или lock-файл ветки разошёлся с основным чекаутом). Линт и тесты НЕ прогоняй и не выдумывай их результат — напиши в итоге, что проверить сборкой не удалось.{{/deps_available}}
 4. Закоммить по правилам проекта: посмотри "git log --oneline -20" и повтори стиль сообщений коммита.
 5. НЕ пуши. Push сделает fs-harness сам — после того, как результат посмотрит судья. "git push" в любом виде запрещён, ветку {{target_branch}} не трогай, лишних коммитов не создавай.
-6. Если при merge конфликтов не оказалось — просто сообщи об этом и ничего не коммить.
+{{#sync}}6. Конфликтов не будет — это ожидаемо: заверши merge мерж-коммитом (git merge создаёт его сам) и больше ничего не правь.{{/sync}}{{^sync}}6. Если при merge конфликтов не оказалось — просто сообщи об этом и ничего не коммить.{{/sync}}
 
 В конце ответа кратко перечисли: какие файлы изменены, как решён каждый конфликт, что проверено, хэш последнего коммита.

@@ -54,7 +54,8 @@ const FLAGS_USAGE = `Флаги:
   --sizes                 В worktrees: считать размер каталогов на диске
   --older-than <дни>      В worktrees gc: порог возраста для очистки
   --once                  В worker: выполнить текущие задания и выйти
-  --concurrency <N>       В worker: число параллельных слотов (дефолт 2)
+  --concurrency <N>       В worker и resolve-all: число параллельных слотов (дефолт workers.concurrency, 2)
+  --manual                В resolve-all: ждать кнопку Approve в Telegram перед пушем (дефолт — полный цикл без кнопки)
 
 Режим агента (env):
   GL_HELPER_JSON=1        JSON-вывод и структурированные ошибки для агентов
@@ -217,6 +218,7 @@ function parseArgs(argv) {
     else if (a === '--older-than') opts['older-than'] = av[++i];
     else if (a === '--once') opts.once = true;
     else if (a === '--concurrency') opts.concurrency = Number(av[++i]);
+    else if (a === '--manual') opts.manual = true;
     else if (a === '-h' || a === '--help') opts.help = true;
     else if (a.startsWith('-')) throw new CliError(`Неизвестный флаг "${a}". См. fsh help.`);
     else rest.push(a);

@@ -513,7 +513,8 @@ export function runAction(spec, ctx, input, opts = {}) {
       && a.judge.gate === 'pre-push'
       && opts.cfg?.telegram?.approvals === true
       && getTelegramTarget(opts.cfg) !== null
-      && !opts.noJudge;
+      && !opts.noJudge
+      && !opts.noApprovals;
   }
 
   // Останавливаем ран до publish. result.json не пишем — иначе список ранов покажет done.
@@ -553,6 +554,11 @@ export function runAction(spec, ctx, input, opts = {}) {
     const { gate: mode, role } = a.judge;
     if (mode === 'none' || opts.noJudge || opts.cfg?.judge?.enabled === false) {
       if (a.writes) x.say('⚠ Судья отключён (--no-judge): push без приёмки.');
+      return null;
+    }
+    const skipReason = a.judge.skip?.(x);
+    if (skipReason) {
+      x.say(`⚖ Судья не нужен: ${skipReason}.`);
       return null;
     }
     x.phase('judge', 'start');

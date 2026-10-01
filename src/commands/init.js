@@ -51,6 +51,7 @@ description: Use when в работе всплыл ключ задачи Jira (F
 | «запушь задачу», «открой MR» | \`fsh flow show push-task\` |
 | «мои MR», «что с MR», «где конфликты» | \`fsh mrs --author me\`, \`fsh mr <ветка>\` |
 | «реши конфликты» | \`fsh conflict <mr>\` |
+| «разбери все треды и конфликты», «обнови все MR от dev» | \`fsh resolve-all\` (сначала \`--dry-run\`) |
 | «разбери треды ревью», «ответь ревьюеру» | \`fsh flow show resolve-threads\` |
 | «что с пайплайном», «задеплой ветку» | \`fsh jobs <mr>\`, \`fsh deploy <ветка>\` |
 | «почини упавший пайплайн», «CI красный» | \`fsh ci-fix <mr>\` |
