@@ -16,7 +16,8 @@ src/resolve.js          поиск MR: по номеру или части им�
 src/pipeline.js         ensureMRPipeline, findJob, deployJobName, mapLimit
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto, worktrees, worker
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto, worktrees, worker, resolve-all
+src/commands/resolve-all.js все мои открытые MR параллельно под локом MR: conflict в режиме sync → threads → реплика в тред задачи в MM
 src/worktrees.js        инвентаризация и gc временных worktree (orphan, run-done, task)
 src/commands/worktrees.js команда fsh worktrees: список и очистка (gc)
 src/locks.js            файловые локи по ветке/MR (<repo>:<branch>|<repo>:mr<iid>) для сериализации
@@ -26,8 +27,8 @@ src/costs.js          накопитель расходов по ранам и �
 src/auto.js           автоматика жизненного цикла задачи (auto/<KEY>.json), advanceTask, load/save/list/stopAuto
 src/commands/auto.js  команда fsh auto: запуск, статус, остановка задачи в автомате
 src/publish.js          publishRun/reviseRun: доигрывание pending_approval из meta.json, проверки HEAD/ls-remote/merge-tree, dodelka в той же сессии
-src/tgbot.js            двусторонний Telegram: tgCall, getUpdates (long-polling), inline-кнопки, allowlist, handleUpdate, offset в tgbot.json
-src/commands/bot.js     fsh bot: демон бота (цикл getUpdates, команды /mrs /watch /status /run, кнопки appr/rev/rej, sweepExpiredApprovals)
+src/tgbot.js            двусторонний Telegram: tgCall, getUpdates (long-polling), inline-кнопки, allowlist, handleUpdate, offset в tgbot.json, nonce кнопки watcher в fix-buttons.json, сообщение watcher на MR
+src/commands/bot.js     fsh bot: демон бота (цикл getUpdates, команды /mrs /watch /status /run, кнопки appr/rev/rej и fix → resolve-all <iid> в фоне, sweepExpiredApprovals)
 src/jira.js             Jira REST: чтение и записи (статус, спринт, комментарий, поле, вложения), fetch инжектируется (тесты)
 src/commands/task.js    ветка задачи, push с открытием MR и submit (снять draft, Jira в ревью, пост в MM): гарды защищённых веток и грязного дерева
 src/growthbook.js       GrowthBook REST: фича-флаги (list/get/create/toggle/delete), fetch инжектируется (тесты)
@@ -38,9 +39,9 @@ src/config-cmd.js       команда config: init/show/migrate (запись �
 src/workspace.js        makeGit и режимы изоляции (checkout, одноразовый worktree, worktree задачи) + стратегии node_modules
 src/secrets.js          ключи: env → keychain (security) → файл (~/.growthbook_apikey, REST_TOKEN из .env бэкенда) → ошибка с командой заведения
 src/notify.js           уведомления в Telegram: runMessage + postTelegram (Bot API), fetch инжектируется
-src/watch.js            watcher: снимок MR, diffSnapshots, триаж ролью event-triage; состояние в ~/.local/state/fs-harness/watch; проверка секретов демона
-src/queue.js            очередь заданий watcher: ключ идемпотентности (source:kind:mr:sha), TTL, чтение и уборка; ~/.local/state/fs-harness/queue
-src/commands/watch.js   fsh watch: один опрос, --daemon (цикл по всем проектам), install (печать launchd/systemd-юнита)
+src/watch.js            watcher: снимок моих MR (треды ко мне, файлы конфликта, отставание), diffSnapshots → три события; состояние в ~/.local/state/fs-harness/watch; проверка секретов демона
+src/queue.js            очередь заданий для fsh worker (watcher в неё больше не пишет): ключ идемпотентности (source:kind:mr:sha), TTL, чтение и уборка; ~/.local/state/fs-harness/queue
+src/commands/watch.js   fsh watch: один опрос и сообщение на MR с кнопкой fix, --daemon (цикл по всем проектам, только уведомления), install (печать launchd/systemd-юнита)
 src/agents.js           профили агента: имя → bin/args/env/keyFile, ключ читается при запуске
 src/agent/spawn.js      запуск агента процессом: промпт в stdin, стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
@@ -211,6 +212,8 @@ resolve target → precheck → (skip?) → context → isolate → plan? → pr
 
 `run`/`deploy`/`conflict`/`threads`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков. У `conflict` дополнительно `conflict_files: string[]` и `has_conflicts` — посчитанные `git merge-tree`, а не взятые из GitLab, `run` (id рана) и `judge: {decision, confidence, summary, profile, cost}` либо `{skipped: true}` при `--no-judge`. У `threads` — `threads_open`, `replied: string[]`, `resolved: string[]`, `commits_ahead` (ноль — норма: тред мог требовать только ответа).
 
+`resolve-all`: `{ok, mrs:[{iid, branch, target, sync:{status, runId?}, threads:{status, replied?, runId?}, mm:{status}}]}`; упавший шаг дополнительно несёт `code`, `phase`, `hint` (`fsh resume|publish <runId>`).
+
 Ошибки: `{ok:false, error:{code, message}}`; коды перечислены в `agent-guide`.
 
 ## Мастер по самому fsh (chat.js + commands/ask.js)
@@ -243,6 +246,10 @@ Push делает `fsh publish <runId>` (перепроверяет HEAD и `ls-
 сессии - `fsh revise <runId>`. Аппрув живёт сутки: `sweepExpiredApprovals` гасит просроченный
 в `expired` и убирает worktree. Чужие `from.id` (не в allowlist) бот игнорирует молча.
 Демон - `fsh bot` (long-polling `getUpdates`, offset в `~/.local/state/fs-harness/tgbot.json`).
+Watcher (`fsh watch --daemon`) шлёт сообщение на MR с кнопкой «🔧 Обновить и разобрать»
+(`fix:<iid>:<nonce>`, nonce в `~/.local/state/fs-harness/fix-buttons.json`, сутки). Бот по ней
+запускает `cmdResolveAll(ctx, {only: [iid], yes: true})` в фоне; повтор при живом прогоне
+(свой набор или файловый лок MR) отвечает «Уже идёт».
 
 ## Сообщения в Mattermost (mattermost.js + commands/mm.js)
 

@@ -7,7 +7,7 @@ import { createGrowthBook } from '../growthbook.js';
 import { createMattermost } from '../mattermost.js';
 import { loadConfig, CONFIG_PATH, expandHome } from '../config.js';
 import { readSecret, addCommand } from '../secrets.js';
-import { daemonSecretIssues, daemonKeychainJudges } from '../watch.js';
+import { daemonSecretIssues } from '../watch.js';
 import { cmdInit } from './init.js';
 
 // fsh doctor — самодиагностика окружения: программы, конфиг, API, git, судья.
@@ -181,11 +181,6 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
       }
     }
     add('демон: секреты', issues.length === 0, issues.length ? `нет в env: ${issues.map((i) => `${i.envName} (${i.why})`).join(', ')}` : 'всё нужное читается из env', true);
-
-    const cliJudges = daemonKeychainJudges(cfg);
-    if (cliJudges.length) {
-      add('демон: триаж', false, `профиль ${cliJudges.join(', ')} берёт OAuth-токен claude из keychain — на залоченном экране триаж молчит, события уйдут в канал без разбора`);
-    }
   }
 
   const ok = checks.every((c) => !c.critical || c.ok);

@@ -32,6 +32,7 @@ import { cmdRevise } from './commands/revise.js';
 import { cmdBot } from './commands/bot.js';
 import { cmdAuto } from './commands/auto.js';
 import { cmdMM } from './commands/mm.js';
+import { cmdResolveAll } from './commands/resolve-all.js';
 import { startTUI } from './tui/index.js';
 import { createJira } from './jira.js';
 import { createGrowthBook } from './growthbook.js';
@@ -395,7 +396,7 @@ export const COMMANDS = [
   {
     name: 'watch',
     usage: 'watch [install] [--daemon]',
-    description: 'Что изменилось в MR с прошлого опроса: триаж судьёй, уведомление в Telegram, важное — в очередь заданий; --daemon крутит опрос по всем проектам, install печатает юнит автозапуска',
+    description: 'Мои MR с прошлого опроса: новые треды ко мне, конфликт, отставание через порог — сообщение на MR в Telegram с кнопкой resolve-all; --daemon крутит опрос по всем проектам, install печатает юнит автозапуска',
     example: 'fsh watch --daemon',
     // Демон ходит по всем проектам конфига сам, поэтому withProject ему не нужен.
     run: (ctx, args, opts) => (args[0] === 'install'
@@ -512,6 +513,14 @@ export const COMMANDS = [
     example: 'fsh auto FD-7647',
     // Без MCP: запуск и остановка автомата — решение человека.
     run: (ctx, args, opts) => withProject(ctx, () => cmdAuto(ctx, args, opts)),
+  },
+  {
+    name: 'resolve-all',
+    usage: 'resolve-all [mr...] [--dry-run] [--concurrency N] [--manual]',
+    description: 'Все мои открытые MR параллельно: обновить от target, решить конфликты, разобрать треды, отписать в тред задачи в Mattermost',
+    example: 'fsh resolve-all --dry-run',
+    // Без MCP: пакетная пишущая команда, запуск — решение человека, как auto и publish.
+    run: (ctx, args, opts) => withProject(ctx, () => cmdResolveAll(ctx, { ...opts, only: args })),
   },
   {
     name: 'tui',

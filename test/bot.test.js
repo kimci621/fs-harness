@@ -466,3 +466,69 @@ test('bot: runAgentViaBot через spawnAgentImpl — стрим и отчёт
 });
 
 
+
+test('bot: кнопка fix зовёт resolve-all с этим iid и проектом; повтор при прогоне — «Уже идёт»', async () => {
+  const { issueFixButton } = await import('../src/tgbot.js');
+  const f = makeFetch();
+  f.setResult('sendMessage', { message_id: 2 });
+  const localState = mkdtempSync(path.join(tmpdir(), 'fs-harness-bot-fix-'));
+  const locksRoot = path.join(localState, 'locks');
+  const nonce = issueFixButton(localState, { project: 'p', repo: 'r/repo', iid: 7 });
+  const btn = (id, data) => ({ update_id: id, callback_query: { id: `c${id}`, data, from: { id: MY_ID }, message: { chat: { id: 555 }, message_id: 2 } } });
+
+  let release;
+  const calls = [];
+  const loaded = [];
+  f.pushUpdates([]);
+  f.pushUpdates([btn(20, `fix:7:${nonce}`), btn(21, `fix:7:${nonce}`), btn(22, 'fix:7:чужой-nonce'), btn(23, `fix:8:${nonce}`)]);
+
+  const run = cmdBot({}, {
+    env: {},
+    loadCfg: (env, opts = {}) => { loaded.push(opts.project ?? null); return cfgBase(); },
+    fetchImpl: f.fetchImpl,
+    sleep, log, cycles: 1, runsDir, stateRoot: localState, locksRoot,
+    makeCtx: (cfg) => ({ g: {}, repo: cfg.repo, cfg }),
+    resolveAll: async (ctx, opts) => {
+      calls.push({ repo: ctx.repo, opts });
+      await new Promise((r) => { release = r; });
+      return { ok: true, mrs: [{ iid: 7, sync: { status: 'done' }, threads: { status: 'not_needed' }, mm: { status: 'sent' } }] };
+    },
+  });
+  // Бот выходит из цикла и ждёт фоновый прогон: отпускаем его, когда кнопки разобраны.
+  while (!release) await new Promise((r) => setTimeout(r, 5));
+  release();
+  await run;
+
+  assert.equal(calls.length, 1, 'второй прогон не запущен');
+  assert.deepEqual(calls[0].opts.only, [7]);
+  assert.equal(calls[0].opts.yes, true);
+  assert.ok(loaded.includes('p'), 'конфиг взят из проекта кнопки');
+  const answers = f.log.filter((x) => x.method === 'answerCallbackQuery').map((a) => a.body.text);
+  assert.deepEqual(answers, ['Запускаю', 'Уже идёт', 'Устарело', 'Устарело']);
+  const texts = f.log.filter((x) => x.method === 'sendMessage').map((m) => m.body.text);
+  assert.ok(texts.some((t) => /уже идёт/.test(t)));
+  assert.ok(texts.some((t) => /✅.*!7.*sync done/.test(t)), texts.join(' | '));
+  rmSync(localState, { recursive: true, force: true });
+});
+
+test('bot: кнопка fix при занятом файловом локе MR — «Уже идёт», resolve-all не зван', async () => {
+  const { issueFixButton } = await import('../src/tgbot.js');
+  const { acquireLock } = await import('../src/locks.js');
+  const f = makeFetch();
+  const localState = mkdtempSync(path.join(tmpdir(), 'fs-harness-bot-fix-'));
+  const locksRoot = path.join(localState, 'locks');
+  const lock = acquireLock({ root: locksRoot, key: { repo: 'r/repo', mr: 7 } });
+  const nonce = issueFixButton(localState, { project: 'p', repo: 'r/repo', iid: 7 });
+  f.pushUpdates([]);
+  f.pushUpdates([{ update_id: 30, callback_query: { id: 'c30', data: `fix:7:${nonce}`, from: { id: MY_ID }, message: { chat: { id: 555 }, message_id: 2 } } }]);
+  let called = false;
+  await cmdBot({}, {
+    env: {}, loadCfg: () => cfgBase(), fetchImpl: f.fetchImpl, sleep, log, cycles: 1, runsDir, stateRoot: localState, locksRoot,
+    makeCtx: (cfg) => ({ g: {}, repo: cfg.repo, cfg }),
+    resolveAll: async () => { called = true; },
+  });
+  lock.release();
+  assert.equal(called, false);
+  assert.deepEqual(f.log.filter((x) => x.method === 'answerCallbackQuery').map((a) => a.body.text), ['Уже идёт']);
+  rmSync(localState, { recursive: true, force: true });
+});
