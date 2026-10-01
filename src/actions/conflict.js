@@ -51,7 +51,7 @@ export function parseMergeTree(stdout) {
 
 // Конфликт считаем сами, а не по полю GitLab: при has_conflicts: "unchecked" оно врёт
 // «конфликтов нет». merge-tree отвечает точно и заодно даёт список файлов для промпта.
-function conflictingFiles(projectDir, target, source) {
+export function conflictingFiles(projectDir, target, source) {
   try {
     execFileSync('git', ['merge-tree', '--write-tree', '--name-only', '--no-messages', target, source], {
       cwd: projectDir,
@@ -64,6 +64,20 @@ function conflictingFiles(projectDir, target, source) {
     if (err.status === 1) return parseMergeTree(err.stdout); // exit 1 — конфликт, это ответ, а не ошибка
     throw new CliError(`git merge-tree не удался: ${String(err.stderr || err.message).trim()}`, 1, 'git_failed');
   }
+}
+
+// Сколько коммитов target нет в source. Ветки должны быть уже подтянуты fetch'ем.
+export const behindCount = (git, source, target) => Number(git(['rev-list', '--count', `origin/${source}..origin/${target}`]));
+
+// Чистый merge: HEAD — мерж-коммит source+target, и его дерево совпадает с автомержем git.
+// Тогда судить нечего: правок сверх мержа нет. Иначе отдаём дифф «лишнего» против автомержа.
+export function mergePurity(git, dir, source, target) {
+  const [p1, p2] = git(['rev-list', '--parents', '-n', '1', 'HEAD'], dir).split(' ').slice(1);
+  const auto = git(['merge-tree', '--write-tree', target, source], dir, { allowFail: true }).split('\n')[0];
+  const head = git(['rev-parse', 'HEAD^{tree}'], dir);
+  const parentsOk = p1 === git(['rev-parse', source], dir) && p2 === git(['rev-parse', target], dir);
+  if (parentsOk && auto === head) return { pure: true, extra: '' };
+  return { pure: false, extra: auto ? git(['diff', auto, head], dir, { allowFail: true }) : '' };
 }
 
 export const conflictAction = {
@@ -79,7 +93,14 @@ export const conflictAction = {
     isolation: 'ephemeral-worktree',
     prompt: 'actions/conflict',
     agent: { default: 'cc', pickByJudge: false },
-    judge: { gate: 'pre-push', role: 'acceptance' },
+    judge: {
+      gate: 'pre-push',
+      role: 'acceptance',
+      // Чистая синхронизация с зелёными проверками — механический факт, LLM тут только гадает.
+      skip: ({ facts }) => facts.pure_merge && Array.isArray(facts.checks) && facts.checks.every((ch) => ch.exit_code === 0)
+        ? 'чистый merge target: дерево совпадает с автомержем git, проверки зелёные'
+        : null,
+    },
     mcpDescription: 'Решить конфликт MR силами AI-агента (headless) во временном git worktree проекта, отдать результат судье и при approve запушить в ветку MR и запустить build. Ждёт завершения. Меняет код и GitLab; ветка target не трогается, force-push запрещён.',
     inputSchema: {
       type: 'object',
@@ -101,17 +122,22 @@ export const conflictAction = {
       const git = makeGit(projectDir);
       git(['fetch', 'origin', `${mr.source_branch}:refs/remotes/origin/${mr.source_branch}`, `${mr.target_branch}:refs/remotes/origin/${mr.target_branch}`]);
       const conflictFiles = conflictingFiles(projectDir, `origin/${mr.target_branch}`, `origin/${mr.source_branch}`);
+      // Режим sync (resolve-all): ветку без конфликтов, но отставшую от target, тоже мержим.
+      const behind = opts.sync && conflictFiles.length === 0 ? behindCount(git, mr.source_branch, mr.target_branch) : 0;
+      const sync = behind > 0;
 
-      const skip = conflictFiles.length === 0;
-      if (skip) say(`✅ В MR !${mr.iid} конфликтов нет (${mr.source_branch} → ${mr.target_branch}).`);
+      const skip = conflictFiles.length === 0 && !sync;
+      if (skip) say(`✅ В MR !${mr.iid} конфликтов нет${opts.sync ? ', ветка не отстаёт' : ''} (${mr.source_branch} → ${mr.target_branch}).`);
 
       return {
         projectDir,
         conflictFiles,
+        sync,
+        behind,
         // refs пустой: ветки уже подтянуты выше, второй fetch не нужен.
         workspace: { project: projectDir, ref: mr.source_branch, baseRef: mr.target_branch, key: String(mr.iid), refs: [] },
         skip,
-        reason: 'конфликтов нет',
+        reason: opts.sync ? 'конфликтов нет, ветка не отстаёт' : 'конфликтов нет',
         result: { ok: true, mr: mr.iid, has_conflicts: false, conflict_files: [], skipped: true },
         meta: {
           repo: ctx.repo,
@@ -133,12 +159,16 @@ export const conflictAction = {
         target_branch: mr.target_branch,
         has_conflicts: pre.conflictFiles.length > 0,
         conflict_files: pre.conflictFiles,
+        sync: Boolean(pre.sync),
+        behind: pre.behind ?? 0,
         agent: opts.agent,
         project_dir: pre.projectDir,
         worktree_root: path.join(WORKTREE_ROOT, path.basename(pre.projectDir)),
         steps: [
           `worktree add --detach ${path.join(WORKTREE_ROOT, path.basename(pre.projectDir), `conflict-${mr.iid}-<ts>`)} origin/${mr.source_branch}`,
-          `агент ${opts.agent}: git merge origin/${mr.target_branch}, решить конфликты, линт/тесты, коммит по правилам проекта`,
+          pre.sync
+            ? `агент ${opts.agent}: git merge origin/${mr.target_branch} (конфликтов нет, отстаёт на ${pre.behind}), мерж-коммит`
+            : `агент ${opts.agent}: git merge origin/${mr.target_branch}, решить конфликты, линт/тесты, коммит по правилам проекта`,
           opts.noJudge
             ? 'судья отключён (--no-judge)'
             : `судья (роль acceptance, профиль ${opts.judgeProfile ?? (opts.cfg?.judge?.roles?.acceptance ?? []).join(' → ')}): approve или push не произойдёт`,
@@ -151,7 +181,9 @@ export const conflictAction = {
 
     context({ ctx, opts, target: mr, pre, ws, run, say }) {
       say(`🌿 MR !${mr.iid}: ${mr.source_branch} → ${mr.target_branch}`);
-      say(`   Конфликт в ${pre.conflictFiles.length} файлах: ${pre.conflictFiles.join(', ')}`);
+      say(pre.sync
+        ? `   Конфликтов нет, ветка отстаёт от ${mr.target_branch} на ${pre.behind} коммитов: синхронизация`
+        : `   Конфликт в ${pre.conflictFiles.length} файлах: ${pre.conflictFiles.join(', ')}`);
       say(`   Агент: ${opts.agent} · worktree: ${ws.dir}${ws.deps.available ? '' : ' · без node_modules'}`);
       say(`   Ран: ${run.id}`);
       return {
@@ -163,13 +195,17 @@ export const conflictAction = {
         target_branch: mr.target_branch,
         conflict_files: pre.conflictFiles.map((f) => `  ${f}`).join('\n'),
         conflict_count: pre.conflictFiles.length,
+        sync: Boolean(pre.sync),
+        behind: pre.behind ?? 0,
         worktree: ws.dir,
         deps_available: ws.deps.available,
       };
     },
 
-    goal: ({ target: mr, pre }) =>
-      `Решить конфликт слияния в MR !${mr.iid} «${mr.title}»: ветка ${mr.source_branch} сливается с ${mr.target_branch}. ` +
+    goal: ({ target: mr, pre }) => pre.sync
+      ? `Обновить ветку ${mr.source_branch} MR !${mr.iid} «${mr.title}» от ${mr.target_branch}: конфликтов нет, ветка отстаёт на ${pre.behind} коммитов. ` +
+        'Нужен обычный merge target в ветку без посторонних правок.'
+      : `Решить конфликт слияния в MR !${mr.iid} «${mr.title}»: ветка ${mr.source_branch} сливается с ${mr.target_branch}. ` +
       `Конфликтующие файлы (${pre.conflictFiles.length}): ${pre.conflictFiles.join(', ')}. ` +
       'Функциональность обеих сторон должна остаться рабочей, приоритет веток равный.',
 
@@ -188,18 +224,21 @@ export const conflictAction = {
         throw new CliError(`Агент не создал коммитов в worktree (${dir}). Проверь вручную: git -C ${dir} status.`, 1, 'agent_failed');
       }
       const scope = resolutionScope(git, dir, base, pre.conflictFiles);
+      const purity = pre.sync ? mergePurity(git, dir, base, `origin/${pre.workspace.baseRef}`) : null;
       return {
         commits_ahead: commitsAhead,
         deps_available: ws.deps.available,
         head_sha: git(['rev-parse', 'HEAD'], dir),
         changed_files: scope.files,
         conflict_files: pre.conflictFiles,
-        leftover_markers: git(['grep', '-l', '-E', '^(<{7}|={7}|>{7})', 'HEAD', '--', ...pre.conflictFiles], dir, { allowFail: true })
+        ...(pre.sync ? { sync: 'синхронизация без конфликтов: ветка просто обновлена от target, пустой дифф решения — норма', pure_merge: purity.pure } : {}),
+        // Без файлов git grep прошёл бы по всему дереву и нашёл бы чужие ======= в доках.
+        leftover_markers: !pre.conflictFiles.length ? [] : git(['grep', '-l', '-E', '^(<{7}|={7}|>{7})', 'HEAD', '--', ...pre.conflictFiles], dir, { allowFail: true })
           .split('\n')
           .filter(Boolean)
           .map((l) => l.replace(/^HEAD:/, '')),
-        diff: scope.diff,
-        diff_title: scope.title,
+        diff: purity && !purity.pure ? purity.extra : scope.diff,
+        diff_title: purity && !purity.pure ? 'правки сверх автомержа git' : scope.title,
         checks: checksFact(opts.cfg?.checks ?? [], ws.deps.available) ?? runChecks(opts.cfg.checks, dir, { say }),
       };
     },
@@ -245,7 +284,7 @@ export const conflictAction = {
 
     renderPlan(plan, log) {
       log(`🔍 План конфликта (dry-run), MR !${plan.mr} ${plan.source_branch} → ${plan.target_branch}`);
-      log(`   конфликт: ${plan.conflict_files.length ? `⚠ да, файлов ${plan.conflict_files.length}` : '✅ нет (ничего делать не нужно)'}`);
+      log(`   конфликт: ${plan.conflict_files.length ? `⚠ да, файлов ${plan.conflict_files.length}` : plan.sync ? `нет, ветка отстаёт на ${plan.behind}: синхронизация` : '✅ нет (ничего делать не нужно)'}`);
       plan.conflict_files.forEach((f) => log(`     ${f}`));
       log(`   worktree: ${plan.worktree_root}/conflict-${plan.mr}-<ts>`);
       log(`   агент: ${plan.agent} (headless)`);
@@ -253,7 +292,7 @@ export const conflictAction = {
     },
 
     result({ target: mr, run, pre, facts, verdict, published, say }) {
-      say(`✅ Конфликт решён, MR !${mr.iid} обновлён, build успешен.`);
+      say(pre.sync ? `✅ Ветка MR !${mr.iid} обновлена от ${mr.target_branch}, build успешен.` : `✅ Конфликт решён, MR !${mr.iid} обновлён, build успешен.`);
       return {
         ok: true,
         run: run.id,
@@ -261,6 +300,7 @@ export const conflictAction = {
         head_sha: facts.head_sha,
         commits_ahead: facts.commits_ahead,
         conflict_files: pre.conflictFiles,
+        sync: Boolean(pre.sync),
         judge: verdict
           ? { decision: verdict.decision, confidence: verdict.confidence, summary: verdict.summary, profile: verdict.meta.profile, cost: verdict.meta.cost }
           : { skipped: true },

@@ -119,3 +119,9 @@ test('humanThreads: агенту не отдаём только уверенны
   assert.deepEqual([...(await humanThreads(threads, {}, async () => null))], []);
   assert.deepEqual([...(await humanThreads([], {}, impl))], []);
 });
+
+test('awaitingReply: тред с моим ответом последним не ждёт ответа', async () => {
+  const { awaitingReply } = await import('../src/actions/threads.js');
+  const t = (authors) => ({ id: authors.join(), notes: authors.map((author) => ({ author, body: 'x' })) });
+  assert.deepEqual(awaitingReply([t(['rev', 'me']), t(['rev']), t(['me', 'rev'])], 'me').map((x) => x.id), ['rev', 'me,rev']);
+});

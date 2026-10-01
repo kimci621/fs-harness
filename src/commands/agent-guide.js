@@ -50,6 +50,8 @@ conflict:{ok, run, mr, head_sha, commits_ahead, conflict_files:[...],
           pipeline:{...}, build:{...}}
 threads: {ok, run, mr, head_sha, commits_ahead, threads_open, replied:[id], resolved:[id],
           judge:{...}|{skipped:true}}
+resolve-all: {ok, mrs:[{iid, branch, target, sync:{status,runId?}, threads:{status,replied?,runId?},
+             mm:{status}}]}  (упавший шаг: +code, phase, hint)
 review:  {ok, run, mr, review:"<текст находок>", judge:{...}|{skipped:true}}
 analyze: {ok, run, issue, analysis:"<текст разбора>"}
 jira:    {ok, issues:[{key,summary,status,type,priority,updated}]} | {ok, issue:{...}, comments:[...]}

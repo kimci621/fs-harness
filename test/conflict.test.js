@@ -223,3 +223,12 @@ test('checksFact: без настроенных команд и без зави�
   assert.match(checksFact(['npm test'], false), /node_modules/);
   assert.equal(checksFact(['npm test'], true), null); // есть что запускать — запускаем
 });
+
+test('conflict sync: без конфликта, но с отставанием — не skip при sync и skip без него', async () => {
+  const mr = await fakeGitlab('clean').getMR();
+  const x = (opts) => ({ ctx: { g: fakeGitlab('clean'), repo: 'r/repo' }, opts: { projectDir: project, ...opts }, target: mr, say: () => {} });
+  const synced = await conflictAction.action.precheck(x({ sync: true }));
+  assert.deepEqual([synced.skip, synced.sync, synced.behind, synced.conflictFiles], [false, true, 1, []]);
+  const plain = await conflictAction.action.precheck(x({}));
+  assert.deepEqual([plain.skip, plain.sync], [true, false]);
+});
