@@ -186,7 +186,18 @@ async function field(j, [key, name, ...words], ctx, { yes, asObject, dryRun, fil
   // в argv он не влезает и теряет переводы строк.
   const text = file ? String(readFileSync(file === '-' ? 0 : file, 'utf8')) : words.join(' ');
   if (!text.trim()) throw new CliError(`Нечего писать в "${meta1.name}": значение пустое.`, 1, 'usage');
-  const value = shapeValue(meta1, kind, text);
+  const isUser = meta1.schema?.type === 'user' || meta1.schema?.items === 'user';
+  let userOpts = null;
+  if (isUser && !meta1.allowedValues?.length) {
+    const users = (await j.assignableUsers?.(key)) ?? [];
+    if (text.trim().toLowerCase() === 'me') {
+      const me = await j.myself?.().catch(() => null);
+      userOpts = me ? [{ ...me, value: 'me' }, ...users] : users;
+    } else {
+      userOpts = users;
+    }
+  }
+  const value = shapeValue(meta1, kind, text, userOpts);
 
   // --attach: тот же файл ложится и в поле текстом, и вложением. Со stdin нечего прикладывать.
   if (alsoAttach && (!file || file === '-')) {
@@ -205,17 +216,27 @@ async function field(j, [key, name, ...words], ctx, { yes, asObject, dryRun, fil
 }
 
 // Форма значения по типу поля: списки строк через запятую, число числом,
-// выбор — сопоставлением с allowedValues, остальное текстом как есть.
-function shapeValue(meta, kind, text) {
+// выбор — сопоставлением с allowedValues или списком людей, остальное текстом как есть.
+function shapeValue(meta, kind, text, customOpts = null) {
   if (kind === 'list') return text.split(',').map((v) => v.trim()).filter(Boolean);
   if (kind === 'number') return Number(text);
   if (kind !== 'pick') return text;
-  const opts = meta.allowedValues ?? [];
-  const opt = opts.find((v) => [v.value, v.name, v.displayName].some((n) => n && String(n).toLowerCase() === text.trim().toLowerCase()));
-  if (!opt) {
-    const list = opts.map((v) => fieldText(v)).filter(Boolean).join(', ') || 'варианты отдаёт только Jira';
-    throw new CliError(`"${text.trim()}" не подходит полю "${meta.name}". Доступно: ${list}.`, 1, 'usage');
+  const opts = customOpts ?? meta.allowedValues ?? [];
+  const findOne = (raw) => {
+    const q = raw.trim().toLowerCase();
+    const opt = opts.find((v) => [v.value, v.name, v.displayName, v.emailAddress].some((n) => n && String(n).toLowerCase() === q))
+      ?? (customOpts ? opts.find((v) => [v.displayName, v.name, v.emailAddress].some((n) => n && String(n).toLowerCase().includes(q))) : null);
+    if (!opt) {
+      const list = opts.map((v) => fieldText(v)).filter(Boolean).join(', ') || 'варианты отдаёт только Jira';
+      throw new CliError(`"${raw.trim()}" не подходит полю "${meta.name}". Доступно: ${list}.`, 1, 'usage');
+    }
+    return opt;
+  };
+  if (customOpts && meta?.schema?.type === 'array' && text.includes(',')) {
+    const picks = text.split(',').map((s) => s.trim()).filter(Boolean).map(findOne);
+    return picks.map((p) => ({ accountId: p.accountId }));
   }
+  const opt = findOne(text);
   return editValueFor(meta, { id: opt.id, value: opt.value ?? opt.name, accountId: opt.accountId });
 }
 

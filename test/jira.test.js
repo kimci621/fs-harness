@@ -334,6 +334,29 @@ test('jira field: форма значения по схеме — список, 
   assert.deepEqual(j.stored.priority, { id: '3' });
 });
 
+test('jira field: выбор пользователя через assignableUsers и me', async () => {
+  const users = [
+    { accountId: 'u1', displayName: 'Амир Латипов' },
+    { accountId: 'u2', displayName: 'Эмиль Латыпов' },
+  ];
+  const j = {
+    ...fakeFields({
+      customfield_10341: { name: 'Ответственный разработчик', schema: { type: 'array', items: 'user' } },
+      assignee: { name: 'Assignee', schema: { type: 'user' } },
+    }),
+    assignableUsers: async () => users,
+    myself: async () => ({ accountId: 'u1', displayName: 'Амир Латипов' }),
+  };
+  await cmdJira(ctxWith(j), ['field', 'FD-1', 'Ответственный разработчик', 'Амир'], { asObject: true, yes: true });
+  assert.deepEqual(j.stored.customfield_10341, [{ accountId: 'u1' }]);
+
+  await cmdJira(ctxWith(j), ['field', 'FD-1', 'Ответственный разработчик', 'Амир, Эмиль'], { asObject: true, yes: true });
+  assert.deepEqual(j.stored.customfield_10341, [{ accountId: 'u1' }, { accountId: 'u2' }]);
+
+  await cmdJira(ctxWith(j), ['field', 'FD-1', 'Assignee', 'me'], { asObject: true, yes: true });
+  assert.deepEqual(j.stored.assignee, { accountId: 'u1' });
+});
+
 test('jira field: неизвестное имя, незаполняемое поле и чужой вариант — ошибка со списком', async () => {
   const j = fakeFields();
   await assert.rejects(
