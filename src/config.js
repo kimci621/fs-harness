@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -239,7 +240,7 @@ export function resolveProject(cfgV2, name) {
     backend: {
       name: backendName,
       dir: expandHome(backendProj.dir || ''),
-      repo: backendProj.repo || '',
+      repo: backendProj.repo || originOf(backendProj.dir)?.repo || '',
     },
   };
 }
@@ -251,6 +252,7 @@ export function loadConfig(env = process.env, { project, file } = {}) {
   const raw = readRawConfig(targetFile);
   const v2 = migrateConfig(raw ?? {});
   const { name, project: p, backend } = resolveProject(v2, { project, env });
+  const origin = p.repo && p.host ? null : originOf(p.dir);
 
   const cfg = {
     version: 2,
@@ -259,8 +261,8 @@ export function loadConfig(env = process.env, { project, file } = {}) {
     projects: v2.projects ?? {},
     project: p,
     backend,
-    repo: env.GL_HELPER_REPO || p.repo,
-    host: env.GL_HELPER_HOST || p.host,
+    repo: env.GL_HELPER_REPO || p.repo || origin?.repo || '',
+    host: env.GL_HELPER_HOST || p.host || origin?.host || '',
     projectDir: p.dir,
     agent: p.agent,
     // Команды проверки проекта: их коды выхода уходят судье вместо слов агента.
@@ -308,6 +310,23 @@ export function loadConfig(env = process.env, { project, file } = {}) {
     },
   };
   return cfg;
+}
+
+// Хост и путь репо из remote: ssh (git@host:g/r.git, ssh://git@host:22/g/r) и https.
+export function parseRemote(url) {
+  const m = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/](.+?)(?:\.git)?\/?$/.exec(url.trim());
+  return m ? { host: m[1], repo: m[2] } : null;
+}
+
+// Незаданные repo/host берутся из origin проекта: адрес GitLab живёт только в git remote.
+function originOf(dir) {
+  if (!dir) return null;
+  try {
+    const url = execFileSync('git', ['-C', expandHome(dir), 'remote', 'get-url', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return parseRemote(url);
+  } catch {
+    return null;
+  }
 }
 
 export function expandHome(p) {
