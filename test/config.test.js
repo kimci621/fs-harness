@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { loadConfig, migrateConfig, pickProject, writeMigrated, setConfigAgent, resolveProject } from '../src/config.js';
+import { loadConfig, parseRemote, migrateConfig, pickProject, writeMigrated, setConfigAgent, resolveProject } from '../src/config.js';
 import { cmdConfig } from '../src/config-cmd.js';
 import { cmdJira } from '../src/commands/jira.js';
 import { createJira } from '../src/jira.js';
@@ -222,3 +223,39 @@ test('проект без jira: вызов jira падает с config_invalid',
 });
 
 
+
+test('parseRemote: ssh, ssh:// с портом и https с токеном', () => {
+  const want = { host: 'gitlab.example', repo: 'group/app' };
+  assert.deepEqual(parseRemote('git@gitlab.example:group/app.git\n'), want);
+  assert.deepEqual(parseRemote('ssh://git@gitlab.example:2222/group/app.git'), want);
+  assert.deepEqual(parseRemote('https://oauth2:tok@gitlab.example/group/app'), want);
+  assert.deepEqual(parseRemote('https://gitlab.example/group/sub/app.git').repo, 'group/sub/app');
+  assert.equal(parseRemote('not a url'), null);
+});
+
+test('loadConfig: без repo/host берёт их из origin проекта, явные поля и env главнее', () => {
+  const repoDir = mkdtempSync(path.join(tmpdir(), 'fs-harness-origin-'));
+  try {
+    execFileSync('git', ['init', '-q', repoDir]);
+    execFileSync('git', ['-C', repoDir, 'remote', 'add', 'origin', 'git@gitlab.origin:org/fe.git']);
+    const cfgObj = {
+      version: 2,
+      activeProject: 'fe',
+      projects: {
+        fe: { dir: repoDir, backend: 'be' },
+        be: { dir: repoDir },
+        pinned: { dir: repoDir, repo: 'org/pinned', host: 'gitlab.pinned' },
+      },
+    };
+    withFile(cfgObj, (file) => {
+      const cfg = loadConfig({}, { file });
+      assert.deepEqual([cfg.host, cfg.repo, cfg.backend.repo], ['gitlab.origin', 'org/fe', 'org/fe']);
+      const pinned = loadConfig({}, { file, project: 'pinned' });
+      assert.deepEqual([pinned.host, pinned.repo], ['gitlab.pinned', 'org/pinned']);
+      const env = loadConfig({ GL_HELPER_HOST: 'gitlab.env' }, { file });
+      assert.equal(env.host, 'gitlab.env');
+    });
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
