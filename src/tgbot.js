@@ -93,27 +93,6 @@ export async function sendMessage(token, chatId, text, { fetchImpl = fetch, sign
   }
 }
 
-export async function editMessageText(token, chatId, messageId, text, { fetchImpl = fetch, signal, parseMode = 'HTML' } = {}) {
-  const body = { chat_id: chatId, message_id: messageId, text };
-  if (parseMode) body.parse_mode = parseMode;
-  try {
-    return await tgCall(token, 'editMessageText', body, { fetchImpl, signal });
-  } catch (err) {
-    if (parseMode && /can't parse entities/i.test(err.message)) {
-      return await tgCall(token, 'editMessageText', { chat_id: chatId, message_id: messageId, text: stripHtml(text) }, { fetchImpl, signal });
-    }
-    throw err;
-  }
-}
-
-export async function deleteMessage(token, chatId, messageId, { fetchImpl = fetch, signal } = {}) {
-  try {
-    return await tgCall(token, 'deleteMessage', { chat_id: chatId, message_id: messageId }, { fetchImpl, signal });
-  } catch {
-    return null;
-  }
-}
-
 // approvalSink движка: структурированный текст с вердиктом + три кнопки.
 export async function sendApprovalRequest({ cfg, run, meta, verdict, nonce, fetchImpl = fetch, say = () => {}, runsRoot } = {}) {
   const target = getTelegramTarget(cfg);

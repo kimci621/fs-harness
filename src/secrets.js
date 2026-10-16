@@ -20,6 +20,7 @@ const FILES = {
   openrouter: path.join(homedir(), '.openrouter_key'),
   deepseek: path.join(homedir(), '.deepseek_key'),
   alibaba: path.join(homedir(), '.alibaba_key'),
+  'mattermost-qa': path.join(homedir(), '.mm_qa_growth_bot_key'),
 };
 
 // Токен словаря и так лежит в .env бэкенда: читаем его оттуда, а не заводим вторую правду.
