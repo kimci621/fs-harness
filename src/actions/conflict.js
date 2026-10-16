@@ -256,7 +256,7 @@ export const conflictAction = {
 
       // Пайплайн build жмёт fsh, не агент.
       const freshMR = await g.getMR(repo, mr.iid);
-      const pipeline = await ensureMRPipeline(g, repo, freshMR);
+      const pipeline = await ensureMRPipeline(g, repo, freshMR || mr);
       const jobs = await g.getJobs(repo, pipeline.id);
       const build = findJob(jobs, opts.buildJob ?? 'build_image');
       if (!build) {

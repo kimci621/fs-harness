@@ -2,6 +2,7 @@ import { CliError } from './errors.js';
 
 // Head-пайплайн MR, если он соответствует текущему HEAD ветки; иначе создаём новый MR-пайплайн.
 export async function ensureMRPipeline(g, repo, mr) {
+  if (!mr) throw new CliError(`MR не найден в ${repo}.`, 1, 'mr_not_found');
   const head = mr.head_pipeline;
   if (head && (!head.sha || head.sha === mr.sha)) return head;
   const created = await g.createMRPipeline(repo, mr.iid);
