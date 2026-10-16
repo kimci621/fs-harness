@@ -8,6 +8,8 @@ const FLAGS_USAGE = `Флаги:
   -R, --repo <repo>       Репозиторий (дефолт из конфига / GL_HELPER_REPO)
   -P, --project <имя>     Проект из конфига (дефолт activeProject / FS_HARNESS_PROJECT)
   --host <hostname>       GitLab-хост (дефолт из конфига)
+  --token <tok>           В qa-bot: токен Telegram-бота
+  --tag <@ник>            В qa-bot: кого тегать при найденном баге
   --json                  Вывод в JSON (mrs, mr, jobs, run, deploy) — удобно агентам
   --agent <профиль>       Агент для действий и commit: cc (по умолчанию), ccq, cco, ccd, agy
                           Профили живут в конфиге, agents.<имя>. Можно и --agent=cc
@@ -163,7 +165,7 @@ function parseArgs(argv) {
     watch: false, daemon: false, autoExecute: false, yes: false, keepWorktree: false, rebuild: false, dryRun: false,
     resolved: false, open: false, help: false,
     noJudge: false, judgeProfile: null, judgeOnly: null, message: null, for: null, file: null, env: null, check: false,
-    attach: false, out: null, run: null, post: false, channel: null,
+    attach: false, out: null, run: null, post: false, channel: null, token: null, tag: null,
     type: null, default: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
     author: null, reviewer: null, target: null, label: null, search: null,
@@ -180,6 +182,8 @@ function parseArgs(argv) {
     if (a === '-R' || a === '--repo') opts.repo = av[++i];
     else if (a === '-P' || a === '--project') opts.project = av[++i];
     else if (a === '--host') opts.host = av[++i];
+    else if (a === '--token') opts.token = av[++i];
+    else if (a === '--tag') opts.tag = av[++i];
     else if (a === '--json') opts.json = true;
     else if (a === '--agent') opts.agent = av[++i];
     else if (a === '--project-dir') opts.projectDir = av[++i];
