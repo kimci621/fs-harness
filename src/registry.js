@@ -517,9 +517,9 @@ export const COMMANDS = [
   },
   {
     name: 'qa-bot',
-    usage: 'qa-bot [--token <tok>] [--tag <tag>]',
-    description: 'Telegram-бот для тестировщика (QA): контекст задачи Jira, ответы по коду и флагам через agy, тег при багах',
-    example: 'fsh qa-bot\n  fsh qa-bot --tag @amir_ltpf',
+    usage: 'qa-bot',
+    description: 'Бот тестировщика в личке Mattermost: контекст задачи Jira, ответы по коду и флагам (агент только читает), тег при багах, деплой на dev',
+    example: 'fsh qa-bot',
     run: (ctx, args, opts) => cmdQaBot(opts),
   },
   {

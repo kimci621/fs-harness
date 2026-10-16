@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -9,11 +9,10 @@ import {
   getBranchDiffStat,
   buildQaPrompt,
   parseQaResponse,
-  markdownToTelegramHtml,
   formatBugAlert,
-  splitTelegramMessage,
-  handleQaUpdate,
-  runAgyQuery,
+  splitMessage,
+  parseQaPost,
+  runQaAgent,
   loadQaBotState,
   saveQaBotState,
   cmdQaBot,
@@ -63,7 +62,7 @@ test('buildQaPrompt: содержит правила Read-Only, контекст
   });
 
   assert.match(prompt, /РЕЖИМ ТОЛЬКО ЧТЕНИЕ/);
-  assert.match(prompt, /ЗАПРЕЩЕНО/);
+  assert.match(prompt, /git show <ветка>:<путь>/);
   assert.match(prompt, /FD-8096/);
   assert.match(prompt, /Свой блок видео-отзывов/);
   assert.match(prompt, /feature\/FD-8096/);
@@ -93,416 +92,179 @@ test('parseQaResponse: разделяет ответ и блок бага', () =
   assert.doesNotMatch(parsed.cleanResponse, /\[BUG_DETECTED\]/);
 });
 
-test('markdownToTelegramHtml: конвертирует базовую разметку и экранирует спецсимволы', () => {
-  const md = '**Жирный** текст и `код` с <тегами>:\n```js\nconst x = 1 < 2;\n```';
-  const html = markdownToTelegramHtml(md);
-
-  assert.match(html, /<b>Жирный<\/b>/);
-  assert.match(html, /<code>код<\/code>/);
-  assert.match(html, /&lt;тегами&gt;/);
-  assert.match(html, /<pre><code>const x = 1 &lt; 2;\n<\/code><\/pre>/);
-});
-
-test('formatBugAlert: форматирует алерт с тегом разработчика и блоком цитаты', () => {
+test('formatBugAlert: Markdown, тег разработчика и цитата бага', () => {
   const alert = formatBugAlert({
     taskKey: 'FD-8096',
-    bugDetails: 'Сломан клик в карусели',
+    bugDetails: 'Сломан клик в карусели\nв ReviewWidget.vue',
     cleanResponse: 'Разбор для QA: **ошибка** в хендлере',
-    developerTag: '@amir_ltpf',
+    developer: 'amir.latipov',
   });
-
-  assert.match(alert, /@amir_ltpf/);
-  assert.match(alert, /FD-8096/);
-  assert.match(alert, /<blockquote>Сломан клик в карусели<\/blockquote>/);
-  assert.match(alert, /<b>ошибка<\/b>/);
+  assert.match(alert, /@amir\.latipov/);
+  assert.match(alert, /\*\*FD-8096\*\*/);
+  assert.match(alert, /^> Сломан клик в карусели\n> в ReviewWidget\.vue$/m);
+  assert.match(alert, /\*\*ошибка\*\*/);
 });
 
-test('splitTelegramMessage: корректно бьёт длинные тексты по переносам строк', () => {
-  const shortText = 'Короткий текст';
-  assert.deepEqual(splitTelegramMessage(shortText, 100), [shortText]);
-
+test('splitMessage: бьёт длинный текст по пустой строке', () => {
+  assert.deepEqual(splitMessage('Короткий текст', 100), ['Короткий текст']);
   const p1 = 'A'.repeat(60);
   const p2 = 'B'.repeat(60);
-  const combined = `${p1}\n\n${p2}`;
-  const parts = splitTelegramMessage(combined, 80);
-
-  assert.equal(parts.length, 2);
-  assert.equal(parts[0], p1);
-  assert.equal(parts[1], p2);
+  assert.deepEqual(splitMessage(`${p1}\n\n${p2}`, 80), [p1, p2]);
 });
 
-test('handleQaUpdate: распознает команды и свободный текст в личке и группах', () => {
-  const cmdUpdate = {
-    message: {
-      chat: { id: 100, type: 'private' },
-      message_id: 1,
-      from: { id: 50 },
-      text: '/task FD-8096',
-    },
-  };
-  assert.deepEqual(handleQaUpdate(cmdUpdate), {
-    kind: 'command',
-    name: 'task',
-    args: ['FD-8096'],
-    chatId: 100,
-    messageId: 1,
-    fromId: 50,
-    isGroup: false,
-  });
-
-  const groupTextUpdate = {
-    message: {
-      chat: { id: -200, type: 'group' },
-      message_id: 2,
-      from: { id: 50 },
-      text: '@qa_bot какой фича-флаг нужен?',
-    },
-  };
-  const parsedGroup = handleQaUpdate(groupTextUpdate, { botUsername: 'qa_bot' });
-  assert.equal(parsedGroup.kind, 'text');
-  assert.equal(parsedGroup.text, 'какой фича-флаг нужен?');
-  assert.equal(parsedGroup.isGroup, true);
+test('parseQaPost: команды через «!», остальное — вопрос', () => {
+  assert.deepEqual(parseQaPost('!deploy be 3325 2'), { kind: 'command', name: 'deploy', args: ['be', '3325', '2'] });
+  assert.deepEqual(parseQaPost('  !HELP '), { kind: 'command', name: 'help', args: [] });
+  assert.deepEqual(parseQaPost('какой флаг нужен?'), { kind: 'text', text: 'какой флаг нужен?' });
+  assert.deepEqual(parseQaPost('   '), { kind: 'ignored' });
 });
 
-test('runAgyQuery: парсит JSON ответ и извлекает conversation_id', async () => {
-  const mockExec = async (cmd, args) => {
-    assert.equal(cmd, 'agy');
-    assert.ok(args.includes('--model'));
-    assert.ok(args.includes('gemini-3.8-flash'));
-    assert.ok(args.includes('--effort'));
-    assert.ok(args.includes('medium'));
-    return {
-      stdout: JSON.stringify({
-        conversation_id: 'conv-1234',
-        response: 'Все условия выполнены.',
-      }),
-    };
+test('runQaAgent: claude только на чтение, resume сессии, без обхода разрешений', async () => {
+  let seen;
+  const execImpl = async (cmd, args, opts) => {
+    seen = { cmd, args, opts };
+    return { stdout: JSON.stringify({ session_id: 's-2', result: 'Флаг video_reviews: on', is_error: false }) };
   };
+  const res = await runQaAgent({ prompt: 'вопрос', sessionId: 's-1', cwd: '/fake', execImpl });
+  assert.deepEqual(res, { sessionId: 's-2', response: 'Флаг video_reviews: on' });
+  assert.equal(seen.cmd, 'claude');
+  const arg = (flag) => seen.args[seen.args.indexOf(flag) + 1];
+  assert.equal(arg('--model'), 'haiku');
+  assert.equal(arg('--tools'), 'Read,Grep,Glob,Bash');
+  assert.equal(arg('--permission-mode'), 'dontAsk');
+  assert.equal(arg('--resume'), 's-1');
+  assert.doesNotMatch(arg('--allowedTools'), /Bash\((?!git (log|diff|show)|fsh growthbook (list|get))/);
+  assert.ok(!seen.args.some((a) => /dangerously|bypass/i.test(a)));
+  assert.equal(seen.args.at(-1), 'вопрос', 'промпт — последним позиционным, после всех флагов');
+  assert.equal(seen.opts.cwd, '/fake');
 
-  const res = await runAgyQuery({
-    prompt: 'test prompt',
-    cwd: '/fake/dir',
-    execImpl: mockExec,
-  });
-
-  assert.equal(res.conversationId, 'conv-1234');
-  assert.equal(res.response, 'Все условия выполнены.');
+  const failing = async () => ({ stdout: JSON.stringify({ is_error: true, result: 'лимит' }) });
+  await assert.rejects(runQaAgent({ prompt: 'x', cwd: '/f', execImpl: failing }), /лимит/);
 });
 
-test('loadQaBotState / saveQaBotState: сохраняет и читает состояние сессий', () => {
+test('loadQaBotState / saveQaBotState: since и сессии по каналу', () => {
   const tmp = mkdtempSync(path.join(tmpdir(), 'qa-bot-test-'));
   try {
-    const initial = loadQaBotState(tmp);
-    assert.deepEqual(initial, { offset: null, sessions: {} });
-
-    saveQaBotState(tmp, {
-      offset: 42,
-      sessions: { 100: { taskKey: 'FD-8096', conversationId: 'c-1' } },
-    });
-
+    assert.deepEqual(loadQaBotState(tmp), { since: null, sessions: {} });
+    saveQaBotState(tmp, { since: 42, sessions: { dm1: { taskKey: 'FD-8096', sessionId: 'c-1' } } });
     const loaded = loadQaBotState(tmp);
-    assert.equal(loaded.offset, 42);
-    assert.equal(loaded.sessions['100'].taskKey, 'FD-8096');
+    assert.equal(loaded.since, 42);
+    assert.equal(loaded.sessions.dm1.taskKey, 'FD-8096');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test('cmdQaBot: /deploy be <ветка> <слот> — фоновый деплой бэкенда с итогом в чат', async () => {
-  const tmp = mkdtempSync(path.join(tmpdir(), 'qa-bot-deploy-'));
-  const sentMessages = [];
+// Фейковый Mattermost: бот qa_bot, личка dm1 с тестировщиком tester, разработчик dev.
+const USERS = { tester: 'u-tester', dev: 'u-dev', stranger: 'u-stranger' };
+function fakeMM(incoming) {
+  const sent = [];
+  const patched = [];
+  let n = 0;
+  const json = (body) => ({ ok: true, status: 200, json: async () => body });
+  const fetchImpl = async (url, init = {}) => {
+    const u = new URL(url);
+    const p = u.pathname.replace('/api/v4', '');
+    const body = init.body ? JSON.parse(init.body) : null;
+    if (p === '/users/me') return json({ id: 'u-bot', username: 'qa_bot' });
+    if (p === '/users/usernames') return json(body.filter((x) => USERS[x]).map((x) => ({ id: USERS[x], username: x })));
+    if (p === '/users/ids') return json(body.map((id) => ({ id, username: Object.keys(USERS).find((k) => USERS[k] === id) })));
+    if (p === '/users/me/channels') return json([{ id: 'dm1', type: 'D', last_post_at: 3000 }, { id: 'town', type: 'O', last_post_at: 3000 }]);
+    if (p === '/channels/dm1/posts') {
+      const since = Number(u.searchParams.get('since'));
+      const posts = Object.fromEntries(incoming.filter((x) => x.create_at > since).map((x) => [x.id, { channel_id: 'dm1', ...x }]));
+      return json({ order: Object.keys(posts), posts });
+    }
+    if (p === '/channels/direct') return json({ id: `dm-${body.join('-')}` });
+    if (p === '/posts') { sent.push(body); return json({ id: `p${++n}` }); }
+    if (p.endsWith('/patch')) { patched.push({ id: p.split('/')[2], ...body }); return json({}); }
+    throw new Error(`неожиданный запрос ${init.method || 'GET'} ${p}`);
+  };
+  return { fetchImpl, sent, patched };
+}
+
+async function runBot(incoming, { state, exec, deploy, qaBot = { allowed: ['tester'], developer: 'dev' } } = {}) {
+  const tmp = mkdtempSync(path.join(tmpdir(), 'qa-bot-mm-'));
+  saveQaBotState(tmp, state ?? { since: 1000, sessions: {} });
+  const mm = fakeMM(incoming);
   const deployCalls = [];
-
-  const mockFetch = async (url, init) => {
-    const u = String(url);
-    if (u.includes('getMe')) {
-      return { ok: true, json: async () => ({ ok: true, result: { username: 'test_qa_bot' } }) };
-    }
-    if (u.includes('setMyCommands')) {
-      const body = JSON.parse(init.body);
-      assert.ok(body.commands.some((c) => c.command === 'deploy' && /бэкенд|be/.test(c.description)));
-      return { ok: true, json: async () => ({ ok: true, result: true }) };
-    }
-    if (u.includes('getUpdates')) {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: [
-            {
-              update_id: 1,
-              message: {
-                chat: { id: 100, type: 'private' },
-                message_id: 1,
-                from: { id: 50 },
-                text: '/deploy be feature/FD-8096 3',
-              },
-            },
-          ],
-        }),
-      };
-    }
-    if (u.includes('sendMessage')) {
-      const body = JSON.parse(init.body);
-      sentMessages.push(body);
-      return { ok: true, json: async () => ({ ok: true, result: { message_id: 99 } }) };
-    }
-    return { ok: true, json: async () => ({ ok: true, result: {} }) };
-  };
-
   try {
-    const res = await cmdQaBot(
-      { token: 'test-token', projectDir: '/fake/dir' },
-      {
-        cycles: 1,
-        fetchImpl: mockFetch,
-        sleepImpl: async () => {},
-        stateRoot: tmp,
-        readSecretImpl: () => null,
-        log: () => {},
-        loadCfg: () => ({}),
-        deployImpl: async (a) => {
-          deployCalls.push(a);
-          return { ok: true, mr: 3319, deploy: { web_url: 'https://gitlab/job/1' } };
-        },
-      }
-    );
-
-    assert.equal(res.ok, true);
-    assert.equal(deployCalls.length, 1);
-    assert.equal(deployCalls[0].query, 'feature/FD-8096');
-    assert.equal(deployCalls[0].slot, 3);
-    assert.equal(deployCalls[0].backend, true);
-
-    assert.equal(sentMessages.length, 2);
-    assert.match(sentMessages[0].text, /деплой бэкенда/);
-    assert.match(sentMessages[0].text, /feature\/FD-8096/);
-    assert.match(sentMessages[0].text, /dev3/);
-    assert.match(sentMessages[1].text, /✅ Деплой бэкенда готов/);
-    assert.match(sentMessages[1].text, /!3319/);
-    assert.match(sentMessages[1].text, /gitlab\/job\/1/);
+    const res = await cmdQaBot({ projectDir: '/fake/dir' }, {
+      cycles: 1,
+      fetchImpl: mm.fetchImpl,
+      sleepImpl: async () => {},
+      stateRoot: tmp,
+      readSecretImpl: (name) => (name === 'mattermost-qa' ? 'bot-token' : null),
+      execImpl: exec ?? (async () => assert.fail('агент не должен запускаться')),
+      deployImpl: async (a) => { deployCalls.push(a); return deploy?.(a) ?? { ok: true, mr: 3319, deploy: { web_url: 'https://gitlab/job/1' } }; },
+      loadCfg: () => ({ mattermost: { baseUrl: 'https://mm.test', qaBot } }),
+      log: () => {},
+    });
+    return { res, ...mm, deployCalls, state: loadQaBotState(tmp) };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+test('cmdQaBot: !deploy be <ветка> <слот> — деплой бэкенда в фоне, итог в личку', async () => {
+  const r = await runBot([{ id: 'a', user_id: USERS.tester, create_at: 2000, message: '!deploy be feature/FD-8096 3' }]);
+  assert.deepEqual(r.deployCalls.map((c) => [c.query, c.slot, c.backend]), [['feature/FD-8096', 3, true]]);
+  assert.equal(r.sent.length, 2);
+  assert.match(r.sent[0].message, /деплой бэкенда: `feature\/FD-8096` → dev3/);
+  assert.match(r.sent[1].message, /✅ Деплой бэкенда готов: MR `!3319`/);
+  assert.match(r.sent[1].message, /gitlab\/job\/1/);
+  assert.ok(r.sent.every((m) => m.channel_id === 'dm1'));
+  assert.equal(r.state.since, 2000);
 });
 
-test('cmdQaBot: /deploy без аргументов — подсказка, без запуска', async () => {
-  const tmp = mkdtempSync(path.join(tmpdir(), 'qa-bot-deploy-usage-'));
-  const sentMessages = [];
-  let deployCalled = false;
-
-  const mockFetch = async (url, init) => {
-    const u = String(url);
-    if (u.includes('getMe')) {
-      return { ok: true, json: async () => ({ ok: true, result: { username: 'test_qa_bot' } }) };
-    }
-    if (u.includes('getUpdates')) {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: [
-            {
-              update_id: 1,
-              message: {
-                chat: { id: 100, type: 'private' },
-                message_id: 1,
-                from: { id: 50 },
-                text: '/deploy',
-              },
-            },
-          ],
-        }),
-      };
-    }
-    if (u.includes('sendMessage')) {
-      const body = JSON.parse(init.body);
-      sentMessages.push(body);
-      return { ok: true, json: async () => ({ ok: true, result: { message_id: 99 } }) };
-    }
-    return { ok: true, json: async () => ({ ok: true, result: {} }) };
-  };
-
-  try {
-    await cmdQaBot(
-      { token: 'test-token', projectDir: '/fake/dir' },
-      {
-        cycles: 1,
-        fetchImpl: mockFetch,
-        sleepImpl: async () => {},
-        stateRoot: tmp,
-        readSecretImpl: () => null,
-        log: () => {},
-        loadCfg: () => ({}),
-        deployImpl: async () => { deployCalled = true; },
-      }
-    );
-    assert.equal(deployCalled, false);
-    assert.equal(sentMessages.length, 1);
-    assert.match(sentMessages[0].text, /Использование/);
-    assert.match(sentMessages[0].text, /\/deploy be/);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+test('cmdQaBot: !deploy без аргументов — подсказка, без запуска', async () => {
+  const r = await runBot([{ id: 'a', user_id: USERS.tester, create_at: 2000, message: '!deploy' }]);
+  assert.equal(r.deployCalls.length, 0);
+  assert.match(r.sent[0].message, /Использование/);
+  assert.match(r.sent[0].message, /!deploy be/);
 });
 
-test('cmdQaBot: цикл обработки вопроса тестировщика', async () => {
-  const tmp = mkdtempSync(path.join(tmpdir(), 'qa-bot-run-'));
-  const sentMessages = [];
-
-  const mockFetch = async (url, init) => {
-    const u = String(url);
-    if (u.includes('getMe')) {
-      return { ok: true, json: async () => ({ ok: true, result: { username: 'test_qa_bot' } }) };
-    }
-    if (u.includes('getUpdates')) {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: [
-            {
-              update_id: 1,
-              message: {
-                chat: { id: 100, type: 'private' },
-                message_id: 1,
-                from: { id: 50 },
-                text: 'FD-8096',
-              },
-            },
-          ],
-        }),
-      };
-    }
-    if (u.includes('sendMessage')) {
-      const body = JSON.parse(init.body);
-      sentMessages.push(body);
-      return { ok: true, json: async () => ({ ok: true, result: { message_id: 99 } }) };
-    }
-    return { ok: true, json: async () => ({ ok: true, result: {} }) };
-  };
-
-  try {
-    const res = await cmdQaBot(
-      { token: 'test-token', projectDir: '/fake/dir' },
-      {
-        cycles: 1,
-        fetchImpl: mockFetch,
-        sleepImpl: async () => {},
-        stateRoot: tmp,
-        readSecretImpl: () => null,
-        log: () => {},
-      }
-    );
-
-    assert.equal(res.ok, true);
-    assert.equal(sentMessages.length, 1);
-    assert.match(sentMessages[0].text, /Зафиксировал задачу/);
-    assert.match(sentMessages[0].text, /FD-8096/);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+test('cmdQaBot: чужой пользователь — отказ, ни деплоя, ни агента', async () => {
+  const r = await runBot([{ id: 'a', user_id: USERS.stranger, create_at: 2000, message: '!deploy be 3325 2' }]);
+  assert.equal(r.deployCalls.length, 0);
+  assert.equal(r.sent.length, 1);
+  assert.match(r.sent[0].message, /Нет доступа/);
 });
 
-test('cmdQaBot: обнаружение бага тегает разработчика и шлет алерт в dev chat', async () => {
-  const tmp = mkdtempSync(path.join(tmpdir(), 'qa-bot-bug-'));
-  const sentMessages = [];
+test('cmdQaBot: свои, системные, старые и правленные посты пропускаются', async () => {
+  const r = await runBot([
+    { id: 'own', user_id: 'u-bot', create_at: 2000, message: '!help' },
+    { id: 'sys', user_id: USERS.tester, create_at: 2001, message: 'joined', type: 'system_join_channel' },
+    { id: 'old', user_id: USERS.tester, create_at: 900, update_at: 2002, message: '!help' },
+  ]);
+  assert.equal(r.sent.length, 0);
+});
 
-  saveQaBotState(tmp, {
-    offset: 1,
-    sessions: {
-      100: {
-        taskKey: 'FD-8096',
-        taskSummary: 'Тестовая задача',
-        conversationId: 'prev-conv',
-      },
-    },
-  });
+test('cmdQaBot: сообщение из одного ключа — фиксирует задачу без агента', async () => {
+  const r = await runBot([{ id: 'a', user_id: USERS.tester, create_at: 2000, message: 'FD-8096' }]);
+  assert.equal(r.sent.length, 1);
+  assert.match(r.sent[0].message, /Зафиксировал задачу/);
+  assert.equal(r.state.sessions.dm1.taskKey, 'FD-8096');
+});
 
-  const mockFetch = async (url, init) => {
-    const u = String(url);
-    if (u.includes('getMe')) {
-      return { ok: true, json: async () => ({ ok: true, result: { username: 'test_qa_bot' } }) };
-    }
-    if (u.includes('sendChatAction')) {
-      return { ok: true, json: async () => ({ ok: true, result: true }) };
-    }
-    if (u.includes('getUpdates')) {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: [
-            {
-              update_id: 2,
-              message: {
-                chat: { id: 100, type: 'group' },
-                message_id: 2,
-                from: { id: 50 },
-                text: 'почему кнопка не нажимается?',
-              },
-            },
-          ],
-        }),
-      };
-    }
-    if (u.includes('sendMessage')) {
-      const body = JSON.parse(init.body);
-      sentMessages.push({ method: 'sendMessage', ...body });
-      return { ok: true, json: async () => ({ ok: true, result: { message_id: 101 } }) };
-    }
-    if (u.includes('editMessageText')) {
-      const body = JSON.parse(init.body);
-      sentMessages.push({ method: 'editMessageText', ...body });
-      return { ok: true, json: async () => ({ ok: true, result: { message_id: body.message_id } }) };
-    }
-    return { ok: true, json: async () => ({ ok: true, result: {} }) };
-  };
-
-  const mockExec = async () => ({
+test('cmdQaBot: баг — «Думаю…» правится на алерт, разработчику уходит личка от бота', async () => {
+  const exec = async () => ({
     stdout: JSON.stringify({
-      conversation_id: 'new-conv',
-      response: `[BUG_DETECTED]
-Суть бага: Клик заблокирован disabled атрибутом
-Где в коде: PayButton.vue:12
-Ожидаемое vs фактическое: Кнопка должна быть активна
-[/BUG_DETECTED]
-Кнопка заблокирована атрибутом disabled:false.`,
+      session_id: 'new-sess',
+      result: '[BUG_DETECTED]\nСуть бага: Клик заблокирован disabled\nГде в коде: PayButton.vue:12\n[/BUG_DETECTED]\nКнопка заблокирована.',
     }),
   });
-
-  try {
-    const res = await cmdQaBot(
-      { token: 'test-token', projectDir: '/fake/dir', tag: '@dev_amir' },
-      {
-        cycles: 1,
-        fetchImpl: mockFetch,
-        sleepImpl: async () => {},
-        execImpl: mockExec,
-        stateRoot: tmp,
-        readSecretImpl: () => null,
-        log: () => {},
-        loadCfg: () => ({ telegram: { chat_id: '999999' } }),
-      }
-    );
-
-    assert.equal(res.ok, true);
-    // 1. Было послано статус-сообщение "Думаю…"
-    const statusMsg = sentMessages.find((m) => m.method === 'sendMessage' && m.chat_id === 100);
-    assert.ok(statusMsg);
-    assert.equal(statusMsg.text, 'Думаю…');
-
-    // 2. Статус-сообщение отредактировано на алерт с тегом разработчика
-    const editedMsg = sentMessages.find((m) => m.method === 'editMessageText' && m.chat_id === 100);
-    assert.ok(editedMsg);
-    assert.match(editedMsg.text, /@dev_amir/);
-    assert.match(editedMsg.text, /Клик заблокирован/);
-
-    // 3. Разработчику в dev chat ушел отдельный алерт
-    const devAlert = sentMessages.find((m) => m.method === 'sendMessage' && m.chat_id === '999999');
-    assert.ok(devAlert);
-    assert.match(devAlert.text, /QA-бот обнаружил баг/);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+  const r = await runBot(
+    [{ id: 'q', user_id: USERS.tester, create_at: 2000, message: 'почему кнопка не нажимается?' }],
+    { exec, state: { since: 1000, sessions: { dm1: { taskKey: 'FD-8096', sessionId: 'old-sess' } } } },
+  );
+  assert.equal(r.sent[0].message, 'Думаю…');
+  assert.equal(r.patched.length, 1);
+  assert.equal(r.patched[0].id, 'p1', 'правится именно пост «Думаю…»');
+  assert.match(r.patched[0].message, /@dev/);
+  assert.match(r.patched[0].message, /> Суть бага: Клик заблокирован/);
+  const devAlert = r.sent.find((m) => m.channel_id === 'dm-u-bot-u-dev');
+  assert.ok(devAlert, 'алерт в личку разработчику');
+  assert.match(devAlert.message, /QA-бот обнаружил баг в задаче FD-8096/);
+  assert.equal(r.state.sessions.dm1.sessionId, 'new-sess');
 });

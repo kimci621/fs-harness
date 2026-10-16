@@ -100,6 +100,19 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
     // rootId — ответ в тред; без него сообщение уходит в канал отдельным постом.
     post: (channelId, message, { rootId = '' } = {}) =>
       api('/posts', { method: 'POST', body: { channel_id: channelId, message, ...(rootId ? { root_id: rootId } : {}) } }),
+
+    patchPost: (postId, message) => api(`/posts/${postId}/patch`, { method: 'PUT', body: { message } }),
+
+    // Все каналы вместе с личками: у бота без команды других и нет.
+    allMyChannels: () => api('/users/me/channels'),
+
+    // Посты, созданные или изменённые после since (мс): order — id, posts — посты по id.
+    postsSince: (channelId, since) => api(`/channels/${channelId}/posts?since=${since}`),
+
+    usersByUsernames: (names) => api('/users/usernames', { method: 'POST', body: names }),
+
+    // Личка двух пользователей: создаётся при первом вызове, дальше та же.
+    directChannel: (userA, userB) => api('/channels/direct', { method: 'POST', body: [userA, userB] }),
   };
 }
 

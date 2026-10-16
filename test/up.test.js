@@ -20,7 +20,7 @@ test('up: токен из файла уходит в env бота и демон�
   writeFileSync(tokenFile, '123:abc\n');
   const calls = [];
   const signals = {};
-  const done = cmdUp({}, { env: {}, tokenFile, qaTokenFile: path.join(dir, 'no-qa-tok'), spawn: fakeSpawn(calls), argv: ['node', 'fsh'], onSignal: (s, fn) => { signals[s] = fn; }, log: () => {} });
+  const done = cmdUp({}, { env: {}, tokenFile, readSecretImpl: () => null, spawn: fakeSpawn(calls), argv: ['node', 'fsh'], onSignal: (s, fn) => { signals[s] = fn; }, log: () => {} });
   assert.deepEqual(calls.map((c) => c.args), [['fsh', 'bot'], ['fsh', 'watch', '--daemon']]);
   assert.ok(calls.every((c) => c.env.FS_HARNESS_TELEGRAM === '123:abc'));
   signals.SIGINT();
@@ -31,7 +31,7 @@ test('up: токен из файла уходит в env бота и демон�
 
 test('up: упал один — второй погашен, команда падает', async () => {
   const calls = [];
-  const done = cmdUp({}, { env: { FS_HARNESS_TELEGRAM: 't' }, qaTokenFile: '/nonexistent/qa_tok', spawn: fakeSpawn(calls), argv: ['node', 'fsh'], onSignal: () => {}, log: () => {} });
+  const done = cmdUp({}, { env: { FS_HARNESS_TELEGRAM: 't' }, readSecretImpl: () => null, spawn: fakeSpawn(calls), argv: ['node', 'fsh'], onSignal: () => {}, log: () => {} });
   calls[0].p.exitCode = 1;
   calls[0].p.emit('exit', 1, null);
   await assert.rejects(done, { code: 'child_failed' });
@@ -42,31 +42,19 @@ test('up: нет ни файла, ни env — понятная ошибка', (
   assert.throws(() => cmdUp({}, { env: {}, tokenFile: '/nonexistent/tok', spawn: () => assert.fail() }), { code: 'secret_missing' });
 });
 
-test('up: при наличии qaTokenFile поднимает всех троих (bot, watch, qa-bot)', async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'fsh-up-qa-'));
-  const tokenFile = path.join(dir, 'tok');
-  const qaTokenFile = path.join(dir, 'qa_tok');
-  writeFileSync(tokenFile, 'tok:dev\n');
-  writeFileSync(qaTokenFile, 'tok:qa\n');
+test('up: есть токен MM-бота — поднимает всех троих (bot, watch, qa-bot)', async () => {
   const calls = [];
   const signals = {};
-  const done = cmdUp(
-    {},
-    {
-      env: {},
-      tokenFile,
-      qaTokenFile,
-      spawn: fakeSpawn(calls),
-      argv: ['node', 'fsh'],
-      onSignal: (s, fn) => { signals[s] = fn; },
-      log: () => {},
-    }
-  );
+  const done = cmdUp({}, {
+    env: { FS_HARNESS_TELEGRAM: 'tok:dev' },
+    readSecretImpl: (name) => (name === 'mattermost-qa' ? 'mm-qa' : null),
+    spawn: fakeSpawn(calls),
+    argv: ['node', 'fsh'],
+    onSignal: (s, fn) => { signals[s] = fn; },
+    log: () => {},
+  });
   assert.deepEqual(calls.map((c) => c.args), [['fsh', 'bot'], ['fsh', 'watch', '--daemon'], ['fsh', 'qa-bot']]);
-  assert.ok(calls.every((c) => c.env.FS_HARNESS_TELEGRAM === 'tok:dev'));
-  assert.ok(calls.every((c) => c.env.FS_HARNESS_QA_TELEGRAM === 'tok:qa'));
   signals.SIGINT();
   assert.deepEqual(await done, { ok: true });
   assert.ok(calls.every((c) => c.p.killed[0] === 'SIGINT'));
-  rmSync(dir, { recursive: true, force: true });
 });

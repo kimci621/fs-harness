@@ -1,19 +1,19 @@
-// fsh up — боты и демон watch на переднем плане одной командой, токены Telegram из файлов.
+// fsh up — боты и демон watch на переднем плане одной командой, токен Telegram из файла.
 // Ctrl+C гасит всех; упал один — гасим остальных, чтобы не остаться с половиной.
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { CliError } from '../errors.js';
+import { readSecret } from '../secrets.js';
 
 export const TOKEN_FILE = path.join(homedir(), '.tg_fs_harness_bot');
-export const QA_TOKEN_FILE = path.join(homedir(), '.tg_qa_bot');
 
 export function cmdUp(opts = {}, deps = {}) {
   const {
     env = process.env,
     tokenFile = TOKEN_FILE,
-    qaTokenFile = QA_TOKEN_FILE,
+    readSecretImpl = readSecret,
     spawn = nodeSpawn,
     argv = [process.execPath, process.argv[1]],
     onSignal = (sig, fn) => process.on(sig, fn),
@@ -28,21 +28,14 @@ export function cmdUp(opts = {}, deps = {}) {
     token = readFileSync(tokenFile, 'utf8').trim();
   }
 
-  let qaToken = env.FS_HARNESS_QA_TELEGRAM;
-  if (!qaToken && existsSync(qaTokenFile)) {
-    try { qaToken = readFileSync(qaTokenFile, 'utf8').trim(); } catch {}
-  }
-
   const childEnv = { ...env, FS_HARNESS_TELEGRAM: token };
-  if (qaToken) {
-    childEnv.FS_HARNESS_QA_TELEGRAM = qaToken;
-  }
 
+  // QA-бот живёт в Mattermost и сам читает свой токен; здесь только решаем, поднимать ли его.
   const commandList = [['bot'], ['watch', '--daemon']];
-  if (qaToken) {
+  if (readSecretImpl('mattermost-qa', { env, required: false })) {
     commandList.push(['qa-bot']);
   } else {
-    log(`⚠️  fsh up: QA-бот пропущен — нет ${qaTokenFile} или FS_HARNESS_QA_TELEGRAM. Чтобы запускать и QA-бота, положи токен нового бота в ${qaTokenFile}.`);
+    log('⚠️  fsh up: QA-бот пропущен — нет токена бота Mattermost (~/.mm_qa_growth_bot_key или FS_HARNESS_MATTERMOST_QA).');
   }
 
   const [node, script] = argv;
