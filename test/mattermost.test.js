@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createMattermost, reviewMessage } from '../src/mattermost.js';
-import { cmdMM, resolveChannel, channelId, postReview } from '../src/commands/mm.js';
+import { cmdMM, resolveChannel, channelId, postReview, postIdFrom } from '../src/commands/mm.js';
 
 const CFG = { mattermost: { baseUrl: 'https://mm.example/', channels: { review: 'chan123' } } };
 
@@ -249,4 +249,34 @@ test('promptSecret: пароль из пайпа доходит целиком �
     + "process.stdout.write(JSON.stringify(await promptSecret('пароль: ')));",
   ], { input: 'hunter2\n', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
   assert.equal(out, '"hunter2"');
+});
+
+test('mm thread: permalink → id, посты по времени, имена авторов вместо user_id', async () => {
+  const id = '6sdktpgdbfnz9m1cj4dcdkg4or';
+  assert.equal(postIdFrom(`https://mm.fitstars.ru/fitstars/pl/${id}`), id);
+  assert.equal(postIdFrom(id), id);
+  assert.throws(() => postIdFrom('https://mm.fitstars.ru/fitstars/pl/'), /fsh mm thread/);
+
+  const asked = [];
+  const mm = {
+    thread: async (postId) => {
+      asked.push(postId);
+      return {
+        order: ['b', 'a'],
+        posts: {
+          a: { id: 'a', root_id: '', user_id: 'u1', create_at: 1, message: 'вопрос', metadata: { files: [{ name: 'shot.png' }] } },
+          b: { id: 'b', root_id: 'a', user_id: 'u2', create_at: 2, message: 'ответ' },
+        },
+      };
+    },
+    usersByIds: async (ids) => ids.map((u) => ({ id: u, username: `name-${u}` })),
+    post: () => assert.fail('чтение треда ничего не пишет'),
+  };
+  const out = await cmdMM(ctxWith(mm), ['thread', `https://mm.fitstars.ru/fitstars/pl/${id}`], { asObject: true });
+  assert.deepEqual(asked, [id]);
+  assert.equal(out.root_id, 'a');
+  assert.deepEqual(out.messages.map((m) => [m.user, m.text, m.files]), [
+    ['name-u1', 'вопрос', ['shot.png']],
+    ['name-u2', 'ответ', []],
+  ]);
 });
