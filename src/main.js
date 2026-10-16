@@ -63,11 +63,12 @@ const FLAGS_USAGE = `Флаги:
   FS_HARNESS_PROJECT      Активный проект (как -P)`;
 
 // USAGE генерируется из реестра — новую команду сюда добавлять не нужно.
-function buildUsage() {
+function buildUsage(cfg) {
   const width = Math.max(...COMMANDS.map((c) => c.usage.length)) + 2;
   const commands = COMMANDS.map((c) => `  ${c.usage.padEnd(width)} ${c.description}`).join('\n');
   const examples = COMMANDS.map((c) => `  ${c.example}`).join('\n');
-  return `fsh — обёртка над glab для работы с MR и пайплайнами.
+  const agentInfo = cfg?.agent ? ` · дефолтный агент: ${cfg.agent}` : '';
+  return `fsh — обёртка над glab для работы с MR и пайплайнами${agentInfo}.
 
 Использование: fsh <команда> [аргументы] [флаги]
 
@@ -97,14 +98,21 @@ export async function main(argv) {
     return cliErr.exitCode ?? 1;
   }
 
+  let cfg = null;
+  try {
+    cfg = loadConfig(process.env, { project: opts.project });
+  } catch {
+    // конфиг недоступен — покажем справку без падения
+  }
+
   if (opts.help || rest[0] === 'help') {
-    console.log(buildUsage());
+    console.log(buildUsage(cfg));
     return 0;
   }
   // Голый fsh в живом терминале — это TUI; в пайпе и в CI — справка.
   if (!rest.length) {
     if (!process.stdout.isTTY || opts.json) {
-      console.log(buildUsage());
+      console.log(buildUsage(cfg));
       return 0;
     }
     rest = ['tui'];
@@ -114,12 +122,12 @@ export async function main(argv) {
   const entry = findCommand(cmd);
   if (!entry) {
     console.error(`Неизвестная команда "${cmd}".\n`);
-    console.error(buildUsage());
+    console.error(buildUsage(cfg));
     return 1;
   }
 
   try {
-    const cfg = loadConfig(process.env, { project: opts.project });
+    cfg ??= loadConfig(process.env, { project: opts.project });
     const ctx = createCtx({
       g: createGlab(undefined, { host: opts.host || cfg.host }),
       cfg,

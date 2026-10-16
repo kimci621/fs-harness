@@ -57,6 +57,7 @@ test('TUI: рисует MR, переключает вкладку и показ�
     await tick();
     const first = app.lastFrame();
     assert.match(first, /fs-harness · app/);
+    assert.match(first, /агент: claude/);
     assert.match(first, /\[1\] MR/);
     // Строка MR двухэтажная, как в GitLab: заголовок с бейджами, под ним номер и автор.
     assert.match(first, /fix: баннер/);
