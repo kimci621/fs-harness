@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findJob, deployJobName, mapLimit, startJob, jobAction } from '../src/pipeline.js';
+import { findJob, deployJobName, mapLimit, startJob, jobAction, ensureMRPipeline } from '../src/pipeline.js';
 import { cmdDeploy } from '../src/commands/deploy.js';
 import { buildMRParams, applyLocalFilters, anyFilter } from '../src/commands/mrs.js';
 import { commentStats, fmtComments, fmtMRRow, humanize } from '../src/format.js';
@@ -273,3 +273,17 @@ test('mrs: фильтры делятся на серверные и клиент
   assert.equal(anyFilter({ json: true, repo: 'r/r' }), false);
   assert.equal(anyFilter({ pipeline: 'failed' }), true);
 });
+
+test('ensureMRPipeline: null mr выбрасывает mr_not_found', async () => {
+  await assert.rejects(
+    () => ensureMRPipeline({}, 'r/r', null),
+    (e) => e instanceof CliError && e.code === 'mr_not_found',
+  );
+});
+
+test('ensureMRPipeline: возвращает head_pipeline при совпадении sha', async () => {
+  const head = { id: 10, sha: 'abc' };
+  const res = await ensureMRPipeline({}, 'r/r', { iid: 1, sha: 'abc', head_pipeline: head });
+  assert.equal(res, head);
+});
+

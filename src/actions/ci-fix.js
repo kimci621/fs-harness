@@ -327,7 +327,7 @@ export const ciFixAction = {
       say(`✅ Запушено в ${mr.source_branch} (${facts.head_sha.slice(0, 8)}).`);
 
       const freshMR = await g.getMR(repo, mr.iid);
-      const pipeline = await ensureMRPipeline(g, repo, freshMR);
+      const pipeline = await ensureMRPipeline(g, repo, freshMR || mr);
       const jobs = await g.getJobs(repo, pipeline.id);
       const jobsToWait = [];
       for (const name of pre.failed.map((j) => j.name)) {
