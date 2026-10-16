@@ -183,7 +183,7 @@ export const COMMANDS = [
     description: 'build → ждать → deploy_dev (или deploy_dev2…10) → ждать',
     example: 'fsh deploy feat/premium-banner 3',
     run: (ctx, args, opts) => withRepoHost(ctx, () => cmdDeploy(ctx.g, ctx.repo, args, {
-      json: opts.json, buildJob: opts.buildJob, rebuild: opts.rebuild, dryRun: opts.dryRun,
+      json: opts.json, buildJob: opts.buildJob || ctx.cfg.buildJob, rebuild: opts.rebuild, dryRun: opts.dryRun,
     })),
     mcp: {
       description: 'Деплой ветки MR: запустить build, дождаться success, затем deploy_dev (slot=1) или deploy_dev2..deploy_dev10 (slot=N) и дождаться. rebuild=true — перезапустить даже успешные джобы (перезаписать слот). Ждёт завершения. Меняет состояние GitLab.',
@@ -193,13 +193,13 @@ export const COMMANDS = [
           query: { type: 'string', description: 'номер MR или часть имени ветки' },
           slot: { type: 'integer', minimum: 1, maximum: 10, default: 1, description: 'номер dev-слота: 1 → deploy_dev, 2..10 → deploy_devN' },
           rebuild: { type: 'boolean', default: false, description: 'перезапустить build и deploy даже при status=success' },
-          build_job: { type: 'string', description: 'имя build-джобы (по умолчанию build_image)' },
+          build_job: { type: 'string', description: 'имя build-джобы (по умолчанию build_image или buildJob из конфига проекта)' },
         },
         required: ['query'],
       },
       call: (ctx, a) => withRepoHost(ctx, () => cmdDeploy(ctx.g, ctx.repo, [a.query, a.slot], {
         json: true, asObject: true, quiet: true, yes: true,
-        rebuild: Boolean(a.rebuild), buildJob: a.build_job, onTick: ctx.notify,
+        rebuild: Boolean(a.rebuild), buildJob: a.build_job || ctx.cfg.buildJob, onTick: ctx.notify,
       })),
     },
   },
