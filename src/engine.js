@@ -104,7 +104,7 @@ export async function spawnSession(x, text, { resume = false, agentName, session
     args: [...agent.args, ...sessionArgs, ...extraArgs],
     input,
     cwd: ws.dir,
-    env: { ...process.env, ...agent.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo ?? '' },
+    env: { ...process.env, CLAUDE_ROUTER_OFF: '1', ...agent.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo ?? '' },
     signal: x.signal,
   });
   const out = [];

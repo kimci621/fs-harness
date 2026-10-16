@@ -16,7 +16,7 @@ export function spawnAgent({ bin, args = [], cwd, env, signal, input = null, kee
   const events = createEventStream();
   const child = spawn(bin, args, {
     cwd,
-    env,
+    env: { CLAUDE_ROUTER_OFF: '1', ...env },
     detached: process.platform !== 'win32',
     stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
   });
