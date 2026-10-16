@@ -160,7 +160,8 @@ export const ciFixAction = {
       const pipeline = mr.head_pipeline;
       if (!pipeline) return skipped(`У MR !${mr.iid} нет пайплайна — чинить нечего.`);
       const jobs = await ctx.g.getJobs(ctx.repo, pipeline.id);
-      const failed = jobs.filter((j) => j.status === 'failed' && !j.allow_failure);
+      // deploy_db_* перезаливает базу стенда: такую джобу не перезапускаем и не чиним
+      const failed = jobs.filter((j) => j.status === 'failed' && !j.allow_failure && !/^deploy_db/.test(j.name));
       if (!failed.length) return skipped(`В пайплайне #${pipeline.id} нет упавших джоб (статус ${pipeline.status}).`);
 
       // Устаревший пайплайн чинить нечего: он про прошлый коммит, а worktree будет от нового.
