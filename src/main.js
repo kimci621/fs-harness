@@ -39,6 +39,7 @@ const FLAGS_USAGE = `Флаги:
   --conflicts             В mrs: только конфликтующие
   --threads               В mrs: только с открытыми тредами
   --pipeline <статус>     В mrs: по статусу пайплайна (failed, success, running, none)
+  --sync                  В conflict: синхронизировать ветку с target при отставании
   --assignee me|<кто>     В mrs — исполнитель MR; в jira — чьи задачи (дефолт me)
   --sprint current|<имя>  В jira: только задачи спринта
   --component <значение>  В jira: фильтр по checkbox-полю «Компонент»
@@ -166,7 +167,7 @@ function parseArgs(argv) {
     type: null, default: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
     author: null, reviewer: null, target: null, label: null, search: null,
-    draft: null, conflicts: false, threads: false, pipeline: null,
+    draft: null, conflicts: false, sync: false, threads: false, pipeline: null,
   };
   const rest = [];
   // --flag=value разбираем в --flag value до разбора: дальше все ветки работают как раньше.
@@ -218,6 +219,7 @@ function parseArgs(argv) {
     else if (a === '--draft') opts.draft = true;
     else if (a === '--no-draft') opts.draft = false;
     else if (a === '--conflicts') opts.conflicts = true;
+    else if (a === '--sync') opts.sync = true;
     else if (a === '--threads') opts.threads = true;
     else if (a === '--pipeline') opts.pipeline = av[++i];
     else if (a === '--resolved' || a === '-resolved') opts.resolved = true;
