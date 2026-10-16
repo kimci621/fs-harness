@@ -91,6 +91,12 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
     // Последние посты канала, новые первыми: order — порядок id, posts — сами посты по id.
     channelPosts: (id, { perPage = 200 } = {}) => api(`/channels/${id}/posts?per_page=${perPage}`),
 
+    // Весь тред по id любого его поста: order — id, posts — сами посты по id.
+    thread: (postId) => api(`/posts/${postId}/thread`),
+
+    // Профили пачкой: в постах только user_id, имя нужно для чтения треда человеком.
+    usersByIds: (ids) => api('/users/ids', { method: 'POST', body: ids }),
+
     // rootId — ответ в тред; без него сообщение уходит в канал отдельным постом.
     post: (channelId, message, { rootId = '' } = {}) =>
       api('/posts', { method: 'POST', body: { channel_id: channelId, message, ...(rootId ? { root_id: rootId } : {}) } }),

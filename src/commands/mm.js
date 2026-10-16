@@ -20,7 +20,8 @@ export async function cmdMM(ctx, args, opts = {}) {
         : sub === 'post' ? await post(ctx, rest, opts)
           : sub === 'review' ? await review(ctx, rest, opts)
             : sub === 'reply' ? await reply(ctx, rest, opts)
-              : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY> "<текст>"].', 1, 'usage'); })();
+              : sub === 'thread' ? await thread(ctx, rest)
+                : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY> "<текст>"|thread <permalink|id поста>].', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -161,6 +162,30 @@ async function reply(ctx, [key, ...words], opts) {
   return { ok: true, channel: target, scenario, root_id: root.id, text, post_id: created?.id ?? null };
 }
 
+// Permalink вида https://mm/<team>/pl/<id> или сам id поста → id. Остальное — usage.
+export function postIdFrom(ref = '') {
+  const id = String(ref).trim().replace(/[?#].*$/, '').split('/').filter(Boolean).pop() ?? '';
+  if (!CHANNEL_ID.test(id)) throw new CliError('Использование: fsh mm thread <permalink|id поста>.', 1, 'usage');
+  return id;
+}
+
+// Чтение треда целиком, по возрастанию времени: только GET, в чат ничего не пишет.
+async function thread(ctx, [ref]) {
+  const mm = ctx.mm();
+  const { order = [], posts = {} } = await mm.thread(postIdFrom(ref));
+  const list = order.map((id) => posts[id]).filter(Boolean).sort((a, b) => a.create_at - b.create_at);
+  const userIds = [...new Set(list.map((p) => p.user_id))];
+  const users = Object.fromEntries((userIds.length ? await mm.usersByIds(userIds) : []).map((u) => [u.id, u.username]));
+  const messages = list.map((p) => ({
+    id: p.id,
+    at: new Date(p.create_at).toISOString(),
+    user: users[p.user_id] ?? p.user_id,
+    text: p.message ?? '',
+    files: (p.metadata?.files ?? []).map((f) => f.name),
+  }));
+  return { ok: true, root_id: list[0]?.root_id || list[0]?.id || '', messages, total: messages.length };
+}
+
 // Запись в общий чат: как и все записи в харнессе — dry-run показывает, подтверждение спрашивает.
 async function send(ctx, { id, scenario }, text, opts) {
   if (opts.dryRun) return { ok: true, dry_run: true, channel: id, scenario, text };
@@ -173,6 +198,12 @@ async function send(ctx, { id, scenario }, text, opts) {
 }
 
 function render(r) {
+  if (r.messages) {
+    return void console.log(r.messages.map((m) => {
+      const files = m.files.length ? `\n📎 ${m.files.join(', ')}` : '';
+      return `— ${m.at.slice(0, 16).replace('T', ' ')} ${m.user}\n${m.text}${files}`;
+    }).join('\n\n'));
+  }
   if (r.user) return void console.log(`✅ ${r.user.username}${r.user.email ? ` <${r.user.email}>` : ''}${r.saved ? ' — токен в keychain' : ''}`);
   if (r.channels) {
     if (!r.total) return void console.log('Ничего не нашлось.');
