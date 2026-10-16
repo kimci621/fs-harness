@@ -1165,7 +1165,7 @@ export function App({ ctx, opts }) {
     <${Box} flexDirection="column" width=${columns} height=${height}>
       <${Box} justifyContent="space-between" flexShrink=${0}>
         <${Box} minWidth=${0}>
-          <${Text} bold color="cyan">fs-harness · ${state.project || ctx.repo}<//>
+          <${Text} bold color="cyan">fs-harness · ${state.project || ctx.repo}${ctx.cfg?.agent ? ` · агент: ${ctx.cfg.agent}` : ''}<//>
           ${state.busy.length
             ? html`<${Text} color="yellow" wrap="truncate-end">  <${Spinner} type="dots" /> ${busyText(state.busy, now)}…<//>`
             : null}
