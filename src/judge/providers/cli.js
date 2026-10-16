@@ -27,7 +27,8 @@ export function createCliProvider(profile, cfg) {
 
       // Задание уходит в stdin: дифф в приёмке бывает в сотни килобайт, argv столько не держит.
       // Флаги профиля агента не берём: у судьи свой набор, и --restricted с ними конфликтует.
-      const run = spawnAgent({ bin, args, input: user, cwd: profile.cwd, env: agent ? { ...process.env, ...agent.env } : undefined, signal });
+      const env = { ...process.env, CLAUDE_ROUTER_OFF: '1', ...(agent ? agent.env : {}) };
+      const run = spawnAgent({ bin, args, input: user, cwd: profile.cwd, env, signal });
       let resultEnvelope = null;
       run.events.on((ev) => {
         if (ev.t !== 'log') return;
