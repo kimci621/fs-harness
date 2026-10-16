@@ -19,15 +19,15 @@ import {
   escapeHtml, formatMRTelegram, formatMRCard, formatJobsTelegram,
   formatCommentsTelegram, formatTasksListTelegram, formatTaskCardTelegram,
   formatStatusTelegram, formatWatchTelegram, formatHelpTelegram,
-  findFixButton, formatResolveAllTelegram,
+  findFixButton, formatResolveAllTelegram, BOT_COMMANDS, tgCall,
 } from '../tgbot.js';
 import { cmdResolveAll } from './resolve-all.js';
+import { runQaDeploy } from './qa-bot.js';
 import { listLocks, lockKey } from '../locks.js';
 import { cmdMRS, anyFilter } from './mrs.js';
 import { cmdMR } from './mr.js';
 import { cmdJobs } from './jobs.js';
 import { cmdMRComments } from './mr-comments.js';
-import { cmdDeploy } from './deploy.js';
 import { cmdJira } from './jira.js';
 import { cmdTask } from './task.js';
 import { cmdWatch, sleepFor } from './watch.js';
@@ -119,6 +119,14 @@ export async function cmdBot(opts = {}, deps = {}) {
 
   let cycle = 0;
   log(`${stamp()} бот: long-polling, allowlist ${cfg.telegram.allowed_user_ids.join(', ')}`);
+
+  // Регистрируем меню «/»: не критично, ошибка не мешает старту.
+  try {
+    await tgCall(target.token, 'setMyCommands', { commands: BOT_COMMANDS }, { fetchImpl });
+  } catch (e) {
+    log(`${stamp()} setMyCommands не прошёл: ${e.message}`);
+  }
+
   try {
     while (!stopped && cycle < cycles) {
       cycle++;
@@ -187,7 +195,7 @@ async function handleOne(u, d) {
   if (parsed.kind === 'ignored') return;
 
   if (parsed.kind === 'command') {
-    await runCommand(parsed, { c, t, sayTo, ctxFor, commands, log, fire, runsDir, fetchImpl, spawnAgentImpl, activeAgents });
+    await runCommand(parsed, { c, t, sayTo, ctxFor, commands, log, fire, runsDir, fetchImpl, env: d.env, loadCfg: d.loadCfg, spawnAgentImpl, activeAgents });
     return;
   }
 
@@ -287,7 +295,7 @@ async function runActionViaBot(actionName, query, d, parsed) {
 }
 
 async function runCommand(parsed, d) {
-  const { c, t, sayTo, ctxFor, commands, log, fire, runsDir, fetchImpl } = d;
+  const { c, t, sayTo, ctxFor, commands, log, fire, runsDir, fetchImpl, env, loadCfg } = d;
   const { name, args, chatId } = parsed;
   const reply = (text) => sayTo(chatId, text);
 
@@ -358,24 +366,38 @@ async function runCommand(parsed, d) {
     }
 
     if (name === 'deploy') {
-      const [query, slotStr] = args;
+      // /deploy [be|backend] <номер|ветка> [слот]
+      let backend = false;
+      let rest = args;
+      if (args[0] && /^(be|backend|api)$/i.test(args[0])) {
+        backend = true;
+        rest = args.slice(1);
+      }
+      const [query, slotStr] = rest;
       if (!query) {
-        await reply('Использование: /deploy <номер|ветка> [слот]');
+        await reply('Использование: /deploy <номер|ветка> [слот] или /deploy be <номер|ветка> [слот] — бэкенд');
         return;
       }
-      const slot = slotStr ? parseInt(slotStr, 10) : 1;
-      await reply(`🚀 Запускаю деплой <b>${escapeHtml(query)}</b> (слот ${slot})…`);
+      let slot = 1;
+      if (slotStr != null) {
+        if (!/^\d+$/.test(slotStr) || Number(slotStr) < 1 || Number(slotStr) > 10) {
+          await reply('Слот — число от 1 до 10 (например, 3 → dev3).');
+          return;
+        }
+        slot = Number(slotStr);
+      }
+      const label = backend ? 'бэкенда' : 'фронта';
+      await reply(`🚀 Запускаю деплой ${label}: <b>${escapeHtml(query)}</b> (слот ${slot})…`);
       fire(async () => {
         try {
-          const ctx = ctxFor();
           if (commands.deploy) {
-            await commands.deploy(query, slot);
+            await commands.deploy(query, slot, backend);
           } else {
-            await cmdDeploy(ctx.g, ctx.repo, [query, slot], { asObject: true, quiet: true, yes: true });
+            await runQaDeploy({ query, slot, backend, env, loadCfg });
           }
-          await sayTo(chatId, `✅ Деплой <b>${escapeHtml(query)}</b> (слот ${slot}) успешно завершён!`);
+          await sayTo(chatId, `✅ Деплой ${label} <b>${escapeHtml(query)}</b> (слот ${slot}) успешно завершён!`);
         } catch (e) {
-          await sayTo(chatId, `❌ Деплой <b>${escapeHtml(query)}</b> упал: ${escapeHtml(e.message)}`);
+          await sayTo(chatId, `❌ Деплой ${label} <b>${escapeHtml(query)}</b> упал: ${escapeHtml(e.message)}`);
         }
       });
       return;

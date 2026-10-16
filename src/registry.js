@@ -43,6 +43,7 @@ import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdConfig } from './config-cmd.js';
 import { CliError } from './errors.js';
 import { cmdUp } from './commands/up.js';
+import { cmdQaBot } from './commands/qa-bot.js';
 
 // Единый реестр команд — single source of truth для CLI и MCP.
 // Добавил запись сюда → команда появляется в dispatch, help, agent-guide и MCP tools/list.
@@ -513,6 +514,13 @@ export const COMMANDS = [
     description: 'Бот и демон watch на переднем плане одной командой; токен Telegram из ~/.tg_fs_harness_bot, Ctrl+C гасит обоих',
     example: 'fsh up',
     run: (ctx, args, opts) => cmdUp(opts),
+  },
+  {
+    name: 'qa-bot',
+    usage: 'qa-bot [--token <tok>] [--tag <tag>]',
+    description: 'Telegram-бот для тестировщика (QA): контекст задачи Jira, ответы по коду и флагам через agy, тег при багах',
+    example: 'fsh qa-bot\n  fsh qa-bot --tag @amir_ltpf',
+    run: (ctx, args, opts) => cmdQaBot(opts),
   },
   {
     name: 'auto',

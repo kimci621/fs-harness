@@ -93,6 +93,27 @@ export async function sendMessage(token, chatId, text, { fetchImpl = fetch, sign
   }
 }
 
+export async function editMessageText(token, chatId, messageId, text, { fetchImpl = fetch, signal, parseMode = 'HTML' } = {}) {
+  const body = { chat_id: chatId, message_id: messageId, text };
+  if (parseMode) body.parse_mode = parseMode;
+  try {
+    return await tgCall(token, 'editMessageText', body, { fetchImpl, signal });
+  } catch (err) {
+    if (parseMode && /can't parse entities/i.test(err.message)) {
+      return await tgCall(token, 'editMessageText', { chat_id: chatId, message_id: messageId, text: stripHtml(text) }, { fetchImpl, signal });
+    }
+    throw err;
+  }
+}
+
+export async function deleteMessage(token, chatId, messageId, { fetchImpl = fetch, signal } = {}) {
+  try {
+    return await tgCall(token, 'deleteMessage', { chat_id: chatId, message_id: messageId }, { fetchImpl, signal });
+  } catch {
+    return null;
+  }
+}
+
 // approvalSink движка: структурированный текст с вердиктом + три кнопки.
 export async function sendApprovalRequest({ cfg, run, meta, verdict, nonce, fetchImpl = fetch, say = () => {}, runsRoot } = {}) {
   const target = getTelegramTarget(cfg);
@@ -411,6 +432,27 @@ export function formatWatchTelegram(r) {
   return `👁 <b>Watcher — MR с событиями (${events.length}):</b>\n\n${lines.join('\n')}`;
 }
 
+// Меню команд основного бота (автодополнение «/» в Telegram): регистрируется при старте.
+export const BOT_COMMANDS = [
+  { command: 'mrs', description: 'Список открытых MR (mine, rev, draft, failed, conflict)' },
+  { command: 'mr', description: 'Карточка MR: /mr <номер|ветка>' },
+  { command: 'jobs', description: 'Джобы пайплайна MR' },
+  { command: 'comments', description: 'Комментарии и треды MR' },
+  { command: 'deploy', description: 'Деплой MR на dev-стенд: /deploy [be] <mr|ветка> [слот]' },
+  { command: 'tasks', description: 'Мои открытые задачи в Jira' },
+  { command: 'task', description: 'Задача: start, push, submit, move, comment' },
+  { command: 'review', description: 'AI код-ревью MR' },
+  { command: 'conflict', description: 'Разрешить конфликты MR' },
+  { command: 'ci_fix', description: 'Починить упавший CI' },
+  { command: 'implement', description: 'Реализовать задачу Jira' },
+  { command: 'analyze', description: 'Разобрать задачу Jira' },
+  { command: 'agent', description: 'Автономный агент: /agent [профиль] <задача>' },
+  { command: 'run', description: 'Запустить действие: /run <действие> <цель>' },
+  { command: 'watch', description: 'Проверить изменения в репозитории' },
+  { command: 'status', description: 'Статус очереди и последних ранов' },
+  { command: 'help', description: 'Справка' },
+];
+
 // Справка по командам (/help)
 export function formatHelpTelegram() {
   return [
@@ -422,7 +464,7 @@ export function formatHelpTelegram() {
     '• /mr &lt;номер|ветка&gt; — подробная карточка MR',
     '• /jobs &lt;номер|ветка&gt; — джобы пайплайна',
     '• /comments &lt;номер|ветка&gt; — комментарии и треды',
-    '• /deploy &lt;номер|ветка&gt; [слот] — задеплоить MR (dev / dev2..10)',
+    '• /deploy [be] &lt;номер|ветка&gt; [слот] — задеплой MR (dev / dev2..10; be — бэкенд)',
     '',
     '<b>Работа с задачами (Jira & Task):</b>',
     '• /tasks — мои открытые задачи в Jira',
