@@ -164,6 +164,25 @@ test('cmdDeploy: buildJob null → дефолт build_image', async () => {
   assert.ok(calls.some((c) => c[0] === 'getJobs'));
 });
 
+test('cmdDeploy: играет только build и deploy, deploy_db_* не трогает', async () => {
+  const started = [];
+  const jobs = [
+    { id: 1, name: 'docker-build', stage: 'build', status: 'manual', web_url: 'u1' },
+    { id: 2, name: 'deploy_db_dev_small: [dev2]', stage: 'update_db', status: 'manual', web_url: 'u2' },
+    { id: 3, name: 'deploy_dev2', stage: 'deploy_dev', status: 'manual', web_url: 'u3' },
+  ];
+  const byId = new Map(jobs.map((j) => [j.id, j]));
+  const g = {
+    getMR: async () => ({ iid: 1, sha: 'abc', source_branch: 'feature/x', target_branch: 'dev', head_pipeline: { id: 9, sha: 'abc' } }),
+    listOpenMRs: async () => [],
+    getJobs: async () => [...jobs],
+    playJob: async (_r, jid) => { started.push(jid); byId.get(jid).status = 'success'; return { id: jid, status: 'pending' }; },
+    retryJob: async (_r, jid) => { started.push(jid); return { id: jid, status: 'pending' }; },
+  };
+  await cmdDeploy(g, 'r/repo', ['1', '2'], { buildJob: 'docker-build', migrateJob: 'deploy_db_dev_small: [dev{slot}]', intervalMs: 1, asObject: true, rebuild: true });
+  assert.deepEqual(started, [1, 3], 'перезаливка базы (deploy_db_*) не должна запускаться');
+});
+
 test('waitJob: терминальный статус возвращает джобу, таймаут — CliError с кодом', async () => {
   const job = (status) => ({ id: 9, name: 'build_image', stage: 'build', status });
   const ticks = [];

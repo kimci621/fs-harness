@@ -107,6 +107,9 @@ test('precheck: нет пайплайна или нет упавших джоб 
 
   const allowed = await a.precheck(fixture({ jobs: [{ id: 1, name: 'flaky', status: 'failed', allow_failure: true }] }));
   assert.equal(allowed.skip, true, 'allow_failure не считается падением');
+
+  const db = await a.precheck(fixture({ jobs: [{ id: 1, name: 'deploy_db_dev_small: [dev2]', status: 'failed' }] }));
+  assert.equal(db.skip, true, 'упавшую перезаливку базы ci-fix не перезапускает');
 });
 
 test('precheck: устаревший пайплайн — skip, он про прошлый коммит', async () => {

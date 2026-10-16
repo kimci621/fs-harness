@@ -7,6 +7,7 @@ import { makeLogger, finish, jobJSON } from '../output.js';
 // fsh deploy <mr|ветка> [N]
 // build → ждём success → deploy_dev[ N] → ждём итог. --rebuild: перезапустить даже success.
 // --dry-run: показать план без запусков.
+// Других джоб не трогаем: deploy_db_* на бэкенде перезаливает базу стенда.
 export async function cmdDeploy(g, repo, args, { json, buildJob, intervalMs, rebuild = false, dryRun = false, asObject, quiet = false, onTick } = {}) {
   const [mrQuery, n] = args;
   if (!mrQuery) throw new CliError('Использование: fsh deploy <mr|ветка> [N]', 1, 'usage');
