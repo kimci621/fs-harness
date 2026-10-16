@@ -64,9 +64,8 @@ export function failure(err, runsDir) {
   return { ...out, runId: err.run, phase, hint };
 }
 
-export function mmText(target, sync, threads) {
+export function mmText(threads) {
   const parts = [];
-  if (sync.status === 'done') parts.push(`ветка обновлена от ${target} (${String(sync.head_sha ?? '').slice(0, 8)})`);
   if (threads.status === 'done') {
     parts.push(`отвечено тредов ревью: ${threads.replied.length}` + (threads.commits_ahead
       ? `, правки: ${threads.commits_ahead} коммит(ов), HEAD ${String(threads.head_sha ?? '').slice(0, 8)}`
@@ -112,12 +111,13 @@ export async function processMR(c, env) {
     }
 
     let mm = { status: 'not_needed' };
-    if (sync.status === 'done' || (threads.status === 'done' && (threads.replied.length || threads.commits_ahead))) {
+    // Синхронизация от target — не новость для чата: реплика только за работу с тредами.
+    if (threads.status === 'done' && (threads.replied.length || threads.commits_ahead)) {
       const key = keyFromBranch(c.branch);
       if (!key) mm = { status: 'no_key' };
       else {
         try {
-          await env.mm(env.ctx, ['reply', key, mmText(c.target, sync, threads)], { asObject: true, yes: true });
+          await env.mm(env.ctx, ['reply', key, mmText(threads)], { asObject: true, yes: true });
           mm = { status: 'sent', key };
         } catch (err) {
           mm = { status: err.code === 'not_found' ? 'not_found' : 'failed', key, error: err.message };

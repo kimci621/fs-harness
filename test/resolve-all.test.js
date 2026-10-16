@@ -78,7 +78,7 @@ test('resolve-all: внутри MR sync строго до threads, в MM одн�
   assert.deepEqual([first.sync.status, first.sync.runId, first.threads.status, first.threads.replied, first.mm.status], ['done', 'c1', 'done', ['d1'], 'sent']);
   assert.equal(posts.length, 4);
   assert.equal(posts[0][0], 'reply');
-  assert.match(posts.find((p) => p[1] === 'FD-1')[2], /обновлена от dev.*отвечено тредов ревью: 1/);
+  assert.match(posts.find((p) => p[1] === 'FD-1')[2], /Отвечено тредов ревью: 1/);
 });
 
 test('resolve-all: падение одного MR не валит остальные, в отчёте runId и подсказка', async () => {
@@ -96,14 +96,15 @@ test('resolve-all: падение одного MR не валит остальн
   assert.equal(two.mm.status, 'not_needed');
 });
 
-test('resolve-all: MM not_found — пометка в отчёте, MR не падает', async () => {
+test('resolve-all: MM not_found — пометка в отчёте, MR не падает; sync без тредов в MM не пишет', async () => {
   const runAction = async (spec, c, [iid]) => (spec.name === 'conflict'
     ? { ok: true, run: `c${iid}`, head_sha: 'abcdef12' }
     : { ok: true, run: `t${iid}`, replied: ['d1'], commits_ahead: 0, head_sha: 'x' });
   const mm = async () => { throw new CliError('нет поста', 1, 'not_found'); };
   const res = await cmdResolveAll(ctx(), { yes: true, asObject: true }, { probe, runAction, mm, locksRoot: locksRoot() });
   assert.equal(res.ok, true);
-  assert.ok(res.mrs.every((m) => m.mm.status === 'not_found'));
+  assert.equal(res.mrs.find((m) => m.iid === 1).mm.status, 'not_found');
+  assert.ok(res.mrs.filter((m) => m.iid !== 1).every((m) => m.mm.status === 'not_needed'));
 });
 
 test('resolve-all: пропущенные действия не зовут MM', async () => {
