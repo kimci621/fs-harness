@@ -1,5 +1,5 @@
-// fsh up — бот и демон watch на переднем плане одной командой, токен Telegram из файла.
-// Ctrl+C гасит обоих; упал один — гасим второго, чтобы не остаться с половиной.
+// fsh up — боты и демон watch на переднем плане одной командой, токены Telegram из файлов.
+// Ctrl+C гасит всех; упал один — гасим остальных, чтобы не остаться с половиной.
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
@@ -7,11 +7,13 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { CliError } from '../errors.js';
 
 export const TOKEN_FILE = path.join(homedir(), '.tg_fs_harness_bot');
+export const QA_TOKEN_FILE = path.join(homedir(), '.tg_qa_bot');
 
 export function cmdUp(opts = {}, deps = {}) {
   const {
     env = process.env,
     tokenFile = TOKEN_FILE,
+    qaTokenFile = QA_TOKEN_FILE,
     spawn = nodeSpawn,
     argv = [process.execPath, process.argv[1]],
     onSignal = (sig, fn) => process.on(sig, fn),
@@ -25,10 +27,26 @@ export function cmdUp(opts = {}, deps = {}) {
     }
     token = readFileSync(tokenFile, 'utf8').trim();
   }
+
+  let qaToken = env.FS_HARNESS_QA_TELEGRAM;
+  if (!qaToken && existsSync(qaTokenFile)) {
+    try { qaToken = readFileSync(qaTokenFile, 'utf8').trim(); } catch {}
+  }
+
   const childEnv = { ...env, FS_HARNESS_TELEGRAM: token };
+  if (qaToken) {
+    childEnv.FS_HARNESS_QA_TELEGRAM = qaToken;
+  }
+
+  const commandList = [['bot'], ['watch', '--daemon']];
+  if (qaToken) {
+    commandList.push(['qa-bot']);
+  } else {
+    log(`⚠️  fsh up: QA-бот пропущен — нет ${qaTokenFile} или FS_HARNESS_QA_TELEGRAM. Чтобы запускать и QA-бота, положи токен нового бота в ${qaTokenFile}.`);
+  }
 
   const [node, script] = argv;
-  const children = [['bot'], ['watch', '--daemon']].map((args) => ({
+  const children = commandList.map((args) => ({
     name: args.join(' '),
     proc: spawn(node, [script, ...args], { env: childEnv, stdio: 'inherit' }),
   }));
@@ -53,7 +71,7 @@ export function cmdUp(opts = {}, deps = {}) {
           stopAll();
         }
         if (--left === 0) {
-          if (failed) reject(new CliError('fsh up: процесс упал, остановлены оба.', 1, 'child_failed'));
+          if (failed) reject(new CliError('fsh up: процесс упал, остановлены все.', 1, 'child_failed'));
           else resolve({ ok: true });
         }
       });

@@ -269,11 +269,12 @@ test('bot: команды MR (/mr, /jobs, /comments, /deploy)', async () => {
     { update_id: 41, message: { text: '/jobs 123', chat: { id: 5 }, from: { id: MY_ID } } },
     { update_id: 42, message: { text: '/comments 123', chat: { id: 5 }, from: { id: MY_ID } } },
     { update_id: 43, message: { text: '/deploy 123 2', chat: { id: 5 }, from: { id: MY_ID } } },
+    { update_id: 44, message: { text: '/deploy be 77 3', chat: { id: 5 }, from: { id: MY_ID } } },
   ]);
   f.pushUpdates([]);
   f.setResult('sendMessage', { message_id: 10 });
 
-  let deployCalled = null;
+  const deployCalls = [];
   await cmdBot({}, {
     env: {},
     loadCfg: () => cfgBase(),
@@ -305,8 +306,8 @@ test('bot: команды MR (/mr, /jobs, /comments, /deploy)', async () => {
         resolved: 0,
         discussions: [{ notes: [{ author: 'bob', body: 'Поправь стиль' }] }],
       }),
-      deploy: async (q, slot) => {
-        deployCalled = { q, slot };
+      deploy: async (q, slot, backend) => {
+        deployCalls.push({ q, slot, backend });
       },
     },
   });
@@ -316,7 +317,14 @@ test('bot: команды MR (/mr, /jobs, /comments, /deploy)', async () => {
   assert.ok(sends.some((s) => s.body.text.includes('unit_tests')));
   assert.ok(sends.some((s) => s.body.text.includes('Поправь стиль')));
   assert.ok(sends.some((s) => s.body.text.includes('Запускаю деплой')));
-  assert.deepEqual(deployCalled, { q: '123', slot: 2 });
+  assert.ok(sends.some((s) => s.body.text.includes('деплой бэкенда')));
+  assert.deepEqual(deployCalls, [
+    { q: '123', slot: 2, backend: false },
+    { q: '77', slot: 3, backend: true },
+  ]);
+  const menu = f.log.find((x) => x.method === 'setMyCommands');
+  assert.ok(menu, 'бот должен регистрировать меню команд при старте');
+  assert.ok(menu.body.commands.some((c) => c.command === 'deploy'));
   rmSync(localState, { recursive: true, force: true });
 });
 
