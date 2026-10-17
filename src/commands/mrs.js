@@ -48,6 +48,10 @@ export async function cmdMRS(g, repo, { json, asObject, ...filters } = {}) {
   if (!mrs.length) {
     const result = { ok: true, mrs: [] };
     if (asObject) return result;
+    if (json) {
+      console.log('[]');
+      return result;
+    }
     console.log(anyFilter(filters) ? 'Под фильтры не попал ни один MR.' : `В ${repo} нет открытых MR.`);
     return result;
   }
