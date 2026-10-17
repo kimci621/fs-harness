@@ -12,7 +12,8 @@ const DISCUSSIONS = [
   },
   {
     id: 'a2', resolvable: true, resolved: false,
-    notes: [{ id: 3, author: { username: 'u1' }, created_at: '2026-08-14T11:00:00Z', body: 'поправь', system: false }],
+    notes: [{ id: 3, author: { username: 'u1' }, created_at: '2026-08-14T11:00:00Z', body: 'поправь', system: false,
+      position: { new_path: 'src/a.js', new_line: null, old_path: 'src/a.js', old_line: 12 } }],
   },
   {
     id: 'a3', resolvable: false, resolved: false, individual_note: true,
@@ -53,4 +54,10 @@ test('mr-comments: в JSON у треда есть resolvable, обычный к�
   const g = { getMR: async () => ({ iid: 7 }), getDiscussions: async () => DISCUSSIONS };
   const r = await cmdMRComments(g, 'repo', ['7'], { open: true, asObject: true });
   assert.deepEqual(r.discussions.map((d) => [d.id, d.state, d.resolvable]), [['a2', 'open', true], ['a3', 'open', false]]);
+});
+
+test('mr-comments: в JSON у треда file и line из позиции, у обычного коммента null', async () => {
+  const g = { getMR: async () => ({ iid: 7 }), getDiscussions: async () => DISCUSSIONS };
+  const r = await cmdMRComments(g, 'repo', ['7'], { open: true, asObject: true });
+  assert.deepEqual(r.discussions.map((d) => [d.id, d.file, d.line]), [['a2', 'src/a.js', 12], ['a3', null, null]]);
 });

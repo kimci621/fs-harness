@@ -19,8 +19,12 @@ export function classifyDiscussions(discussions, { resolved = false, open = fals
       system: Boolean(n.system),
     }));
     const humanNotes = notes.filter((n) => !n.system);
+    // Тред на строке диффа: позиция у первой заметки. Удалённая строка есть только в old_*.
+    const pos = d.notes?.[0]?.position;
     return {
       id: d.id,
+      file: pos ? (pos.new_path ?? pos.old_path ?? null) : null,
+      line: pos ? (pos.new_line ?? pos.old_line ?? null) : null,
       resolvable: Boolean(d.resolvable),
       resolved: Boolean(d.resolved),
       notes,
@@ -67,6 +71,8 @@ export async function cmdMRComments(g, repo, args, { json, resolved = false, ope
       state: d.resolvable ? (d.resolved ? 'resolved' : 'open') : 'open',
       // false у обычных комментов: их нельзя закрыть, хотя в --open они попадают
       resolvable: d.resolvable === true,
+      file: d.file,
+      line: d.line,
       notes: d.notes,
     })),
   };
