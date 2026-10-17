@@ -46,6 +46,7 @@ const brief = (issue) => ({
   type: issue.fields?.issuetype?.name ?? '—',
   priority: issue.fields?.priority?.name ?? '—',
   updated: issue.fields?.updated ?? null,
+  parent: issue.fields?.parent ? { key: issue.fields.parent.key, summary: issue.fields.parent.fields?.summary ?? '' } : null,
 });
 
 // Спринт по имени: точное совпадение, потом вхождение. Неоднозначность — ошибка со списком.
@@ -96,7 +97,7 @@ export async function cmdJira(ctx, args, opts = {}) {
           : query === 'delete'
             ? await del(j, rest, ctx, opts)
           : !query || query === 'mine'
-            ? await mine(j, { ...opts, componentField: ctx.cfg.jira?.componentField })
+            ? await mine(j, { ...opts, componentField: ctx.cfg.jira?.componentField }, ctx)
             : await one(j, query, ctx);
 
   if (asObject) return result;
@@ -105,10 +106,10 @@ export async function cmdJira(ctx, args, opts = {}) {
   return result;
 }
 
-async function mine(j, filters) {
+async function mine(j, filters, ctx) {
   const jql = buildJql(filters);
-  const { issues } = await j.searchJql({ jql });
-  return { ok: true, jql, issues: issues.map(brief) };
+  const { issues } = await j.searchJql({ jql, fields: ['summary', 'status', 'updated', 'issuetype', 'priority', 'parent'] });
+  return { ok: true, jql, issues: issues.map((i) => ({ ...brief(i), url: issueUrl(ctx, i.key) })) };
 }
 
 // Единственная запись в Jira. Спрашивает подтверждение и проверяет статус чтением.
@@ -366,6 +367,8 @@ async function one(j, key, ctx) {
   }
   const issue = await j.issue(key);
   const { comments = [] } = (await j.comments(key)) ?? {};
+  // Дети эпика в fields.subtasks не попадают, parent = KEY находит и их, и сабтаски.
+  const { issues: children = [] } = await j.searchJql({ jql: `parent = ${key} ORDER BY status`, fields: ['summary', 'status'], max: 100 });
   return {
     ok: true,
     issue: {
@@ -373,6 +376,7 @@ async function one(j, key, ctx) {
       description: issue.fields?.description ?? '',
       assignee: issue.fields?.assignee?.displayName ?? null,
       reporter: issue.fields?.reporter?.displayName ?? null,
+      subtasks: children.map((t) => ({ key: t.key, summary: t.fields?.summary ?? '', status: t.fields?.status?.name ?? '—' })),
       url: issueUrl(ctx, key),
     },
     comments: comments.map((c) => ({
