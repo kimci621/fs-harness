@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyDiscussions } from '../src/commands/mr-comments.js';
+import { classifyDiscussions, cmdMRComments } from '../src/commands/mr-comments.js';
 
 const DISCUSSIONS = [
   {
@@ -47,4 +47,10 @@ test('mr-comments: пустой список не падает', () => {
   const r = classifyDiscussions([]);
   assert.equal(r.items.length, 0);
   assert.equal(r.total, 0);
+});
+
+test('mr-comments: в JSON у треда есть resolvable, обычный коммент - false', async () => {
+  const g = { getMR: async () => ({ iid: 7 }), getDiscussions: async () => DISCUSSIONS };
+  const r = await cmdMRComments(g, 'repo', ['7'], { open: true, asObject: true });
+  assert.deepEqual(r.discussions.map((d) => [d.id, d.state, d.resolvable]), [['a2', 'open', true], ['a3', 'open', false]]);
 });
