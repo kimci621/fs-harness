@@ -65,6 +65,8 @@ export async function cmdMRComments(g, repo, args, { json, resolved = false, ope
     discussions: items.map((d) => ({
       id: d.id,
       state: d.resolvable ? (d.resolved ? 'resolved' : 'open') : 'open',
+      // false у обычных комментов: их нельзя закрыть, хотя в --open они попадают
+      resolvable: d.resolvable === true,
       notes: d.notes,
     })),
   };
