@@ -138,6 +138,16 @@ test('task push: уже открытый MR не дублируется', async 
   assert.deepEqual([res.mr_created, res.mr.iid, created.length], [false, 7, 0]);
 });
 
+test('task push --draft: новый MR открывается с префиксом Draft:, существующий не трогается', async () => {
+  const created = [];
+  const res = await cmdTask(ctxWith({ created }), ['push'], { asObject: true, yes: true, draft: true });
+  assert.equal(created[0].title, 'Draft: FD-1: Починить');
+  assert.equal(res.mr.title, 'Draft: FD-1: Починить');
+  const old = [];
+  await cmdTask(ctxWith({ mrs: [{ iid: 7, title: 'старый', web_url: 'https://gl/mr/7' }], created: old }), ['push'], { asObject: true, yes: true, draft: true });
+  assert.equal(old.length, 0);
+});
+
 test('task push: с защищённой ветки и без коммитов — отказ', async () => {
   await assert.rejects(
     () => cmdTask(ctxWith(), ['push'], { asObject: true, yes: true, target: 'feature/FD-1' }),

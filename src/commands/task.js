@@ -107,7 +107,7 @@ async function push(ctx, [maybeKey], opts) {
   const fields = existing ? null : {
     source_branch: branch,
     target_branch: target,
-    title,
+    title: opts.draft ? `Draft: ${title}` : title,
     description: key ? `${issueUrl(ctx, key)}` : '',
     remove_source_branch: true,
   };

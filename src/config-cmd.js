@@ -22,6 +22,12 @@ export function cmdConfig(args, opts = {}) {
     return 0;
   }
   if (sub === 'show') {
+    if (opts.json || opts.asObject) {
+      const result = showJSON(opts);
+      if (opts.asObject) return result;
+      finish(true, result);
+      return 0;
+    }
     console.log(show(opts));
     return 0;
   }
@@ -69,6 +75,19 @@ function handleAgent(rawName, opts = {}) {
   }
   console.log(`Агент изменён на "${name}".`);
   return 0;
+}
+
+// Белый список: в конфиге живые секреты (токены ботов, email Jira), в вывод они не идут.
+// repo и host у проекта часто не в файле, а берутся из git remote: поэтому грузим каждый проект.
+function showJSON({ project, file }) {
+  const env = { ...process.env, GL_HELPER_REPO: '', GL_HELPER_HOST: '' };
+  const cfg = loadConfig(env, { project, file });
+  const projects = {};
+  for (const name of Object.keys(cfg.projects)) {
+    const c = loadConfig(env, { project: name, file });
+    projects[name] = { repo: c.repo, host: c.host, dir: c.projectDir, targetBranch: c.targetBranch, branchPattern: c.branchPattern };
+  }
+  return { activeProject: cfg.activeProject, projects };
 }
 
 function show({ project }) {

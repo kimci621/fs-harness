@@ -129,6 +129,24 @@ test('setConfigAgent: обновляет v1 и v2 конфиг', () => {
   });
 });
 
+test('cmdConfig show --json: только белый список полей, секреты не попадают', () => {
+  const secret = {
+    ...V2,
+    telegram: { bot_token: 'SECRET-TG' },
+    projects: { app: { ...V2.projects.app, targetBranch: 'dev', branchPattern: 'feature/{key}', jira: { baseUrl: 'https://j.example', email: 'me@e.st' } } },
+  };
+  withFile(secret, (file) => {
+    const out = cmdConfig(['show'], { file, json: true, asObject: true });
+    assert.deepEqual(Object.keys(out).sort(), ['activeProject', 'projects']);
+    assert.equal(out.activeProject, 'app');
+    assert.deepEqual(out.projects, { app: { repo: 'group/app', host: 'gitlab.example', dir: '~/app', targetBranch: 'dev', branchPattern: 'feature/{key}' } });
+    // env-подмена repo не должна растекаться на все проекты
+    process.env.GL_HELPER_REPO = 'x/y';
+    try { assert.deepEqual(cmdConfig(['show'], { file, json: true, asObject: true }), out); } finally { delete process.env.GL_HELPER_REPO; }
+    assert.ok(!JSON.stringify(out).includes('SECRET-TG') && !JSON.stringify(out).includes('me@e.st'));
+  });
+});
+
 test('cmdConfig agent: просмотр и смена активного агента', () => {
   withFile(V2, (file) => {
     const list = cmdConfig(['agent'], { file, asObject: true });
