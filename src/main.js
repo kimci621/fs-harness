@@ -35,7 +35,7 @@ const FLAGS_USAGE = `Флаги:
   --target <ветка>        В mrs: только MR в эту целевую ветку; в task push: куда открыть MR
   --label <метка>         В mrs: только с этой меткой
   --search <текст>        В mrs: поиск по названию и описанию
-  --draft / --no-draft    В mrs: только черновики / только готовые
+  --draft / --no-draft    В mrs: только черновики / только готовые; в task push: открыть MR черновиком
   --conflicts             В mrs: только конфликтующие
   --threads               В mrs: только с открытыми тредами
   --pipeline <статус>     В mrs: по статусу пайплайна (failed, success, running, none)
