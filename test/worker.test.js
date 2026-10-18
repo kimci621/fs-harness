@@ -45,21 +45,23 @@ test('takeJob: берёт задание с непустым action и захв�
 test('runWorker: параллельное выполнение и сериализация по локу MR', async () => {
   const qRoot = path.join(tempDir, 'q1');
   const lRoot = path.join(tempDir, 'l1');
+  // разное время постановки: порядок взятия задан, а не зависит от миллисекунд
+  const t0 = Date.now();
 
   // Job 1: MR 1
   enqueue(
     { source: 'gitlab', kind: 'conflict', repo: 'my/repo', mr: 1, sha: 'sha1', action: 'conflict' },
-    { root: qRoot },
+    { root: qRoot, now: t0 + 1 },
   );
   // Job 2: MR 2
   enqueue(
     { source: 'gitlab', kind: 'conflict', repo: 'my/repo', mr: 2, sha: 'sha2', action: 'conflict' },
-    { root: qRoot },
+    { root: qRoot, now: t0 + 2 },
   );
   // Job 3: MR 1 (тот же MR, что у Job 1!)
   enqueue(
     { source: 'gitlab', kind: 'threads', repo: 'my/repo', mr: 1, sha: 'sha3', action: 'threads' },
-    { root: qRoot },
+    { root: qRoot, now: t0 + 3 },
   );
 
   let resolve1, resolve2, resolve3;
