@@ -10,7 +10,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test \"test/*.test.js\""
+    "test": "HOME=$(mktemp -d) node --test \"test/*.test.js\""
   },
   "dependencies": {
     "fuse.js": "^7.5.0",
