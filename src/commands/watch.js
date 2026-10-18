@@ -193,7 +193,7 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
             try {
               const projectCtx = makeCtx(cfg);
               const knownKeys = new Set(listAuto(autoRoot).map((t) => t.key));
-              const res = await projectCtx.jira().searchJql('assignee = currentUser() AND status = "В работе"');
+              const res = await projectCtx.jira().searchJql({ jql: 'assignee = currentUser() AND status = "В работе"' });
               for (const iss of res.issues || []) {
                 if (!knownKeys.has(iss.key)) {
                   log(`${stamp()} ${cfg.repo}: новая задача ${iss.key} «В работе», запускаю автомат…`);

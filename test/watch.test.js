@@ -246,3 +246,31 @@ test('демон: только уведомляет — воркер не зов
   });
   assert.equal(workerRan, false);
 });
+
+test('демон: автостарт ищет задачи «В работе» по JQL и запускает автомат на новых', async () => {
+  const autoRoot = mkdtempSync(path.join(tmpdir(), 'fsh-auto-'));
+  const loadCfg = (env, { project } = {}) => ({
+    projects: { front: {} },
+    repo: 'org/front',
+    watch: { enabled: true, intervalSeconds: 60 },
+    jira: { baseUrl: 'https://jira' },
+    automation: { enabled: true, autoStart: true },
+    judge: { roles: {}, profiles: {} },
+    telegram: {},
+  });
+  const queries = [];
+  const started = [];
+  await cmdWatchDaemon({ autoExecute: true, autoRoot }, {
+    env: {},
+    loadCfg,
+    makeCtx: (cfg) => ({ cfg, repo: cfg.repo, jira: () => ({ searchJql: async (q) => { queries.push(q); return { issues: [{ key: 'FD-7' }] }; } }) }),
+    poll: async () => ({ events: [], notified: 0 }),
+    advanceTaskImpl: async (key) => { started.push(key); return { state: {} }; },
+    sleep: async () => {},
+    cycles: 1,
+    log: () => {},
+  });
+  rmSync(autoRoot, { recursive: true, force: true });
+  assert.match(queries[0]?.jql ?? '', /assignee = currentUser\(\)/);
+  assert.deepEqual(started, ['FD-7']);
+});
