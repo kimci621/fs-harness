@@ -19,7 +19,8 @@ export function takeJob({
   excludeKeys = new Set(),
 } = {}) {
   pruneQueue({ root: queueRoot, now });
-  const jobs = listJobs({ root: queueRoot, now });
+  // listJobs отдаёт новые сверху, а берём старые первыми: иначе свежие задания морят старые голодом
+  const jobs = listJobs({ root: queueRoot, now }).reverse();
 
   for (const job of jobs) {
     if (!job.action) continue;
