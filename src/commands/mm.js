@@ -22,7 +22,7 @@ export async function cmdMM(ctx, args, opts = {}) {
             : sub === 'reply' ? await reply(ctx, rest, opts)
               : sub === 'thread' ? await thread(ctx, rest)
                 : sub === 'react' ? await react(ctx, rest, opts)
-                  : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY> "<текст>"|thread <permalink|id поста>|react <permalink|id поста> <эмодзи>].', 1, 'usage'); })();
+                  : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY|permalink> "<текст>"|thread <permalink|id поста>|react <permalink|id поста> <эмодзи>].', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -137,13 +137,25 @@ export async function postReview(ctx, { iid, mrUrl, key, title }, opts = {}) {
   return send(ctx, resolveChannel(ctx.cfg, opts.channel || 'review'), text, opts);
 }
 
-// Ответ в тред задачи: корень — свой последний пост без root_id в канале сценария, где есть ключ.
-// Это сообщение `fsh mm review`; permalink не нужен, `mm post` отвечать в тред не умеет.
-async function reply(ctx, [key, ...words], opts) {
+// Ответ в тред: по ключу задачи — под свой последний корневой пост с ключом в канале сценария
+// (сообщение `fsh mm review`), по permalink или id поста — в тред этого поста, где бы он ни был.
+async function reply(ctx, [ref, ...words], opts) {
   const text = words.join(' ').trim();
-  if (!ISSUE_KEY.test(key ?? '') || !text) {
-    throw new CliError('Использование: fsh mm reply <KEY> "<текст>".', 1, 'usage');
+  if (!ref || !text) {
+    throw new CliError('Использование: fsh mm reply <KEY|permalink> "<текст>".', 1, 'usage');
   }
+  const { target, scenario, rootId, label } = ISSUE_KEY.test(ref)
+    ? await taskRoot(ctx, ref, opts)
+    : await postRoot(ctx, ref);
+  if (opts.dryRun) return { ok: true, dry_run: true, channel: target, scenario, root_id: rootId, text };
+  if (!opts.yes && !opts.asObject && !confirm(`Ответить в тред ${label}?\n${text}\n[y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  const created = await ctx.mm().post(target, text, { rootId });
+  return { ok: true, channel: target, scenario, root_id: rootId, text, post_id: created?.id ?? null };
+}
+
+async function taskRoot(ctx, key, opts) {
   const { id, scenario } = resolveChannel(ctx.cfg, opts.channel || 'review');
   const mm = ctx.mm();
   const target = await channelId(ctx, id);
@@ -155,18 +167,21 @@ async function reply(ctx, [key, ...words], opts) {
   if (!root) {
     throw new CliError(`В ${scenario || target} нет твоего поста про ${key}: сначала fsh mm review ${key}.`, 1, 'not_found');
   }
-  if (opts.dryRun) return { ok: true, dry_run: true, channel: target, scenario, root_id: root.id, text };
-  if (!opts.yes && !opts.asObject && !confirm(`Ответить в тред ${key} (${scenario || target})?\n${text}\n[y/N] `)) {
-    throw new CliError('Отменено.', 0, 'canceled');
-  }
-  const created = await mm.post(target, text, { rootId: root.id });
-  return { ok: true, channel: target, scenario, root_id: root.id, text, post_id: created?.id ?? null };
+  return { target, scenario, rootId: root.id, label: `${key} (${scenario || target})` };
+}
+
+// Ссылка может указывать на ответ внутри треда — отвечаем в корень, иначе Mattermost отклонит root_id.
+async function postRoot(ctx, ref) {
+  const id = postIdFrom(ref, 'fsh mm reply <KEY|permalink> "<текст>"');
+  const p = await ctx.mm().getPost(id);
+  if (!p) throw new CliError(`Поста ${id} нет или он тебе не виден.`, 1, 'not_found');
+  return { target: p.channel_id, scenario: '', rootId: p.root_id || p.id, label: p.root_id || p.id };
 }
 
 // Permalink вида https://mm/<team>/pl/<id> или сам id поста → id. Остальное — usage.
-export function postIdFrom(ref = '') {
+export function postIdFrom(ref = '', usage = 'fsh mm thread <permalink|id поста>') {
   const id = String(ref).trim().replace(/[?#].*$/, '').split('/').filter(Boolean).pop() ?? '';
-  if (!CHANNEL_ID.test(id)) throw new CliError('Использование: fsh mm thread <permalink|id поста>.', 1, 'usage');
+  if (!CHANNEL_ID.test(id)) throw new CliError(`Использование: ${usage}.`, 1, 'usage');
   return id;
 }
 
@@ -203,7 +218,7 @@ const EMOJI_NAMES = { '✅': 'white_check_mark', '👀': 'eyes', '👍': '+1', '
 
 async function react(ctx, [ref, emoji], opts) {
   if (!ref || !emoji) throw new CliError('Использование: fsh mm react <permalink|id поста> <эмодзи>.', 1, 'usage');
-  const postId = postIdFrom(ref);
+  const postId = postIdFrom(ref, 'fsh mm react <permalink|id поста> <эмодзи>');
   const name = EMOJI_NAMES[emoji] ?? emoji.replace(/^:|:$/g, '');
   if (opts.dryRun) return { ok: true, dry_run: true, post_id: postId, emoji: name };
   const mm = ctx.mm();

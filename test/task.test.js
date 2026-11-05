@@ -127,7 +127,7 @@ test('task push --post: сообщение в Mattermost уходит тольк
   const res = await cmdTask(ctx, ['push'], { asObject: true, yes: true, post: true });
   assert.deepEqual(posts, [{
     channel: 'hn3e14mhebg9jmo5kmnzgbcque',
-    message: 'старый\n• MR !7: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
+    message: 'старый\n• MR: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
   }]);
   assert.equal(res.posted.scenario, 'review');
 });
@@ -180,7 +180,7 @@ test('task submit: снимает черновик, переводит Jira, п�
   assert.deepEqual(res.jira, { from: 'В работе', to: 'Ревью', transition: 'В ревью' });
   assert.deepEqual(posts, [{
     channel: 'hn3e14mhebg9jmo5kmnzgbcque',
-    message: 'FD-1: Починить\n• MR !7: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
+    message: 'FD-1: Починить\n• MR: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
   }]);
 });
 

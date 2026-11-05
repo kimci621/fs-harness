@@ -91,6 +91,9 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
     // Последние посты канала, новые первыми: order — порядок id, posts — сами посты по id.
     channelPosts: (id, { perPage = 200 } = {}) => api(`/channels/${id}/posts?per_page=${perPage}`),
 
+    // Один пост: канал и корень треда для ответа по permalink. Нет или не виден — null.
+    getPost: (postId) => api(`/posts/${postId}`, { allow404: true }),
+
     // Весь тред по id любого его поста: order — id, posts — сами посты по id.
     thread: (postId) => api(`/posts/${postId}/thread`),
 
@@ -126,7 +129,7 @@ export function reviewMessage({ iid, mrUrl, key, issueUrl, title }) {
   const lines = [];
   const cleanTitle = String(title ?? '').replace(/^\s*(draft|wip):\s*/i, '').trim();
   if (cleanTitle) lines.push(cleanTitle);
-  if (iid && mrUrl) lines.push(`• MR !${iid}: ${mrUrl}`);
+  if (iid && mrUrl) lines.push(`• MR: ${mrUrl}`);
   if (key && issueUrl) lines.push(`• Jira ${key} ${issueUrl}`);
   if (!lines.length) throw new CliError('Нечего отправлять: нет ни MR, ни задачи.', 1, 'usage');
   return lines.join('\n');
