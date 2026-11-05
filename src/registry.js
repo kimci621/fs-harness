@@ -252,16 +252,16 @@ export const COMMANDS = [
   },
   {
     name: 'growthbook',
-    usage: 'growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|delete <id>]',
-    description: 'Фича-флаги GrowthBook: список, один флаг, создание, включение/выключение в окружении, удаление',
+    usage: 'growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|set <id> <значение>|delete <id>]',
+    description: 'Фича-флаги GrowthBook: список, один флаг, создание, включение/выключение в окружении, дефолтное значение, удаление',
     example: 'fsh growthbook toggle new-onboarding on --env production',
     run: (ctx, args, opts) => cmdGrowthBook(ctx, args, opts),
     mcp: {
-      description: 'Фича-флаги GrowthBook. list/get — только чтение; create создаёт boolean-флаг, toggle включает или выключает флаг в окружении, delete удаляет флаг необратимо (меняет продакшен-поведение приложения).',
+      description: 'Фича-флаги GrowthBook. list/get — только чтение; create создаёт boolean-флаг, toggle включает или выключает флаг в окружении, set меняет дефолтное значение (из поля default) во всех окружениях, delete удаляет флаг необратимо (меняет продакшен-поведение приложения).',
       inputSchema: {
         type: 'object',
         properties: {
-          sub: { type: 'string', enum: ['list', 'get', 'create', 'toggle', 'delete'] },
+          sub: { type: 'string', enum: ['list', 'get', 'create', 'toggle', 'set', 'delete'] },
           id: { type: 'string', description: 'идентификатор флага' },
           state: { type: 'string', enum: ['on', 'off'] },
           env: { type: 'string', description: 'окружение, дефолт из конфига' },
@@ -269,7 +269,7 @@ export const COMMANDS = [
           default: { type: 'string', description: 'дефолтное значение флага' },
         },
       },
-      call: (ctx, a) => cmdGrowthBook(ctx, [a.sub ?? 'list', a.id, a.state].filter(Boolean), {
+      call: (ctx, a) => cmdGrowthBook(ctx, [a.sub ?? 'list', a.id, a.sub === 'set' ? a.default : a.state].filter((x) => x != null), {
         json: true, asObject: true, yes: true, env: a.env, type: a.type, default: a.default,
       }),
     },

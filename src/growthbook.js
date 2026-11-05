@@ -55,6 +55,9 @@ export function createGrowthBook({ baseUrl, token, fetchImpl = fetch, sleepMs = 
 
     createFeature: (body) => api('/api/v1/features', { method: 'POST', body }).then((r) => r.feature ?? r),
 
+    // Частичная правка: POST, не PUT — так у GrowthBook REST.
+    updateFeature: (id, body) => api(`/api/v1/features/${encodeURIComponent(id)}`, { method: 'POST', body }).then((r) => r.feature ?? r),
+
     // Отдельный эндпоинт, а не PUT: включение флага в окружении требует причины для аудита.
     toggleFeature: (id, environments, reason) =>
       api(`/api/v1/features/${encodeURIComponent(id)}/toggle`, { method: 'POST', body: { reason, environments } }).then((r) => r.feature ?? r),

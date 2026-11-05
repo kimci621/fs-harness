@@ -157,8 +157,9 @@ test('loadQaBotState / saveQaBotState: since и сессии по каналу',
 
 // Фейковый Mattermost: бот qa_bot, личка dm1 с тестировщиком tester, разработчик dev.
 const USERS = { tester: 'u-tester', dev: 'u-dev', stranger: 'u-stranger' };
-function fakeMM(incoming) {
+function fakeMM(incoming, gb = () => assert.fail('GrowthBook не должен вызываться')) {
   const sent = [];
+  const gbCalls = [];
   const patched = [];
   let n = 0;
   const json = (body) => ({ ok: true, status: 200, json: async () => body });
@@ -166,6 +167,11 @@ function fakeMM(incoming) {
     const u = new URL(url);
     const p = u.pathname.replace('/api/v4', '');
     const body = init.body ? JSON.parse(init.body) : null;
+    if (u.host === 'gb.invalid') {
+      const call = { method: init.method || 'GET', path: u.pathname, body };
+      gbCalls.push(call);
+      return json(gb(call));
+    }
     if (p === '/users/me') return json({ id: 'u-bot', username: 'qa_bot' });
     if (p === '/users/usernames') return json(body.filter((x) => USERS[x]).map((x) => ({ id: USERS[x], username: x })));
     if (p === '/users/ids') return json(body.map((id) => ({ id, username: Object.keys(USERS).find((k) => USERS[k] === id) })));
@@ -180,13 +186,13 @@ function fakeMM(incoming) {
     if (p.endsWith('/patch')) { patched.push({ id: p.split('/')[2], ...body }); return json({}); }
     throw new Error(`неожиданный запрос ${init.method || 'GET'} ${p}`);
   };
-  return { fetchImpl, sent, patched };
+  return { fetchImpl, sent, patched, gbCalls };
 }
 
-async function runBot(incoming, { state, exec, deploy, qaBot = { allowed: ['tester'], developer: 'dev' } } = {}) {
+async function runBot(incoming, { state, exec, deploy, gb, qaBot = { allowed: ['tester'], developer: 'dev' } } = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'qa-bot-mm-'));
   saveQaBotState(tmp, state ?? { since: 1000, sessions: {} });
-  const mm = fakeMM(incoming);
+  const mm = fakeMM(incoming, gb);
   const deployCalls = [];
   try {
     const res = await cmdQaBot({ projectDir: '/fake/dir' }, {
@@ -194,10 +200,10 @@ async function runBot(incoming, { state, exec, deploy, qaBot = { allowed: ['test
       fetchImpl: mm.fetchImpl,
       sleepImpl: async () => {},
       stateRoot: tmp,
-      readSecretImpl: (name) => (name === 'mattermost-qa' ? 'bot-token' : null),
+      readSecretImpl: (name) => ({ 'mattermost-qa': 'bot-token', growthbook: 'gb-token' })[name] ?? null,
       execImpl: exec ?? (async () => assert.fail('агент не должен запускаться')),
       deployImpl: async (a) => { deployCalls.push(a); return deploy?.(a) ?? { ok: true, mr: 3319, deploy: { web_url: 'https://gitlab/job/1' } }; },
-      loadCfg: () => ({ mattermost: { baseUrl: 'https://mm.test', qaBot } }),
+      loadCfg: () => ({ mattermost: { baseUrl: 'https://mm.test', qaBot }, growthbook: { baseUrl: 'https://gb.invalid', project: 'prj_test', env: 'production' } }),
       log: () => {},
     });
     return { res, ...mm, deployCalls, state: loadQaBotState(tmp) };
@@ -267,4 +273,43 @@ test('cmdQaBot: баг — «Думаю…» правится на алерт, �
   assert.ok(devAlert, 'алерт в личку разработчику');
   assert.match(devAlert.message, /QA-бот обнаружил баг в задаче FD-8096/);
   assert.equal(r.state.sessions.dm1.sessionId, 'new-sess');
+});
+
+const flag = (over = {}) => ({
+  feature: { id: 'flag', valueType: 'boolean', defaultValue: 'false', environments: { production: { enabled: false }, dev: { enabled: false } }, ...over },
+});
+const say = (message) => [{ id: 'a', user_id: USERS.tester, create_at: 2000, message }];
+
+test('cmdQaBot: !flag on <id> — включает в dev, production и loadtest по умолчанию не трогает', async () => {
+  const r = await runBot(say('!flag on flag'), { gb: () => flag({ environments: { production: { enabled: false }, dev: { enabled: true } } }) });
+  assert.deepEqual(r.gbCalls.map((c) => [c.method, c.path, c.body?.environments]), [['POST', '/api/v1/features/flag/toggle', { dev: true }]]);
+  assert.match(r.sent[0].message, /✅ Флаг `flag`/);
+  assert.match(r.sent[0].message, /dev=on/);
+});
+
+test('cmdQaBot: !flag в production — отказ без запросов в GrowthBook', async () => {
+  const r = await runBot(say('!flag off flag production'));
+  assert.equal(r.gbCalls.length, 0);
+  assert.match(r.sent[0].message, /только в dev, loadtest/);
+});
+
+test('cmdQaBot: !flag set — только если флаг выключен вне dev/loadtest', async () => {
+  const live = await runBot(say('!flag set flag true'), { gb: () => flag({ environments: { production: { enabled: true }, dev: { enabled: true } } }) });
+  assert.equal(live.gbCalls.length, 1, 'только чтение флага');
+  assert.match(live.sent[0].message, /включён в production/);
+  assert.match(live.sent[0].message, /@dev/);
+
+  const r = await runBot(say('!flag set flag true'), { gb: (c) => (c.method === 'POST' ? flag({ defaultValue: 'true' }) : flag()) });
+  assert.deepEqual(r.gbCalls.at(-1), { method: 'POST', path: '/api/v1/features/flag', body: { defaultValue: 'true' } });
+  assert.match(r.sent[0].message, /default `true`/);
+});
+
+test('cmdQaBot: !flag create — флаг включён в dev, ошибка GrowthBook уходит в личку', async () => {
+  const r = await runBot(say('!flag create new-flag string control'), { gb: () => flag({ id: 'new-flag', valueType: 'string', defaultValue: 'control' }) });
+  const { body } = r.gbCalls[0];
+  assert.deepEqual([body.id, body.valueType, body.defaultValue, body.environments], ['new-flag', 'string', 'control', { dev: { enabled: true, rules: [] } }]);
+  assert.match(r.sent[0].message, /✅ Флаг `new-flag`/);
+
+  const bad = await runBot(say('!flag set flag yes'), { gb: () => flag() });
+  assert.match(bad.sent[0].message, /❌ .*true или false/);
 });

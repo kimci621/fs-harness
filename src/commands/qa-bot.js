@@ -1,5 +1,5 @@
 // fsh qa-bot — бот тестировщика в личке Mattermost: контекст задачи Jira и ветки,
-// ответы агента только на чтение, тег разработчика при баге, деплой на dev-стенд.
+// ответы агента только на чтение, тег разработчика при баге, деплой на dev-стенд, фича-флаги.
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -13,6 +13,8 @@ import { makeGit } from '../workspace.js';
 import { createJira } from '../jira.js';
 import { createGlab } from '../glab.js';
 import { cmdDeploy } from './deploy.js';
+import { createGrowthBook } from '../growthbook.js';
+import { cmdGrowthBook } from './growthbook.js';
 
 const execFileAsync = promisify(execFile);
 export const STATE_ROOT = path.join(homedir(), '.local', 'state', 'fs-harness');
@@ -23,6 +25,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const AGENT_TOOLS = 'Read,Grep,Glob,Bash';
 const AGENT_BASH = ['git log', 'git diff', 'git show', 'fsh growthbook list', 'fsh growthbook get']
   .map((c) => `Bash(${c}:*)`).join(',');
+
+// Флаги тестировщик пишет только сюда: production через бота не трогается.
+const QA_FLAG_ENVS = ['dev', 'loadtest'];
 
 // Лимит поста в MM — 16383 символа, берём с запасом.
 const MAX_POST = 15000;
@@ -94,6 +99,7 @@ export function buildQaPrompt({
     'ИНСТРУКЦИЯ ПО ОТВЕТУ:',
     '- Ответ уходит в Mattermost: пиши в Markdown.',
     '- Если вопрос про фича-флаг: укажи точное имя флага (из GrowthBook/кода) и его нужное состояние (on/off/вариант).',
+    '  Флаг тестировщик переключает сам командой бота: `!flag on <имя>` (dev), `!flag set <имя> <значение>`.',
     '- Если вопрос "почему не отображается" или "как сделать так, чтобы показалось": найди в коде точные условия показа (v-if, гварды, проверки полей/ролей/тарифов/разрешения экрана) и объясни, что требуется.',
     '- Если в ходе анализа кода ты обнаруживаешь РЕАЛЬНЫЙ БАГ в коде (несоответствие требованиям задачи/AC, логическую ошибку, поломанную верстку/клики, опечатку):',
     '  ОБЯЗАТЕЛЬНО начни свой ответ со специального блока:',
@@ -294,6 +300,8 @@ export async function cmdQaBot(opts = {}, deps = {}) {
     throw new CliError('Нет токена QA-бота: положи токен бота Mattermost в ~/.mm_qa_growth_bot_key или экспортируй FS_HARNESS_MATTERMOST_QA.', 1, 'secret_missing');
   }
   const mm = createMattermost({ ...cfg.mattermost, token, fetchImpl });
+  // Ключ GrowthBook читается при первой !flag: без него бот работает, нет только флагов.
+  const gbCtx = { cfg, gb: () => createGrowthBook({ ...cfg.growthbook, token: readSecretImpl('growthbook'), fetchImpl }) };
   const projectDir = opts.projectDir || expandHome(cfg.projects?.['fitstars-frontend']?.dir || cfg.projectDir || process.cwd());
 
   const me = await mm.me();
@@ -366,6 +374,7 @@ export async function cmdQaBot(opts = {}, deps = {}) {
         '- `!current` — показать текущую задачу',
         '- `!reset` — сбросить контекст задачи',
         '- `!deploy [be] <mr|ветка> [слот]` — задеплоить ветку на dev-стенд (1–10; `be` — бэкенд)',
+        '- `!flag <id>` — флаг GrowthBook; `!flag create <id> [тип] [дефолт]`, `!flag on|off <id> [dev|loadtest]`, `!flag set <id> <значение>`',
         '- `!help` — эта справка',
         '',
         session?.taskKey
@@ -455,7 +464,49 @@ export async function cmdQaBot(opts = {}, deps = {}) {
       return;
     }
 
+    if (name === 'flag') {
+      try {
+        await reply(channelId, await handleFlag(args));
+      } catch (e) {
+        await reply(channelId, `❌ ${e.message}`);
+      }
+      return;
+    }
+
     await reply(channelId, `Не знаю команду \`!${name}\`. Список: \`!help\``);
+  }
+
+  // !flag <id> | create <id> [тип] [дефолт] | on|off <id> [окружение] | set <id> <значение>
+  async function handleFlag([sub, id, ...rest]) {
+    const usage = [
+      'Использование:',
+      '- `!flag <id>` — показать флаг',
+      '- `!flag create <id> [boolean|string|number|json] [дефолт]` — создать, включён в dev',
+      `- \`!flag on|off <id> [${QA_FLAG_ENVS.join('|')}]\` — включить или выключить (по умолчанию dev)`,
+      '- `!flag set <id> <значение>` — дефолтное значение',
+    ].join('\n');
+    const gb = (args, opts = {}) => cmdGrowthBook(gbCtx, args, { asObject: true, ...opts });
+    const done = (f) => `✅ Флаг \`${f.id}\` · ${f.type} · default \`${f.default}\`\n${f.envs}`;
+
+    if (!sub) return usage;
+    if (!['create', 'on', 'off', 'set'].includes(sub)) return done((await gb(['get', sub])).flag);
+    if (!id) return usage;
+
+    if (sub === 'create') {
+      const [type, value] = rest;
+      return done((await gb(['create', id, 'on'], { env: QA_FLAG_ENVS[0], type, default: value })).flag);
+    }
+    if (sub === 'set') {
+      if (!rest.length) return usage;
+      // Дефолт общий для всех окружений: правка не должна доехать до включённого прода.
+      const f = await gbCtx.gb().feature(id);
+      const live = Object.entries(f.environments ?? {}).filter(([e, v]) => v.enabled && !QA_FLAG_ENVS.includes(e)).map(([e]) => e);
+      if (live.length) return `⛔ Флаг \`${id}\` включён в ${live.join(', ')}: дефолт поменяется и там. Попроси ${developer ? `@${developer}` : 'разработчика'}.`;
+      return done((await gb(['set', id, rest.join(' ')])).flag);
+    }
+    const env = rest[0] || QA_FLAG_ENVS[0];
+    if (!QA_FLAG_ENVS.includes(env)) return `⛔ Через бота флаги переключаются только в ${QA_FLAG_ENVS.join(', ')}.`;
+    return done((await gb(['toggle', id, sub], { env })).flag);
   }
 
   async function handleQuestion(channelId, post, userText) {

@@ -25,7 +25,7 @@ const feature = (over = {}) => ({
   ...over,
 });
 
-const ctxWith = (gb, over = {}) => ({ gb: () => gb, cfg: { growthbook: { baseUrl: 'https://gb.invalid', project: '', env: 'production', ...over } } });
+const ctxWith = (gb, over = {}) => ({ gb: () => gb, cfg: { growthbook: { baseUrl: 'https://gb.invalid', project: 'prj_test', env: 'production', ...over } } });
 
 test('growthbook: Bearer-ключ и обрезанный хвост baseUrl', async () => {
   const { gb, calls } = gbWith([{ status: 200, body: { features: [feature()], total: 1, hasMore: false } }]);
@@ -105,6 +105,27 @@ test('growthbook create: поддержка --type и --default', async () => {
   assert.equal(calls[0].body.defaultValue, 'control');
 });
 
+test('growthbook set: тип проверяется до записи, POST с defaultValue, read-back', async () => {
+  const { gb, calls } = gbWith([
+    { status: 200, body: { feature: feature() } },
+    { status: 200, body: { feature: feature({ defaultValue: 'true' }) } },
+  ]);
+  const res = await cmdGrowthBook(ctxWith(gb), ['set', 'flag', 'true'], { asObject: true, yes: true });
+  assert.deepEqual([res.set, res.flag.default], ['flag', 'true']);
+  assert.equal(calls[1].method, 'POST');
+  assert.match(calls[1].url, /\/api\/v1\/features\/flag$/);
+  assert.deepEqual(calls[1].body, { defaultValue: 'true' });
+
+  const badType = gbWith([{ status: 200, body: { feature: feature() } }]);
+  await assert.rejects(() => cmdGrowthBook(ctxWith(badType.gb), ['set', 'flag', 'yes'], { asObject: true }), (e) => e.code === 'usage' && /true или false/.test(e.message));
+  assert.equal(badType.calls.length, 1, 'записи не было');
+
+  const stuck = gbWith([{ status: 200, body: { feature: feature() } }, { status: 200, body: { feature: feature() } }]);
+  await assert.rejects(() => cmdGrowthBook(ctxWith(stuck.gb), ['set', 'flag', 'true'], { asObject: true }), (e) => e.code === 'api_failed' && /остался false/.test(e.message));
+
+  await assert.rejects(() => cmdGrowthBook(ctxWith(gb), ['set', 'flag'], { asObject: true }), (e) => e.code === 'usage');
+});
+
 test('growthbook delete: DELETE-запрос, dry-run без сети, нет id — usage', async () => {
   const { gb, calls } = gbWith([{ status: 200, body: { deletedId: 'flag' } }]);
   const dry = await cmdGrowthBook(ctxWith(gb), ['delete', 'flag'], { asObject: true, dryRun: true });
@@ -130,4 +151,13 @@ test('growthbook delete: DELETE-запрос, dry-run без сети, нет id
 test('envStates: состояние по окружениям одной строкой', () => {
   assert.equal(envStates(feature()), 'production=off dev=on');
   assert.equal(envStates({}), '');
+});
+
+test('growthbook create: без проекта не создаёт — такой флаг не доходит до сайта', async () => {
+  const { gb, calls } = gbWith([]);
+  await assert.rejects(
+    cmdGrowthBook(ctxWith(gb, { project: '' }), ['create', 'orphan', 'on'], { asObject: true, yes: true }),
+    (e) => e.code === 'config_invalid',
+  );
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
 });
