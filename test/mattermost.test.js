@@ -25,7 +25,7 @@ test('reviewMessage: первой строчкой заголовок задач
   assert.equal(
     text,
     'FD-7785: FE: якорные кнопки на лендинге сбрасывают ?promo и utm_*\n'
-    + '• MR !2886: https://gl/fitstars/fitstars-nuxt/-/merge_requests/2886\n'
+    + '• MR: https://gl/fitstars/fitstars-nuxt/-/merge_requests/2886\n'
     + '• Jira FD-7884 https://fitstars.atlassian.net/browse/FD-7884',
   );
 });
@@ -39,12 +39,12 @@ test('reviewMessage: Draft/WIP в начале заголовка срезает
   assert.equal(
     text,
     'FD-7655: FE: исправить кнопку\n'
-    + '• MR !2833: https://gl/fitstars/fitstars-nuxt/-/merge_requests/2833',
+    + '• MR: https://gl/fitstars/fitstars-nuxt/-/merge_requests/2833',
   );
 });
 
 test('reviewMessage: без заголовка и без задачи остаётся одна строка, без всего — ошибка', () => {
-  assert.equal(reviewMessage({ iid: 7, mrUrl: 'https://gl/mr/7' }), '• MR !7: https://gl/mr/7');
+  assert.equal(reviewMessage({ iid: 7, mrUrl: 'https://gl/mr/7' }), '• MR: https://gl/mr/7');
   assert.throws(() => reviewMessage({}), /Нечего отправлять/);
 });
 
@@ -192,12 +192,12 @@ test('postReview: отправляет заголовок первой стро�
 
   // С явным title
   await postReview(ctx, { iid: 10, mrUrl: 'https://gl/mr/10', title: 'FD-1: Явный заголовок' }, { asObject: true, yes: true });
-  assert.equal(sent[0].message, 'FD-1: Явный заголовок\n• MR !10: https://gl/mr/10');
+  assert.equal(sent[0].message, 'FD-1: Явный заголовок\n• MR: https://gl/mr/10');
 
   // Без title — подтягивает через getMR
   sent.length = 0;
   await postReview(ctx, { iid: 20, mrUrl: 'https://gl/mr/20' }, { asObject: true, yes: true });
-  assert.equal(sent[0].message, 'FD-7785: FE: заголовок из GitLab\n• MR !20: https://gl/mr/20');
+  assert.equal(sent[0].message, 'FD-7785: FE: заголовок из GitLab\n• MR: https://gl/mr/20');
 });
 
 // Канал сценария review: свой пост задачи, чужой пост про неё же, ответ в треде и пост про соседний ключ.
@@ -209,7 +209,7 @@ const replyMM = (sent = []) => ({
     posts: {
       r2: { id: 'r2', root_id: 'r1', user_id: 'me', message: 'FD-7926 поправил' },
       x1: { id: 'x1', root_id: '', user_id: 'me', message: 'FD-79261: другая задача' },
-      r1: { id: 'r1', root_id: '', user_id: 'me', message: 'FD-7926: FE. Предвыбор валюты\n• MR !2956: https://gl/mr/2956' },
+      r1: { id: 'r1', root_id: '', user_id: 'me', message: 'FD-7926: FE. Предвыбор валюты\n• MR: https://gl/mr/2956' },
       o1: { id: 'o1', root_id: '', user_id: 'other', message: 'FD-7926: чужой пост' },
       n1: { id: 'n1', root_id: '', user_id: 'me', message: 'FD-7926: старый пост' },
     },
@@ -237,8 +237,23 @@ test('mm reply --dry-run: находит корень, но не пишет', as
 test('mm reply: поста задачи нет — not_found со ссылкой на mm review, без ключа — usage', async () => {
   const ctx = ctxWith(replyMM(), REPLY_CFG);
   await assert.rejects(() => cmdMM(ctx, ['reply', 'FD-1', 'текст'], { asObject: true, yes: true }), /fsh mm review FD-1/);
-  await assert.rejects(() => cmdMM(ctx, ['reply', 'текст'], { asObject: true, yes: true }), /fsh mm reply <KEY>/);
-  await assert.rejects(() => cmdMM(ctx, ['reply', 'FD-7926'], { asObject: true, yes: true }), /fsh mm reply <KEY>/);
+  await assert.rejects(() => cmdMM(ctx, ['reply', 'текст'], { asObject: true, yes: true }), /fsh mm reply <KEY\|permalink>/);
+  await assert.rejects(() => cmdMM(ctx, ['reply', 'FD-7926'], { asObject: true, yes: true }), /fsh mm reply <KEY\|permalink>/);
+});
+
+test('mm reply по permalink: ответ на пост внутри треда уходит в корень его канала', async () => {
+  const id = 'utpeiezb3j8sbm4gr8jzy68gny';
+  const sent = [];
+  const mm = {
+    getPost: async (postId) => (postId === id ? { id, root_id: 'root1', channel_id: 'chanX' } : null),
+    post: async (channel, message, opts) => { sent.push({ channel, message, opts }); return { id: 'p1' }; },
+  };
+  const out = await cmdMM(ctxWith(mm), ['reply', `https://mm.fitstars.ru/fitstars/pl/${id}`, 'да,', 'так', 'и', 'задумано'], { asObject: true, yes: true });
+  assert.deepEqual(sent, [{ channel: 'chanX', message: 'да, так и задумано', opts: { rootId: 'root1' } }]);
+  assert.equal(out.root_id, 'root1');
+
+  await assert.rejects(() => cmdMM(ctxWith(mm), ['reply', 'b'.repeat(26), 'текст'], { asObject: true, yes: true }), /Поста b+ нет/);
+  await assert.rejects(() => cmdMM(ctxWith(mm), ['reply', 'не-ссылка', 'текст'], { asObject: true, yes: true }), /fsh mm reply <KEY\|permalink>/);
 });
 
 // Пароль читается в отдельном процессе: подменить fd 0 у текущего node --test нельзя,
