@@ -319,7 +319,12 @@ Read, Grep, Glob и `git log/diff/show`, `fsh growthbook list/get`, осталь
 тегает разработчика и дублирует ему в личку.
 
 Команды начинаются с `!`, потому что `/` перехватывает сам Mattermost: `!task FD-8096`, `!current`,
-`!reset`, `!deploy [be] <mr|ветка> [слот]`, `!help`.
+`!reset`, `!deploy [be] <mr|ветка> [слот]`, `!flag ...`, `!help`.
+
+`!flag` пишет в GrowthBook напрямую, мимо агента: `!flag <id>` показывает флаг, `!flag create <id> [тип] [дефолт]`
+заводит его включённым в `dev`, `!flag on|off <id> [dev|loadtest]` переключает, `!flag set <id> <значение>`
+меняет дефолт. Production через бота закрыт. Дефолт у флага общий для всех окружений, поэтому `set` откажет,
+если флаг включён где-то кроме `dev` и `loadtest`. Ключ тот же, `~/.growthbook_apikey`.
 
 Токен бота - `~/.mm_qa_growth_bot_key` (или `FS_HARNESS_MATTERMOST_QA`). Отвечает только логинам из конфига:
 

@@ -4,7 +4,7 @@ import { finish } from '../output.js';
 import { confirm } from '../ui.js';
 import { CliError } from '../errors.js';
 
-// fsh growthbook list|get|create|toggle|delete — фича-флаги. Правило раскатки,
+// fsh growthbook list|get|create|toggle|set|delete — фича-флаги. Правило раскатки,
 // эксперименты и метрики живут в вебе, туда мы не лезем.
 export async function cmdGrowthBook(ctx, args, opts = {}) {
   const [sub, ...rest] = args;
@@ -14,8 +14,9 @@ export async function cmdGrowthBook(ctx, args, opts = {}) {
       : sub === 'get' ? await get(gb, rest)
         : sub === 'create' ? await create(gb, ctx, rest, opts)
           : sub === 'toggle' ? await toggle(gb, ctx, rest, opts)
-            : sub === 'delete' ? await del(gb, rest, opts)
-              : (() => { throw new CliError('Использование: fsh growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|delete <id>].', 1, 'usage'); })();
+            : sub === 'set' ? await set(gb, rest, opts)
+              : sub === 'delete' ? await del(gb, rest, opts)
+                : (() => { throw new CliError('Использование: fsh growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|set <id> <значение>|delete <id>].', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -50,11 +51,14 @@ async function create(gb, ctx, [id, state], opts) {
   const defaultValue = opts.default !== undefined && opts.default !== null
     ? String(opts.default)
     : (valueType === 'boolean' ? 'true' : '');
+  // Флаг без проекта не попадает в SDK-ключ сайта: на стенде и в проде его просто нет.
+  const project = opts.for || ctx.cfg.growthbook.project;
+  if (!project) throw new CliError('Не задан проект GrowthBook: укажи --for <проект> или growthbook.project в конфиге.', 1, 'config_invalid');
   const body = {
     id,
     valueType,
     defaultValue,
-    project: opts.for || ctx.cfg.growthbook.project || undefined,
+    project,
     // rules обязателен в каждом окружении, иначе zod-валидатор API отдаёт 400.
     environments: { [env]: { enabled: on, rules: [] } },
   };
@@ -81,6 +85,30 @@ async function toggle(gb, ctx, [id, state], opts) {
   return { ok: true, toggled: id, env, enabled: on, flag: brief(f) };
 }
 
+// Дефолт флага общий для всех окружений, где флаг включён.
+async function set(gb, [id, value], opts) {
+  if (!id || value === undefined) throw new CliError('Использование: fsh growthbook set <id> <значение>.', 1, 'usage');
+  const f = await gb.feature(id);
+  const bad = checkValue(f.valueType, value);
+  if (bad) throw new CliError(`Флаг "${id}" типа ${f.valueType}: ${bad}`, 1, 'usage');
+  if (opts.dryRun) return { ok: true, dry_run: true, set: id, default: value };
+  if (!opts.yes && !opts.asObject && !confirm(`Флаг "${id}": default ${f.defaultValue} → ${value}? [y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  const after = await gb.updateFeature(id, { defaultValue: value });
+  if (after?.defaultValue !== value) throw new CliError(`GrowthBook принял правку "${id}", но default остался ${after?.defaultValue}.`, 1, 'api_failed');
+  return { ok: true, set: id, flag: brief(after) };
+}
+
+function checkValue(type, v) {
+  if (type === 'boolean') return ['true', 'false'].includes(v) ? null : 'нужно true или false';
+  if (type === 'number') return v.trim() !== '' && Number.isFinite(Number(v)) ? null : 'нужно число';
+  if (type === 'json') {
+    try { JSON.parse(v); return null; } catch { return 'нужен валидный JSON'; }
+  }
+  return null;
+}
+
 const brief = (f) => ({ id: f.id, type: f.valueType, default: f.defaultValue, envs: envStates(f), tags: f.tags ?? [] });
 
 // Удаление необратимо; API может отказаться для живого флага (см. growthbook.js).
@@ -101,11 +129,12 @@ function render(r) {
     console.log(table(r.flags.map((f) => [f.id, f.type, f.envs, truncate((f.tags ?? []).join(', '), 30)])));
     return;
   }
-  if (r.dry_run) return void console.log(`dry-run: ${r.created ? `создать ${r.created}` : r.deleted ? `удалить ${r.deleted}` : `${r.toggled} ${r.env} → ${r.enabled ? 'on' : 'off'}`}`);
+  if (r.dry_run) return void console.log(`dry-run: ${r.created ? `создать ${r.created}` : r.deleted ? `удалить ${r.deleted}` : r.set ? `${r.set} default → ${r.default}` : `${r.toggled} ${r.env} → ${r.enabled ? 'on' : 'off'}`}`);
   if (r.deleted) return void console.log(`Флаг ${r.deleted} удалён.`);
   const f = r.flag;
   if (r.created) return void console.log(`Флаг ${f.id} создан: ${f.envs}`);
   if (r.toggled) return void console.log(`Флаг ${f.id}: ${f.envs}`);
+  if (r.set) return void console.log(`Флаг ${f.id}: default ${f.default}`);
   console.log(`${f.id} · ${f.type} · default ${f.default}`);
   console.log(f.envs);
   if (f.description) console.log(`\n${f.description}`);
