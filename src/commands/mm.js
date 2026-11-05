@@ -9,7 +9,7 @@ import { table } from '../format.js';
 import { confirm, promptSecret } from '../ui.js';
 import { CliError } from '../errors.js';
 
-// fsh mm login|whoami|channels|post|review|reply — сообщения в Mattermost от имени человека.
+// fsh mm login|whoami|channels|post|review|reply|thread|react — сообщения в Mattermost от имени человека.
 // Сценарий здесь один (review): канал на сценарий берётся из mattermost.channels.
 export async function cmdMM(ctx, args, opts = {}) {
   const [sub, ...rest] = args;
@@ -21,7 +21,8 @@ export async function cmdMM(ctx, args, opts = {}) {
           : sub === 'review' ? await review(ctx, rest, opts)
             : sub === 'reply' ? await reply(ctx, rest, opts)
               : sub === 'thread' ? await thread(ctx, rest)
-                : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY> "<текст>"|thread <permalink|id поста>].', 1, 'usage'); })();
+                : sub === 'react' ? await react(ctx, rest, opts)
+                  : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY> "<текст>"|thread <permalink|id поста>|react <permalink|id поста> <эмодзи>].', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -197,7 +198,22 @@ async function send(ctx, { id, scenario }, text, opts) {
   return { ok: true, channel: target, scenario, text, post_id: created?.id ?? null };
 }
 
+// Эмодзи из Unicode в имя Mattermost; имя (eyes, :eyes:) проходит как есть.
+const EMOJI_NAMES = { '✅': 'white_check_mark', '👀': 'eyes', '👍': '+1', '❌': 'x' };
+
+async function react(ctx, [ref, emoji], opts) {
+  if (!ref || !emoji) throw new CliError('Использование: fsh mm react <permalink|id поста> <эмодзи>.', 1, 'usage');
+  const postId = postIdFrom(ref);
+  const name = EMOJI_NAMES[emoji] ?? emoji.replace(/^:|:$/g, '');
+  if (opts.dryRun) return { ok: true, dry_run: true, post_id: postId, emoji: name };
+  const mm = ctx.mm();
+  const me = await mm.me();
+  await mm.react(me.id, postId, name);
+  return { ok: true, post_id: postId, emoji: name };
+}
+
 function render(r) {
+  if (r.emoji) return void console.log(`${r.dry_run ? '📝 план' : '✅ реакция'} :${r.emoji}: → пост ${r.post_id}`);
   if (r.messages) {
     return void console.log(r.messages.map((m) => {
       const files = m.files.length ? `\n📎 ${m.files.join(', ')}` : '';

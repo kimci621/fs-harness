@@ -354,8 +354,8 @@ export const COMMANDS = [
   },
   {
     name: 'mm',
-    usage: 'mm [login <логин>|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY> "<текст>"|thread <permalink>]',
-    description: 'Сообщения в Mattermost от своего имени: вход по паролю, проверка сессии, поиск канала, отправка в канал, сценарий «задача уехала в ревью», ответ в тред задачи, чтение треда по ссылке',
+    usage: 'mm [login <логин>|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY> "<текст>"|thread <permalink>|react <permalink> <эмодзи>]',
+    description: 'Сообщения в Mattermost от своего имени: вход по паролю, проверка сессии, поиск канала, отправка в канал, сценарий «задача уехала в ревью», ответ в тред задачи, чтение треда по ссылке, реакция на пост',
     example: 'fsh mm review FD-7655 --dry-run',
     run: (ctx, args, opts) => cmdMM(ctx, args, opts),
     // MCP-инструмента намеренно нет: запись в общий чат не должна уходить мимо человека,
