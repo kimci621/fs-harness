@@ -231,7 +231,7 @@ async function review(ctx, [maybeKey], opts) {
       ветка: branch,
       'целевая ветка': target,
       коммиты: commits.split('\n').filter(Boolean).length,
-      'Technical details for QA': fieldText(fieldByName(issue, 'Technical details for QA')) ? 'заполнено' : 'пусто',
+      'Technical details for QA': (fieldText(fieldByName(issue, 'Technical details for QA')) || (f.description && f.description.includes('Technical details for QA')) || (f.environment && f.environment.includes('Technical details for QA'))) ? 'заполнено' : 'пусто',
       'Контент': fieldText(fieldByName(issue, 'Контент')) ? 'заполнено' : 'пусто',
     },
     extra: commits ? `Коммиты ветки:\n\n${commits}` : '',
