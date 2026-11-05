@@ -280,3 +280,18 @@ test('mm thread: permalink → id, посты по времени, имена а
     ['name-u2', 'ответ', []],
   ]);
 });
+
+test('mm react: Unicode-эмодзи → имя Mattermost, реакция от своего id на пост из permalink', async () => {
+  const id = '6sdktpgdbfnz9m1cj4dcdkg4or';
+  const calls = [];
+  const mm = {
+    me: async () => ({ id: 'me1' }),
+    react: async (...args) => { calls.push(args); },
+  };
+  await cmdMM(ctxWith(mm), ['react', `https://mm.fitstars.ru/fitstars/pl/${id}`, '👀'], { asObject: true });
+  await cmdMM(ctxWith(mm), ['react', id, ':white_check_mark:'], { asObject: true });
+  assert.deepEqual(calls, [['me1', id, 'eyes'], ['me1', id, 'white_check_mark']]);
+
+  const plan = await cmdMM(ctxWith({ react: () => assert.fail('dry-run ничего не пишет') }), ['react', id, '✅'], { asObject: true, dryRun: true });
+  assert.equal(plan.emoji, 'white_check_mark');
+});

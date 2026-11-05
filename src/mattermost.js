@@ -101,6 +101,10 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
     post: (channelId, message, { rootId = '' } = {}) =>
       api('/posts', { method: 'POST', body: { channel_id: channelId, message, ...(rootId ? { root_id: rootId } : {}) } }),
 
+    // Реакция на пост от своего имени; повторная та же реакция бэк не дублирует.
+    react: (userId, postId, emojiName) =>
+      api('/reactions', { method: 'POST', body: { user_id: userId, post_id: postId, emoji_name: emojiName } }),
+
     patchPost: (postId, message) => api(`/posts/${postId}/patch`, { method: 'PUT', body: { message } }),
 
     // Все каналы вместе с личками: у бота без команды других и нет.
