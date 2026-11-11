@@ -167,7 +167,7 @@ function parseArgs(argv) {
     type: null, default: null,
     assignee: null, sprint: null, component: null, status: null, jql: null,
     author: null, reviewer: null, target: null, label: null, search: null,
-    draft: null, conflicts: false, sync: false, threads: false, pipeline: null,
+    draft: null, from: null, note: null, conflicts: false, sync: false, threads: false, pipeline: null,
   };
   const rest = [];
   // --flag=value разбираем в --flag value до разбора: дальше все ветки работают как раньше.
@@ -196,6 +196,8 @@ function parseArgs(argv) {
     else if (a === '--judge-only') opts.judgeOnly = av[++i];
     else if (a === '--message') opts.message = av[++i];
     else if (a === '--for') opts.for = av[++i];
+    else if (a === '--from') opts.from = av[++i];
+    else if (a === '--note') opts.note = av[++i];
     else if (a === '--file') opts.file = av[++i];
     else if (a === '--attach') opts.attach = true;
     else if (a === '--post') opts.post = true;

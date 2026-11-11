@@ -261,3 +261,70 @@ test('task judge: без изменений против целевой ветк
     (e) => e.code === 'no_commit',
   );
 });
+
+// Флоу задачи из конфига: обязательные поля, блоки описания MR, поле «Ответственный разработчик».
+const FLOW = { requiredFields: ['Контент'], selfFields: ['Ответственный разработчик'], mrBlocks: ['Было / Стало'] };
+const names = { customfield_1: 'Контент', customfield_2: 'Ответственный разработчик' };
+
+test('task submit: пустой блок описания и поле — один отказ со всем списком, записей нет', async () => {
+  const ctx = ctxWith({ mrs: [{ iid: 7, title: 'FD-1: Починить', description: 'ссылка', web_url: 'https://gl/mr/7' }] });
+  ctx.cfg.taskFlow = FLOW;
+  ctx.jira = () => ({
+    transitions: async () => ({ transitions: [{ id: '22', name: 'В ревью', to: { name: 'Ревью' } }] }),
+    issue: async () => ({ key: 'FD-1', names, fields: { status: { name: 'В работе' }, customfield_1: null, customfield_2: null } }),
+    editMeta: async () => ({ fields: { customfield_2: { schema: { type: 'array' } } } }),
+    transition: async () => { throw new Error('переход не должен случиться'); },
+    updateIssue: async () => { throw new Error('поля не должны писаться'); },
+  });
+  await assert.rejects(
+    () => cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true }),
+    (e) => /Было \/ Стало/.test(e.message) && /Контент/.test(e.message) && !/Ответственный/.test(e.message),
+  );
+});
+
+test('task submit: заполняет «Ответственный разработчик» мной до перехода и отдаёт чек-лист', async () => {
+  const order = [];
+  let moved = false;
+  const ctx = ctxWith({ mrs: [{ iid: 7, title: 'FD-1: Починить', description: '## Было / Стало', web_url: 'https://gl/mr/7' }] });
+  ctx.cfg.taskFlow = FLOW;
+  ctx.jira = () => ({
+    transitions: async () => ({ transitions: [{ id: '22', name: 'В ревью', to: { name: 'Ревью' } }] }),
+    issue: async () => ({ key: 'FD-1', names, fields: { status: { name: moved ? 'Ревью' : 'В работе' }, customfield_1: 'текст', customfield_2: null } }),
+    editMeta: async () => ({ fields: { customfield_2: { schema: { type: 'array' } } } }),
+    myself: async () => ({ accountId: 'me-1' }),
+    updateIssue: async (key, fields) => { order.push(['field', fields]); },
+    transition: async () => { order.push(['transition']); moved = true; },
+  });
+  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+  assert.deepEqual(order, [['field', { customfield_2: [{ accountId: 'me-1' }] }], ['transition']]);
+  assert.ok(res.steps.every((s) => s.ok));
+  assert.deepEqual(res.steps.map((s) => s.step), ['«Ответственный разработчик»', 'статус Jira', '«Контент»', 'описание MR', 'MR', 'Mattermost']);
+});
+
+test('task submit: у Tech task нет перехода в ревью — статус не трогаем, в чат пишем', async () => {
+  const posts = [];
+  const ctx = ctxWith({ mrs: [{ iid: 7, title: 'FD-1: Починить', web_url: 'https://gl/mr/7' }], posts });
+  ctx.jira = () => ({
+    transitions: async () => ({ transitions: [{ id: '31', name: 'Готово', to: { name: 'Готово' } }] }),
+    issue: async () => ({ key: 'FD-1', names: {}, fields: { status: { name: 'В работе' } } }),
+    transition: async () => { throw new Error('переход не должен случиться'); },
+  });
+  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+  assert.equal(res.jira.to, 'В работе');
+  assert.equal(posts.length, 1);
+});
+
+test('task start: переводит задачу в startStatus из конфига', async () => {
+  git(['switch', 'dev']);
+  const moved = [];
+  const ctx = ctxWith();
+  ctx.cfg.taskFlow = { startStatus: 'В работе' };
+  ctx.jira = () => ({
+    issue: async () => ISSUE,
+    transitions: async () => ({ transitions: [{ id: '11', name: 'В работу', to: { name: 'В работе' } }] }),
+    transition: async (key, id) => { moved.push(id); },
+  });
+  const res = await cmdTask(ctx, ['start', 'FD-1'], { asObject: true });
+  assert.deepEqual(moved, ['11']);
+  assert.deepEqual(res.jira, { from: 'К выполнению', to: 'В работе' });
+});

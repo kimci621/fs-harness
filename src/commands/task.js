@@ -1,5 +1,5 @@
 import { expandHome } from '../config.js';
-import { ISSUE_KEY, fieldByName, fieldText, keyFromBranch } from '../jira.js';
+import { ISSUE_KEY, fieldByName, fieldIdByName, fieldText, keyFromBranch } from '../jira.js';
 import { judge, formatVerdict } from '../judge/index.js';
 import { buildAcceptancePayload } from '../judge/payload.js';
 import { makeGit } from '../workspace.js';
@@ -42,8 +42,8 @@ export async function cmdTask(ctx, args, opts = {}) {
   return result;
 }
 
-// Взять задачу в работу: прочитать её и встать на ветку feature/<KEY>.
-// Статус в Jira не двигаем — переход с обязательными полями это работа скилла проекта.
+// Взять задачу в работу: прочитать её, встать на ветку feature/<KEY> и, если в конфиге задан
+// taskFlow.startStatus, перевести задачу в этот статус.
 async function start(ctx, [key], opts) {
   if (!key || !ISSUE_KEY.test(key)) throw new CliError('Использование: fsh task start FD-7719.', 1, 'usage');
   const dir = dirOf(ctx, opts);
@@ -84,7 +84,24 @@ async function start(ctx, [key], opts) {
     throw new CliError(`В ${dir} незакоммиченные правки (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ' и ещё' : ''}). Закоммить или спрячь их, потом повтори.`, 1, 'dirty_checkout');
   }
   for (const a of plan) git(a);
-  return info;
+  return { ...info, jira: await moveOnStart(ctx, key, info.issue.status) };
+}
+
+// Статус ставится в момент старта, а не задним числом: иначе cycle time в отчёте врёт.
+// Перехода нет (задача уже дальше по флоу) — не ошибка, ветка всё равно нужна.
+async function moveOnStart(ctx, key, from) {
+  const to = ctx.cfg.taskFlow?.startStatus;
+  if (!to || from === to) return null;
+  const j = ctx.jira();
+  const { transitions } = (await j.transitions(key)) ?? {};
+  let t;
+  try {
+    t = pickTransition(transitions, to);
+  } catch {
+    return { from, to: from, skipped: `перехода в «${to}» из «${from}» нет` };
+  }
+  await j.transition(key, t.id);
+  return { from, to: t.to?.name ?? to };
 }
 
 // Запушить ветку задачи и открыть MR. Push только текущей ветки и только не-force.
@@ -154,47 +171,97 @@ async function submit(ctx, [maybeKey], opts) {
   if (!mr) throw new CliError(`Нет открытого MR ни в "${taskBranch}", ни в "${head}": сначала fsh implement ${key} или fsh task push.`, 1, 'no_mr');
 
   const j = ctx.jira();
+  const flow = ctx.cfg.taskFlow ?? {};
   const statusName = opts.status || 'Ревью';
   const { transitions } = (await j.transitions(key)) ?? {};
-  const t = pickTransition(transitions, statusName);
+  // Перехода в ревью нет у Tech task: такая задача уходит в ревью одним сообщением в чат.
+  // Статус, названный явно, обязан найтись — там молчаливый пропуск хуже ошибки.
+  let t = null;
+  try {
+    t = pickTransition(transitions, statusName);
+  } catch (err) {
+    if (opts.status) throw err;
+  }
   const before = await j.issue(key);
   const from = before.fields?.status?.name ?? '—';
   const wasDraft = /^\s*(draft|wip):/i.test(String(mr.title ?? ''));
   const title = String(mr.title ?? '').replace(/^\s*(draft|wip):\s*/i, '');
 
-  // Обязательные поля перехода проверяем сами: иначе отказ Jira хуже читается, а submit —
-  // ровно то место, где человеку нужно сказать, чего не хватает.
-  const missing = missingRequired(t, before);
-  if (missing.length) {
-    const hint = missing.map((n) => `fsh jira field ${key} "${n}" <значение>`).join('\n   ');
-    throw new CliError(
-      `Переход "${t.name}" требует заполнить поля: ${missing.join(', ')}.\n   Заполни и повтори:\n   ${hint}`,
-      1,
-      'jira_fields_missing',
-    );
+  // Всё, чего не хватает, — до первой записи и одним списком: чинить по одному пункту за прогон дольше.
+  const missingBlocks = (flow.mrBlocks ?? []).filter((b) => !String(mr.description ?? '').includes(b));
+  // Поля, которые заполню собой сам, нехваткой не считаются: их и требует валидатор перехода.
+  const selfFill = t ? await withMulti(j, key, emptySelfFields(flow.selfFields, before)) : [];
+  const own = new Set(selfFill.map((f) => f.name));
+  const missing = t
+    ? [...new Set([...missingRequired(t, before), ...missingNamed(flow.requiredFields, before)])].filter((n) => !own.has(n))
+    : [];
+  if (missingBlocks.length || missing.length) {
+    const lines = [
+      ...(missingBlocks.length ? [`В описании MR !${mr.iid} нет блоков: ${missingBlocks.join(', ')}. Допиши описание по шаблону проекта.`] : []),
+      ...(missing.length ? [`Перед переходом "${t.name}" заполни поля: ${missing.join(', ')}.`, ...missing.map((n) => `   fsh jira field ${key} "${n}" <значение> -y`)] : []),
+    ];
+    throw new CliError(`${lines.join('\n')}\n   Потом повтори fsh task submit ${key}.`, 1, missing.length ? 'jira_fields_missing' : 'mr_description_incomplete');
   }
 
-  const info = { ok: true, key, branch, mr: { iid: mr.iid, web_url: mr.web_url }, jira: { from, to: t.to?.name ?? t.name } };
+  const to = t ? t.to?.name ?? t.name : from;
+  const info = { ok: true, key, branch, mr: { iid: mr.iid, web_url: mr.web_url }, jira: { from, to } };
   if (opts.dryRun) {
     return { ...info, dry_run: true, plan: [
-      `Jira ${key}: ${from} → ${t.to?.name ?? t.name}`,
+      ...selfFill.map((f) => `Jira ${key}: «${f.name}» ← я`),
+      t ? `Jira ${key}: ${from} → ${to}` : `Jira ${key}: перехода «${statusName}» нет, статус не трогаю`,
       wasDraft ? `PUT /merge_requests/${mr.iid}: снять черновик (title: ${title})` : `MR !${mr.iid} уже не черновик`,
       'сообщение в Mattermost (сценарий review)',
     ] };
   }
-  if (!opts.yes && !opts.asObject && !confirm(`${key}: ${from} → ${t.to?.name ?? t.name}, MR !${mr.iid} в ревью, отписать в Mattermost? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`${key}: ${from} → ${to}, MR !${mr.iid} в ревью, отписать в Mattermost? [y/N] `)) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
 
+  const steps = [];
+  if (selfFill.length) {
+    const me = await j.myself();
+    await j.updateIssue(key, Object.fromEntries(selfFill.map((f) => [f.id, f.multi ? [{ accountId: me.accountId }] : { accountId: me.accountId }])));
+    for (const f of selfFill) steps.push({ step: `«${f.name}»`, ok: true, note: 'заполнено мной' });
+  }
+
   // Jira первой: не переводится — MR остаётся черновиком, и повторить безопасно.
-  await j.transition(key, t.id);
-  const after = await j.issue(key);
-  const to = after.fields?.status?.name ?? '—';
-  if (to === from) throw new CliError(`Jira приняла переход "${t.name}", но статус ${key} остался "${from}". Проверь права и условия перехода.`, 1, 'api_failed');
+  let now = from;
+  if (t) {
+    await j.transition(key, t.id);
+    const after = await j.issue(key);
+    now = after.fields?.status?.name ?? '—';
+    if (now === from) throw new CliError(`Jira приняла переход "${t.name}", но статус ${key} остался "${from}". Проверь права и условия перехода.`, 1, 'api_failed');
+    steps.push({ step: 'статус Jira', ok: true, note: `${from} → ${now}` });
+  } else {
+    steps.push({ step: 'статус Jira', ok: true, note: `перехода «${statusName}» нет (Tech task?), остаётся «${from}»` });
+  }
+  for (const n of flow.requiredFields ?? []) if (fieldIdByName(before, n)) steps.push({ step: `«${n}»`, ok: true, note: 'заполнено' });
+  if (flow.mrBlocks?.length) steps.push({ step: 'описание MR', ok: true, note: flow.mrBlocks.join(', ') });
 
   const updated = wasDraft ? await ctx.g.updateMR(ctx.repo, mr.iid, { title }) : mr;
+  steps.push({ step: 'MR', ok: true, note: wasDraft ? 'черновик снят' : 'уже не черновик' });
   const posted = await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
-  return { ...info, title: updated?.title ?? title, draft_removed: wasDraft, jira: { from, to, transition: t.name }, posted };
+  steps.push({ step: 'Mattermost', ok: Boolean(posted?.ok), note: posted?.scenario || posted?.channel || '' });
+  return { ...info, title: updated?.title ?? title, draft_removed: wasDraft, jira: { from, to: now, transition: t?.name ?? null }, posted, steps };
+}
+
+// Поля по названию из taskFlow.requiredFields. Поля нет у типа задачи (Tech task) — не требуем.
+function missingNamed(names = [], issue) {
+  return names.filter((n) => fieldIdByName(issue, n) && !fieldText(fieldByName(issue, n)));
+}
+
+// Поля-пользователи, которые submit заполняет мной: пустые и существующие у задачи.
+function emptySelfFields(names = [], issue) {
+  return names
+    .map((name) => ({ name, id: fieldIdByName(issue, name) }))
+    .filter((f) => f.id && !fieldText(issue.fields?.[f.id]));
+}
+
+// Пустое поле приходит null и одиночное, и множественное: форму значения говорит только editmeta.
+async function withMulti(j, key, fields) {
+  if (!fields.length) return fields;
+  const meta = (await j.editMeta(key))?.fields ?? {};
+  return fields.map((f) => ({ ...f, multi: meta[f.id]?.schema?.type === 'array' }));
 }
 
 // Поля экрана перехода, помеченные обязательными и пустые у задачи. hasDefaultValue Jira
@@ -253,13 +320,13 @@ function render(r) {
   }
   if (r.jira && r.mr && !r.issue) {
     console.log(`${r.key} · ${r.branch} · MR !${r.mr.iid}: ${r.mr.web_url}`);
-    console.log(`Jira: ${r.jira.from} → ${r.jira.to}${r.draft_removed ? ' · черновик снят' : ''}`);
-    if (r.posted) console.log(`Mattermost: ${r.posted.scenario || r.posted.channel}`);
-    if (r.dry_run) for (const line of r.plan) console.log(`  ${line}`);
+    if (r.steps) for (const st of r.steps) console.log(`${st.ok ? '✓' : '✗'} ${st.step}${st.note ? `: ${st.note}` : ''}`);
+    else console.log(`Jira: ${r.jira.from} → ${r.jira.to}`);
   } else if (r.issue) {
     console.log(`${r.issue.key} · ${r.issue.status} · ${r.issue.summary}`);
     console.log(`${r.issue.url}`);
     console.log(`Ветка ${r.branch}: ${r.dry_run ? 'план' : STATE_TEXT[r.state]}${r.base ? ` от ${r.base}` : ''}`);
+    if (r.jira) console.log(`Jira: ${r.jira.from} → ${r.jira.to}${r.jira.skipped ? ` (${r.jira.skipped})` : ''}`);
   } else {
     console.log(`${r.branch} → ${r.target}, коммитов сверху: ${r.commits_ahead}`);
     if (r.mr) console.log(`MR !${r.mr.iid} ${r.mr_created ? 'открыт' : 'уже был'}: ${r.mr.web_url}`);

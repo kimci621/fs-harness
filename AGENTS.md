@@ -208,7 +208,7 @@ resolve target → precheck → (skip?) → context → isolate → plan? → pr
 
 `jobs`: `{pipeline: {id, status, web_url}, jobs: [{id, name, stage, status, web_url}]}`.
 
-`review`: `{ok, run, mr, review: '<текст находок>', judge: {...}|{skipped:true}}`; `analyze`: `{ok, run, issue, analysis: '<текст разбора>'}`; `implement`: `{ok, run, issue, branch, target, head_sha, commits_ahead, mr: {iid, web_url, draft}, judge}`; `task submit`: `{ok, key, branch, mr, title, draft_removed, jira: {from, to, transition}, posted}`; `jira`: `{ok, issues:[...]}` либо `{ok, issue:{...}, comments:[...]}`.
+`review`: `{ok, run, mr, review: '<текст находок>', judge: {...}|{skipped:true}}`; `analyze`: `{ok, run, issue, analysis: '<текст разбора>'}`; `implement`: `{ok, run, issue, branch, target, head_sha, commits_ahead, mr: {iid, web_url, draft}, judge}`; `task submit`: `{ok, key, branch, mr, title, draft_removed, jira: {from, to, transition}, posted, steps: [{step, ok, note}]}`; `jira`: `{ok, issues:[...]}` либо `{ok, issue:{...}, comments:[...]}`.
 
 `run`/`deploy`/`conflict`/`threads`/`commit`: финальный `{ok: true, ...}` с фактическим результатом (джобы, хэши, web_url); `--dry-run` — `{ok, dry_run, plan...}` без запусков. У `conflict` дополнительно `conflict_files: string[]` и `has_conflicts` — посчитанные `git merge-tree`, а не взятые из GitLab, `run` (id рана) и `judge: {decision, confidence, summary, profile, cost}` либо `{skipped: true}` при `--no-judge`. У `threads` — `threads_open`, `replied: string[]`, `resolved: string[]`, `commits_ahead` (ноль — норма: тред мог требовать только ответа).
 
