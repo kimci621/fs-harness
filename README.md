@@ -84,7 +84,7 @@ fsh config show
 | `review <mr\|ветка>` | Ревью диффа MR по правилам проекта. Читающее: ничего не правит и не комментирует MR |
 | `analyze <KEY>` | Разбор задачи Jira по коду проекта: что делать, где, что сломается, вопросы к постановщику. Читающее |
 | `jira [mine\|<KEY>\|move\|sprint\|comment\|field\|attach\|create\|delete]` | Задачи Jira: список с фильтрами (`--assignee`, `--sprint`, `--component`, `--status`, `--jql`), одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля из `editmeta`, вложения (список, аплоад, выгрузка), создание и удаление задачи |
-| `task start <KEY>\|push [KEY]\|judge [KEY]` | Взять задачу в работу (ветка по `branchPattern`), запушить с открытием MR в `targetBranch` (перебивается `--target`), показать приёмку судьи. `push --post` заодно пишет в Mattermost |
+| `task start <KEY>\|push [KEY]\|submit [KEY]\|judge [KEY]` | Взять задачу в работу (ветка по `branchPattern`, статус `taskFlow.startStatus`), сдать в ревью одной командой (поля, статус, MR, Mattermost), запушить с открытием MR в `targetBranch` (перебивается `--target`), показать приёмку судьи. `push --post` заодно пишет в Mattermost |
 | `growthbook [list\|get <id>\|create <id> <on\|off>\|toggle <id> <on\|off>\|delete <id>]` | Фича-флаги GrowthBook: список, один флаг, создание, включение и выключение в окружении (`--env`) |
 | `mm [login\|whoami\|channels\|post\|review]` | Сообщения в Mattermost от своего имени (см. «Сообщения в Mattermost») |
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id. Если пайплайна нет или он устарел, создаёт новый — чистым чтением команда не является |
@@ -272,6 +272,7 @@ fsh prompts check                                  # сверить front-matter
 ```bash
 fsh watch           # один опрос моих MR: снимок → дифф с прошлым → сообщение на MR в Telegram
 fsh watch --daemon  # то же по кругу и по всем проектам конфига
+fsh wait add mm <permalink> --from g.rekunov  # ответ в треде придёт в Telegram; до конца дня
 fsh up              # бот + демон на переднем плане, токен из ~/.tg_fs_harness_bot; Ctrl+C гасит обоих
 fsh watch install   # готовый launchd-plist (или systemd-unit) для автозапуска — печатает, не ставит
 ```

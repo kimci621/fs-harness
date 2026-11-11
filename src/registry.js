@@ -21,6 +21,7 @@ import { cmdGrowthBook } from './commands/growthbook.js';
 import { cmdFlow } from './commands/flow.js';
 import { cmdInit } from './commands/init.js';
 import { cmdWatch, cmdWatchDaemon, cmdWatchInstall } from './commands/watch.js';
+import { cmdWait, renderWait } from './waits.js';
 import { cmdQueue } from './commands/queue.js';
 import { cmdWorktrees } from './commands/worktrees.js';
 import { cmdWorker } from './commands/worker.js';
@@ -406,6 +407,18 @@ export const COMMANDS = [
       : opts.daemon
         ? cmdWatchDaemon(opts)
         : withProject(ctx, () => cmdWatch(ctx, { json: opts.json }))),
+  },
+  {
+    name: 'wait',
+    usage: 'wait add mm <permalink>|jira <KEY> [--from ник] [--note текст] | list | rm <id>',
+    description: 'Жду ответа до конца дня: тред Mattermost или комментарии задачи Jira. Ответ пришёл — Telegram и пункт снят; день сменился — снят молча. Проверяет демон watch (fsh up)',
+    example: 'fsh wait add mm https://mm.fitstars.team/fitstars/pl/<id> --from g.rekunov',
+    run: async (ctx, args, opts) => {
+      const r = await cmdWait(ctx, args, opts);
+      if (opts.json) console.log(JSON.stringify(r, null, 2));
+      else renderWait(r);
+      return r;
+    },
   },
   {
     name: 'queue',

@@ -11,6 +11,7 @@ import { createGlab } from '../glab.js';
 import { createCtx } from '../registry.js';
 import { listAuto, advanceTask } from '../auto.js';
 import { CliError } from '../errors.js';
+import { runWaits } from '../waits.js';
 
 const BOT_STATE_ROOT = path.join(homedir(), '.local', 'state', 'fs-harness');
 
@@ -104,6 +105,7 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
 
   const last = new Map();
   let lastGc = 0;
+  let lastWaits = -Infinity;
   let cycle = 0;
   log(`${stamp()} watcher: проекты ${names.join(', ')}`);
   try {
@@ -214,6 +216,15 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
               // Игнорируем сбои поиска Jira
             }
           }
+        }
+      }
+      // Ожидания ответов (fsh wait) — тем же процессом, раз в 5 минут.
+      if (!stopped && now() - lastWaits >= 300_000) {
+        lastWaits = now();
+        try {
+          await (deps.runWaitsImpl || runWaits)({ loadCfg, env, makeCtx, now: now(), log: (m) => log(`${stamp()} ${m}`) });
+        } catch (err) {
+          log(`${stamp()} wait: проверка упала — ${err.message}`);
         }
       }
       if (stopped) break;
