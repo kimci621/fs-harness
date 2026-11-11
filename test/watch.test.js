@@ -274,3 +274,41 @@ test('демон: автостарт ищет задачи «В работе» �
   assert.match(queries[0]?.jql ?? '', /assignee = currentUser\(\)/);
   assert.deepEqual(started, ['FD-7']);
 });
+
+test('демон: autoResolve сам зовёт resolve-all по событию, повтор MR в очередь не встаёт, без флага — только сообщение', async () => {
+  const projects = { front: {}, back: {} };
+  const loadCfg = (env, { project } = {}) => ({
+    projects,
+    activeProject: project ?? '',
+    repo: project ? `org/${project}` : '',
+    watch: { enabled: true, intervalSeconds: 10, autoResolve: project === 'front' },
+    judge: { roles: {}, profiles: {} },
+    telegram: {},
+  });
+  const resolved = [];
+  const said = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let clock = 0;
+  await cmdWatchDaemon({}, {
+    env: {},
+    loadCfg,
+    makeCtx: (cfg) => ({ cfg, repo: cfg.repo }),
+    // Каждый круг оба проекта приносят событие по !7: первый разбор ещё идёт, когда приходит второе.
+    poll: async () => ({ events: [{ iid: 7 }], notified: 1 }),
+    resolveAllImpl: async (ctx, opts) => {
+      resolved.push(`${ctx.repo}!${opts.only[0]}`);
+      await gate;
+      return { ok: true, mrs: [] };
+    },
+    sayImpl: async (cfg, text) => said.push(text),
+    runWaitsImpl: async () => {},
+    sleep: async (ms) => { clock += ms; if (clock >= 30000) release(); },
+    now: () => clock,
+    cycles: 3,
+    log: () => {},
+  });
+  assert.deepEqual(resolved, ['org/front!7']);
+  assert.equal(said.length, 1);
+  assert.match(said[0], /!7: работы нет/);
+});

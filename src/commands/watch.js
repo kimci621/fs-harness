@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pollOnce, daemonSecretIssues, DEFAULT_BEHIND_THRESHOLD } from '../watch.js';
 import { getTelegramTarget } from '../notify.js';
-import { sendButtons, sendMessage, formatWatchEvent, fixButtons, issueFixButton, stripHtml } from '../tgbot.js';
+import { sendButtons, sendMessage, formatWatchEvent, fixButtons, issueFixButton, stripHtml, formatResolveAllTelegram, escapeHtml } from '../tgbot.js';
+import { cmdResolveAll } from './resolve-all.js';
 import { gitProbe } from './resolve-all.js';
 import { loadConfig, expandHome } from '../config.js';
 import { gcWorktrees } from '../worktrees.js';
@@ -30,10 +31,12 @@ export async function cmdWatch(ctx, { json, asObject, file, probe, stateRoot = B
 
   const target = getTelegramTarget(ctx.cfg);
   // Кнопку жмёт fsh bot, а он без allowlist не стартует: без списка кнопка была бы мёртвой.
-  const withButton = (ctx.cfg?.telegram?.allowed_user_ids ?? []).length > 0;
+  // С autoResolve разбор запускает демон сам — кнопка лишняя.
+  const auto = Boolean(ctx.cfg?.watch?.autoResolve);
+  const withButton = !auto && (ctx.cfg?.telegram?.allowed_user_ids ?? []).length > 0;
   let notified = 0;
   for (const e of target ? events : []) {
-    const text = formatWatchEvent(e, ctx.repo);
+    const text = formatWatchEvent(e, ctx.repo) + (auto ? '\n\n🤖 Разбираю сам, итог пришлю.' : '');
     try {
       if (withButton) {
         const nonce = issueFixButton(stateRoot, { project: ctx.cfg?.activeProject ?? '', repo: ctx.repo, iid: e.iid });
@@ -99,11 +102,38 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
   let stopped = false;
   let wake = null;
   // Сигнал будит демон посреди сна: иначе остановка ждала бы целый интервал.
-  const stop = () => { stopped = true; wake?.(); };
+  const stop = () => { stopped = true; ac.abort(); wake?.(); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 
   const last = new Map();
+  // autoResolve: разборы идут по одному в очереди, повтор того же MR в очередь не встаёт.
+  let chain = Promise.resolve();
+  const queued = new Set();
+  const ac = new AbortController();
+  const resolveAll = deps.resolveAllImpl || cmdResolveAll;
+  const say = deps.sayImpl || (async (cfg, text) => {
+    const t = getTelegramTarget(cfg);
+    if (t) await sendMessage(t.token, t.chatId, text);
+  });
+  const autoResolve = (cfg, e) => {
+    const key = `${cfg.repo}!${e.iid}`;
+    if (queued.has(key)) return;
+    queued.add(key);
+    chain = chain.then(async () => {
+      if (stopped) return;
+      log(`${stamp()} ${cfg.repo}: resolve-all !${e.iid}…`);
+      try {
+        const res = await resolveAll(makeCtx(cfg), { only: [e.iid], yes: true, asObject: true, signal: ac.signal });
+        await say(cfg, formatResolveAllTelegram(res, e.iid));
+      } catch (err) {
+        log(`${stamp()} ${cfg.repo}: resolve-all !${e.iid} упал — ${err.message}`);
+        await say(cfg, `❌ resolve-all !${e.iid} упал: ${escapeHtml(err.message)}\nДоделать руками: <code>fsh resolve-all ${e.iid}</code>.`).catch(() => {});
+      } finally {
+        queued.delete(key);
+      }
+    });
+  };
   let lastGc = 0;
   let lastWaits = -Infinity;
   let cycle = 0;
@@ -156,6 +186,7 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
         try {
           const r = await poll(makeCtx(cfg), { asObject: true });
           log(`${stamp()} ${cfg.repo}: MR с событиями ${r.events.length}, отправлено ${r.notified}`);
+          if (cfg.watch?.autoResolve) for (const e of r.events) autoResolve(cfg, e);
         } catch (err) {
           // Опрос одного проекта упал — это не повод ронять демон: сеть моргает, токены протухают.
           log(`${stamp()} ${cfg.repo || name}: опрос упал — ${err.message}`);
@@ -237,6 +268,7 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
   }
+  await chain;
   log(`${stamp()} watcher остановлен.`);
   return { ok: true, cycles: cycle, projects: names };
 }
