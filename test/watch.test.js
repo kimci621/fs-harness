@@ -275,6 +275,35 @@ test('демон: автостарт ищет задачи «В работе» �
   assert.deepEqual(started, ['FD-7']);
 });
 
+// Событие уже в снимке, поэтому упавший разбор сам не повторится: сообщение обязано это сказать.
+test('демон: упавший autoResolve — в сообщении, что сам не повторит, и команда с проектом', async () => {
+  const loadCfg = (env, { project } = {}) => ({
+    projects: { front: {} }, activeProject: project ?? '', repo: 'org/front',
+    watch: { enabled: true, intervalSeconds: 10, autoResolve: true }, judge: { roles: {}, profiles: {} }, telegram: {},
+  });
+  const said = [];
+  const results = [
+    { ok: false, mrs: [{ iid: 7, sync: { status: 'failed', error: 'agy упал' }, threads: { status: 'blocked' }, mm: { status: 'not_needed' } }] },
+    new Error('сеть'),
+  ];
+  let clock = 0;
+  await cmdWatchDaemon({}, {
+    env: {}, loadCfg, makeCtx: (cfg) => ({ cfg, repo: cfg.repo }),
+    poll: async () => ({ events: [{ iid: 7 }], notified: 1 }),
+    resolveAllImpl: async () => { const r = results.shift(); if (r instanceof Error) throw r; return r; },
+    sayImpl: async (cfg, text) => said.push(text),
+    runWaitsImpl: async () => {},
+    sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)); },
+    now: () => clock, cycles: 2, log: () => {},
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(said.length, 2);
+  for (const t of said) {
+    assert.match(t, /Сам больше не возьмусь/);
+    assert.match(t, /fsh resolve-all 7 -P front/);
+  }
+});
+
 test('демон: autoResolve сам зовёт resolve-all по событию, повтор MR в очередь не встаёт, без флага — только сообщение', async () => {
   const projects = { front: {}, back: {} };
   const loadCfg = (env, { project } = {}) => ({
