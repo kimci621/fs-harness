@@ -123,12 +123,15 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
     chain = chain.then(async () => {
       if (stopped) return;
       log(`${stamp()} ${cfg.repo}: resolve-all !${e.iid}…`);
+      // Событие уже в снимке: упавший разбор демон сам не повторит, и это надо сказать прямо.
+      const manual = `🙋 Сам больше не возьмусь: снова возьму только на новой реплике или новом конфликте.\nДоделать руками: <code>fsh resolve-all ${e.iid}${cfg.activeProject ? ` -P ${cfg.activeProject}` : ''}</code>`;
       try {
         const res = await resolveAll(makeCtx(cfg), { only: [e.iid], yes: true, asObject: true, signal: ac.signal });
-        await say(cfg, formatResolveAllTelegram(res, e.iid));
+        const text = formatResolveAllTelegram(res, e.iid);
+        await say(cfg, text.startsWith('❌') ? `${text}\n\n${manual}` : text);
       } catch (err) {
         log(`${stamp()} ${cfg.repo}: resolve-all !${e.iid} упал — ${err.message}`);
-        await say(cfg, `❌ resolve-all !${e.iid} упал: ${escapeHtml(err.message)}\nДоделать руками: <code>fsh resolve-all ${e.iid}</code>.`).catch(() => {});
+        await say(cfg, `❌ resolve-all !${e.iid} упал: ${escapeHtml(err.message)}\n\n${manual}`).catch(() => {});
       } finally {
         queued.delete(key);
       }
