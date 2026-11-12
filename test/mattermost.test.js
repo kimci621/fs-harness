@@ -310,3 +310,33 @@ test('mm react: Unicode-эмодзи → имя Mattermost, реакция от 
   const plan = await cmdMM(ctxWith({ react: () => assert.fail('dry-run ничего не пишет') }), ['react', id, '✅'], { asObject: true, dryRun: true });
   assert.equal(plan.emoji, 'white_check_mark');
 });
+
+test('mm review: из worktree проекта ветка берётся из worktree, а не из основного checkout', async (t) => {
+  const { mkdtempSync, rmSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = (await import('node:path')).default;
+  const tmp = realpathSync(mkdtempSync(path.join(tmpdir(), 'fsh-mm-wt-')));
+  const back = path.join(tmp, 'back');
+  const wt = path.join(tmp, 'back-wt');
+  const git = (...a) => execFileSync('git', ['-C', back, ...a], { stdio: 'ignore' });
+  execFileSync('git', ['init', '-q', '-b', 'dev', back]);
+  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+  git('worktree', 'add', '-q', '-b', 'feature/FD-7', wt);
+  const prev = process.cwd();
+  t.after(() => { process.chdir(prev); rmSync(tmp, { recursive: true, force: true }); });
+
+  const branches = [];
+  const ctx = {
+    cfg: { ...CFG, activeProject: 'back', projectDir: back, projects: { back: { dir: back } } },
+    repo: 'g/back',
+    g: { listOpenMRs: async (repo, { source_branch }) => { branches.push(source_branch); return [{ iid: 7, web_url: 'https://gl/mr/7', title: 'FD-7: заголовок' }]; } },
+  };
+  process.chdir(wt);
+  const out = await cmdMM(ctx, ['review'], { asObject: true, dryRun: true });
+  assert.deepEqual(branches, ['feature/FD-7']);
+  assert.match(out.text, /FD-7: заголовок/);
+  // Вне репозитория проекта — как раньше, основной checkout.
+  process.chdir(tmp);
+  await cmdMM(ctx, ['review'], { asObject: true, dryRun: true });
+  assert.equal(branches[1], 'dev');
+});
