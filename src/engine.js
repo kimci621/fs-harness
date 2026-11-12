@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createEventStream } from './agent/events.js';
-import { parseClaudeLine, parseAgyLine } from './agent/stream.js';
+import { parseClaudeLine, parseAgyLine, parseOpencodeLine } from './agent/stream.js';
 import { createRun, saveArtifact, readRun, appendEvent, patchRunMeta, runIsActive, MAX_ARCHIVES } from './agent/journal.js';
 import { appendCost } from './costs.js';
 import { spawnAgent } from './agent/spawn.js';
@@ -26,13 +26,14 @@ import { CliError } from './errors.js';
 export { ISOLATION_MODES };
 export const JUDGE_GATES = ['pre-push', 'advisory', 'none'];
 
-// Как агент продолжает свою же сессию: claude резюмит по --resume, agy — по --conversation.
+// Как агент продолжает свою же сессию: claude резюмит по --resume, agy — по --conversation, opencode — по --session.
 // Агента вне списка на доделку не зовём: без сессии он начал бы с нуля и затёр бы сделанное.
 // Сессия нужна, чтобы доделка после revise шла в тот же диалог, а не с чистого листа.
 // Ключ — семейство агента: cc, ccq, cco, ccd это один и тот же Claude Code.
 export const SESSION_ARGS = {
   claude: { start: (id) => ['--session-id', id], resume: (id) => ['--resume', id] },
   agy: { start: () => [], resume: (id) => ['--conversation', id] },
+  opencode: { start: () => [], resume: (id) => ['--session', id] },
 };
 
 // Что агент получает вместе с просьбой доделать: решение судьи, находки и границы.
@@ -81,13 +82,16 @@ export async function spawnSession(x, text, { resume = false, agentName, session
   const agent = resolveAgent(opts.cfg, agentName ?? opts.agent);
   const session = SESSION_ARGS[agent.family];
   x.sessions ??= {};
-  if (session && !x.sessions[sessionKey] && agent.family !== 'agy') x.sessions[sessionKey] = randomUUID();
+  // Id заранее задаёт только claude, agy и opencode отдают свой в потоке.
+  if (session && !x.sessions[sessionKey] && agent.family === 'claude') x.sessions[sessionKey] = randomUUID();
   const sid = x.sessions[sessionKey];
   const sessionArgs = session ? (resume && sid ? session.resume(sid) : session.start(sid)) : [];
   const isAgy = agent.family === 'agy';
-  const streamJson = isAgy || (agent.family === 'claude' && !agent.args.includes('--output-format'));
+  const isOpencode = agent.family === 'opencode';
+  const streamJson = isAgy || isOpencode || (agent.family === 'claude' && !agent.args.includes('--output-format'));
   const extraArgs =
     isAgy ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '-p=']
+    : isOpencode ? ['--format', 'json']
     : streamJson ? ['--output-format', 'stream-json', '--verbose', '-p']
     : ['-p'];
   const input =
@@ -111,14 +115,19 @@ export async function spawnSession(x, text, { resume = false, agentName, session
   const errOut = [];
   let resultText = null;
   let lastEnvelope = null;
+  let agentError = null;
   proc.events.on((ev) => {
     if (ev.t !== 'log') return;
     if (ev.stream === 'stderr') errOut.push(ev.text);
     if (ev.stream === 'stdout' && streamJson) {
-      const parsed = isAgy ? parseAgyLine(ev.text) : parseClaudeLine(ev.text);
-      const { activity, result, passthrough, session: sess, envelope } = parsed;
+      const parsed = (isAgy ? parseAgyLine : isOpencode ? parseOpencodeLine : parseClaudeLine)(ev.text);
+      const { activity, result, passthrough, session: sess, envelope, error } = parsed;
       if (envelope) lastEnvelope = envelope;
       if (sess && !x.sessions[sessionKey]) x.sessions[sessionKey] = sess;
+      if (error) {
+        agentError = error;
+        errOut.push(error);
+      }
       if (result !== null) {
         resultText = result;
         return;
@@ -158,9 +167,10 @@ export async function spawnSession(x, text, { resume = false, agentName, session
       duration_ms: durationMs,
     };
   }
-  if (!done.ok) {
+  // Ошибка в потоке — провал при любом коде выхода, и её текст объясняет причину лучше кода.
+  if (!done.ok || agentError) {
     if (sessionKey === 'main') x.sessionId = x.sessions.main ?? null;
-    const how = done.signal ? `прерван (${done.signal})` : `завершился с кодом ${done.code}`;
+    const how = done.signal ? `прерван (${done.signal})` : agentError ? `ответил ошибкой: ${agentError}` : `завершился с кодом ${done.code}`;
     const where = ws?.created ? `\nWorktree сохранён: ${ws.dir}` : '';
     const combined = [...errOut, ...out].join('\n');
     if (/rate.?limit|429|overloaded/i.test(combined)) {

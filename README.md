@@ -4,7 +4,7 @@
 
 Куда растёт — в [PLAN.md](PLAN.md): движок «действие → контекстный промпт → запуск агента → проверка судьёй» уже на месте, дальше по плану — демон-наблюдатель и работа с бэкендом.
 
-Зависимости ставятся через `npm ci`; из внешних программ нужны только `node` (≥22), `git` (≥2.38), `glab` и `claude` (агент и судья). `agy` опционален.
+Зависимости ставятся через `npm ci`; из внешних программ нужны только `node` (≥22), `git` (≥2.38), `glab` и `claude` (агент и судья). `opencode` и `agy` опциональны.
 Из системного используются `security` (ключи в keychain) и `cp -Rc` (клон `node_modules` в worktree через APFS clonefile) — то есть **macOS**.
 
 ## Установка
@@ -66,7 +66,7 @@ fsh config show
 - `host` — **важно**: glab сам выбирает хост по git remote текущей директории. `fsh` всегда передаёт `--hostname` из конфига, чтобы команда работала из любой директории. Перебивается флагом `--host` или env `GL_HELPER_HOST`.
 - `projects` — проекты по имени: `repo`, `host`, `dir` (в нём `conflict` и `threads` создают временный worktree, а `review` и `analyze` читают его как есть), плюс необязательные `agent`, `buildJob`, `targetBranch` (куда `task push` открывает MR), `branchPattern` (дефолт `feature/{key}`), `checks`, `jira`, `growthbook`, `dict`. Активный выбирается так: `-P <имя>` > `FS_HARNESS_PROJECT` > `activeProject` > единственный.
 - `jira` — `baseUrl`, `email`, `projectKey`, `componentField` (имя checkbox-поля для `--component`, дефолт «Компонент»). Токен не в конфиге, а в keychain: `security add-generic-password -s fs-harness -a jira -w '<токен>'`. Без токена работает всё, кроме `jira` и `analyze`.
-- `agents` — профили агентов: `bin`, `args`, `env`, `keyFile`. Встроенные — `cc` (Claude Code), `ccq`/`cco`/`ccd` (тот же Claude Code, но через Alibaba / OpenRouter / DeepSeek), `agy`. Проект выбирает свой полем `agent`, разово перебивается флагом `--agent`.
+- `agents` — профили агентов: `bin`, `args`, `env`, `keyFile`. Встроенные — `cc` (Claude Code), `ccq`/`cco`/`ccd` (тот же Claude Code, но через Alibaba / OpenRouter / DeepSeek), `opencode` (deepseek-v4.1-flash, фолбэк при рейт-лимите claude, исполнитель `implement` и мастер `fsh ask`), `agy`. Проект выбирает свой полем `agent`, разово перебивается флагом `--agent`.
 - `chat.agent` — каким профилем отвечает мастер `fsh ask`.
 - `judge` — профили судьи и назначение их на роли (см. раздел «Судья»).
 - `telegram` — `chat_id` и `bot_token` (опционально, можно задать в keychain или через `TELEGRAM_BOT_TOKEN`). Пустые — уведомления не шлются. `approvals: true` + `allowed_user_ids: [<id>]` — гейт pre-push ждёт кнопку в Telegram вместо push; бот — `fsh bot`.
@@ -110,7 +110,7 @@ fsh config show
 | `config init\|show\|migrate` | Конфиг: создать, показать активный проект, перевести старый файл на v2 (с бэкапом `.v1.bak`) |
 | `help` | Справка |
 
-Флаги: `-R/--repo`, `--host`, `-P/--project`, `--json` (read-команды), `--agent <профиль>` (`cc`, `ccq`, `cco`, `ccd`, `agy` — живут в конфиге, `agents.<имя>`), `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit/jira/mm — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show), `--file <путь|->` и `--attach` (jira field), `--post` и `--channel` (task push, mm), `--daemon` (watch, doctor), `--sizes` и `--older-than` (worktrees), `--once` и `--concurrency` (worker).
+Флаги: `-R/--repo`, `--host`, `-P/--project`, `--json` (read-команды), `--agent <профиль>` (`cc`, `ccq`, `cco`, `ccd`, `opencode`, `agy` — живут в конфиге, `agents.<имя>`), `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit/jira/mm — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show), `--file <путь|->` и `--attach` (jira field), `--post` и `--channel` (task push, mm), `--daemon` (watch, doctor), `--sizes` и `--older-than` (worktrees), `--once` и `--concurrency` (worker).
 
 Полный список — `fsh help`; он генерируется из того же реестра, что и сами команды.
 
@@ -378,7 +378,7 @@ fsh conflict --judge-only conflict-mtx2z-181g   # пересудить сохр�
 ```
 
 **Доделка по `revise`.** Вердикт `revise` не закрывает гейт сразу: движок отдаёт агенту находки
-судьи в ту же сессию (`claude --resume`, `agy --conversation`), тот дорабатывает в том же worktree,
+судьи в ту же сессию (`claude --resume`, `opencode --session`, `agy --conversation`), тот дорабатывает в том же worktree,
 после чего факты снимаются заново и судья смотрит второй раз. Число повторов — `judge.maxRevise`
 (по умолчанию 1, `0` выключает), `judge.enabled: false` в конфиге равен постоянному `--no-judge`.
 

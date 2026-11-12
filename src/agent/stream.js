@@ -73,3 +73,28 @@ export function parseAgyLine(line) {
   }
   return { activity: null, result: null };
 }
+
+// Разбор потока opencode (run --format json). Итогового события нет: ответ — последний кусок text.
+// Ошибку модели opencode шлёт событием error: её текст и есть причина провала.
+export function parseOpencodeLine(line) {
+  const text = String(line ?? '').trim();
+  if (!text.startsWith('{')) return { activity: null, result: null, passthrough: text || null };
+  let ev;
+  try {
+    ev = JSON.parse(text);
+  } catch {
+    return { activity: null, result: null, passthrough: text };
+  }
+  const session = ev.sessionID ?? null;
+  if (ev.type === 'text') return { activity: null, result: String(ev.part?.text ?? ''), session };
+  if (ev.type === 'tool_use') {
+    const i = ev.part?.state?.input ?? {};
+    const arg = i.command ?? i.pattern ?? i.filePath ?? i.path ?? i.url ?? i.query ?? '';
+    return { activity: `🔧 ${toolBrief(ev.part?.tool ?? 'tool', { command: arg })}`, result: null, session };
+  }
+  if (ev.type === 'error') {
+    const e = ev.error ?? {};
+    return { activity: null, result: null, error: [e.status, e.message ?? 'opencode ответил ошибкой'].filter(Boolean).join(' '), session };
+  }
+  return { activity: null, result: null, session };
+}

@@ -420,7 +420,7 @@ test('bot: команда /agent — вызов автономного аген�
   assert.ok(sends.some((s) => s.body.text.includes('Запускаю агента') && s.body.text.includes('почини баг в коде')));
   assert.ok(sends.some((s) => s.body.text.includes('Успешно сделано: почини баг в коде')));
   assert.equal(agentCalls.length, 2);
-  assert.equal(agentCalls[0].agent, 'agy');
+  assert.equal(agentCalls[0].agent, 'opencode');
   assert.equal(agentCalls[0].prompt, 'почини баг в коде');
   assert.equal(agentCalls[1].agent, 'cc');
   assert.equal(agentCalls[1].prompt, 'сделай рефакторинг');
@@ -444,7 +444,7 @@ test('bot: runAgentViaBot через spawnAgentImpl — стрим и отчёт
     events.push({
       t: 'log',
       stream: 'stdout',
-      text: JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'Код написан, тесты зеленые' } }),
+      text: JSON.stringify({ type: 'text', sessionID: 'ses_1', part: { type: 'text', text: 'Код написан, тесты зеленые' } }),
     });
     return {
       events,

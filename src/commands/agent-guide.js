@@ -11,7 +11,7 @@ const GUIDE_TEMPLATE = `fsh — CLI для работы с GitLab (MR, пайп�
 
 {{COMMANDS}}
 
-Флаги: -R/--repo <repo>, --host <host>, --json, --agent <профиль: cc, ccq, cco, ccd, agy>, --project-dir <dir>,
+Флаги: -R/--repo <repo>, --host <host>, --json, --agent <профиль: cc, ccq, cco, ccd, opencode, agy>, --project-dir <dir>,
 -B/--build-job <имя> (дефолт build_image), -w/--watch, -y/--yes, --keep-worktree, --rebuild, --dry-run,
 --resolved/--open (mr-comments), --no-judge / --judge <профиль> / --judge-only <runId> (conflict),
 --for <mr> (prompts show).
@@ -75,7 +75,7 @@ action_unknown, run_not_publishable, deps_unavailable.
 
 - deploy сам ждёт build и deploy-джобы (опрос 5с, live-статус в stderr), exit 0 только при success.
 - deploy с --rebuild перезапускает джобы даже при success (retry, новый id) — перезапись слота.
-- conflict: работу с git делает АГЕНТ (claude|agy headless) во временном worktree проекта.
+- conflict: работу с git делает АГЕНТ (claude|opencode|agy headless) во временном worktree проекта.
   Пушит не он, а fsh — и только после того, как судья вернул approve. Любой другой вердикт,
   невалидный ответ судьи или падение его бэкенда = гейт закрыт (judge_rejected, judge_schema,
   judge_failed). При любом провале после запуска агента worktree сохранён, путь к нему в

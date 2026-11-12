@@ -133,7 +133,7 @@ export const ciFixAction = {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'номер MR или часть имени ветки' },
-        agent: { type: 'string', description: 'какой агент чинит (имя профиля из конфига: cc, ccq, cco, ccd, agy)' },
+        agent: { type: 'string', description: 'какой агент чинит (имя профиля из конфига: cc, ccq, cco, ccd, opencode, agy)' },
       },
       required: ['query'],
     },
