@@ -9,7 +9,7 @@ const FLAGS_USAGE = `Флаги:
   -P, --project <имя>     Проект из конфига (дефолт activeProject / FS_HARNESS_PROJECT)
   --host <hostname>       GitLab-хост (дефолт из конфига)
   --json                  Вывод в JSON (mrs, mr, jobs, run, deploy) — удобно агентам
-  --agent <профиль>       Агент для действий и commit: cc (по умолчанию), ccq, cco, ccd, agy
+  --agent <профиль>       Агент для действий и commit: cc (по умолчанию), ccq, cco, ccd, opencode, agy
                           Профили живут в конфиге, agents.<имя>. Можно и --agent=cc
   --project-dir <dir>     Каталог проекта для действий (worktree) и commit
   -B, --build-job <имя>   Имя build-джобы (deploy, conflict; дефолт build_image)

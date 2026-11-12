@@ -9,14 +9,14 @@ import { branchFor, isProtected } from '../commands/task.js';
 import { readBackendRefs } from './analyze.js';
 import { CliError } from '../errors.js';
 
-// Планировщик и исполнитель — разные профили: план на opus, реализация на gemini flash.
+// Планировщик и исполнитель — разные профили: план на opus, реализация на opencode (deepseek flash).
 // Имена вынесены в константы, чтобы dry-run и декларация не разъезжались.
 export const PLAN_AGENT = 'opus';
-export const EXEC_AGENT = 'gemini';
+export const EXEC_AGENT = 'opencode';
 
 const titleOf = (issue) => `${issue.key}: ${issue.fields?.summary ?? ''}`.trim();
 
-// Реализация задачи Jira целиком: план (claude opus) → код (agy gemini) → ревью судьёй
+// Реализация задачи Jira целиком: план (claude opus) → код (opencode) → ревью судьёй
 // (до трёх доделок) → push → черновик MR. Решение «отправить в ревью команде» остаётся
 // человеку: снятие черновика, перевод Jira и пост в Mattermost делает `fsh task submit`.
 export const implementAction = {
@@ -34,12 +34,12 @@ export const implementAction = {
     plan: { agent: PLAN_AGENT, prompt: 'actions/implement-plan' },
     agent: { default: EXEC_AGENT, pickByJudge: false },
     judge: { gate: 'pre-push', role: 'task-review', maxRevise: 3 },
-    mcpDescription: 'Реализовать задачу Jira силами двух агентов: claude opus составляет план по коду, agy gemini пишет код, судья (до трёх доделок) принимает работу, затем fs-harness пушит ветку и открывает черновик MR в целевой ветке. Меняет код, git и GitLab. Отправка в ревью команде — отдельно (fsh task submit).',
+    mcpDescription: 'Реализовать задачу Jira силами двух агентов: claude opus составляет план по коду, opencode пишет код, судья (до трёх доделок) принимает работу, затем fs-harness пушит ветку и открывает черновик MR в целевой ветке. Меняет код, git и GitLab. Отправка в ревью команде — отдельно (fsh task submit).',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'ключ задачи Jira, например FD-7647' },
-        agent: { type: 'string', description: 'какой агент пишет код (имя профиля из конфига, по умолчанию gemini)' },
+        agent: { type: 'string', description: 'какой агент пишет код (имя профиля из конфига, по умолчанию opencode)' },
       },
       required: ['query'],
     },

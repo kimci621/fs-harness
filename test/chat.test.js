@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { startChat, WIRE } from '../src/chat.js';
-import { parseAgyLine } from '../src/agent/stream.js';
+import { parseAgyLine, parseOpencodeLine } from '../src/agent/stream.js';
 import { buildAskBrief, lastFailedRun, eventLine } from '../src/commands/ask.js';
 
 // Подменённый spawnAgent: копит аргументы и написанные строки, отдаёт события по команде теста.
@@ -110,6 +110,42 @@ test('parseAgyLine: конверт event, дельты текста и ошиб�
     '"tool_info":{"parameters":{"Pattern":"probe.txt","SearchDirectory":"/Users/a"}}}}';
   assert.equal(parseAgyLine(tool.replace('%s', 'ACTIVE')).activity, '🔧 find_by_name probe.txt');
   assert.equal(parseAgyLine(tool.replace('%s', 'DONE')).activity, null, 'иначе каждый вызов двоится');
+});
+
+const opencodeAgent = { name: 'opencode', bin: 'opencode', family: 'opencode', args: ['run', '--auto', '-m', 'm'], env: {} };
+const oc = (ev) => JSON.stringify({ sessionID: 'ses_1', ...ev });
+
+test('чат opencode: процесс на реплику, ответ — последний text, со второй реплики --session', async () => {
+  const { impl, calls } = fakeSpawn();
+  const chat = startChat({ agent: opencodeAgent, cwd: '/repo', spawnImpl: impl });
+  const first = chat.send('привет');
+  assert.equal(calls[0].input, 'привет');
+  assert.ok(!calls[0].args.includes('--session'));
+  calls[0].out(oc({ type: 'text', part: { text: 'смотрю' } }));
+  calls[0].out(oc({ type: 'text', part: { text: 'ответ' } }));
+  calls[0].emit({ t: 'done', ok: true, code: 0 });
+  assert.equal(await first, 'ответ', 'первый кусок текста не должен закрывать ход');
+
+  const second = chat.send('ещё');
+  assert.deepEqual(calls[1].args.slice(-4), ['--format', 'json', '--session', 'ses_1']);
+  calls[1].out(oc({ type: 'error', error: { message: 'бум' } }));
+  calls[1].emit({ t: 'done', ok: true, code: 0 });
+  await assert.rejects(() => second, (e) => e.code === 'agent_failed' && /бум/.test(e.message));
+});
+
+test('чат opencode read-only: без --auto, с агентом plan', () => {
+  const { impl, calls } = fakeSpawn();
+  startChat({ agent: opencodeAgent, cwd: '/repo', readOnly: true, spawnImpl: impl }).send('вопрос');
+  assert.ok(!calls[0].args.includes('--auto'));
+  assert.deepEqual(calls[0].args.slice(0, 5), ['run', '-m', 'm', '--agent', 'plan']);
+});
+
+test('parseOpencodeLine: text, инструмент, ошибка, не-JSON', () => {
+  assert.equal(parseOpencodeLine(oc({ type: 'text', part: { text: 'ок' } })).result, 'ок');
+  assert.equal(parseOpencodeLine(oc({ type: 'step_start' })).session, 'ses_1');
+  assert.equal(parseOpencodeLine(oc({ type: 'tool_use', part: { tool: 'shell', state: { input: { command: 'ls -la' } } } })).activity, '🔧 shell ls -la');
+  assert.equal(parseOpencodeLine(oc({ type: 'error', error: { status: 429, message: 'rate limit' } })).error, '429 rate limit');
+  assert.equal(parseOpencodeLine('не json').passthrough, 'не json');
 });
 
 // --- бриф упавшего рана ---

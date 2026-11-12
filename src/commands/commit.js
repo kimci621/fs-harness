@@ -59,9 +59,9 @@ export async function cmdCommit(args, opts = {}) {
 
   const before = git(['rev-parse', 'HEAD']);
   log(`🤖 Запускаю ${agent.name}…`);
-  // Промпт в stdin (claude) или флагом (agy), вывод агента остаётся на терминале.
+  // Промпт в stdin (claude, opencode) или флагом (agy), вывод агента остаётся на терминале.
   const isAgy = agent.family === 'agy';
-  const spawnArgs = isAgy ? [...agent.args, '-p', prompt] : [...agent.args, '-p'];
+  const spawnArgs = isAgy ? [...agent.args, '-p', prompt] : agent.family === 'opencode' ? agent.args : [...agent.args, '-p'];
   const spawn = opts.spawnSyncImpl || spawnSync;
   const res = spawn(agent.bin, spawnArgs, {
     cwd: dir,

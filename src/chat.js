@@ -1,12 +1,12 @@
-import { randomUUID } from 'node:crypto';
 import { spawnAgent } from './agent/spawn.js';
-import { parseClaudeLine, parseAgyLine } from './agent/stream.js';
+import { parseClaudeLine, parseAgyLine, parseOpencodeLine } from './agent/stream.js';
 import { CliError } from './errors.js';
 
 // Чат с агентом: многоходовый диалог без своей машинерии сессий.
 //
 // stream — claude и agy принимают --input-format stream-json: один живой процесс,
 //          NDJSON-строка на реплику, контекст держит сам агент. Id сессии не нужен.
+// spawn  — opencode: процесс на реплику, со второй он продолжает сессию по id из потока.
 //
 // readOnly — режим «объясни, не трогай»: у каждого семейства свой флаг, общего нет.
 export const WIRE = {
@@ -27,6 +27,13 @@ export const WIRE = {
     line: (text) => `${JSON.stringify({ event: 'user', message: { role: 'user', content: text } })}\n`,
     parse: parseAgyLine,
   },
+  opencode: {
+    mode: 'spawn',
+    args: ['--format', 'json'],
+    readOnly: ['--agent', 'plan'],
+    resume: (id) => ['--session', id],
+    parse: parseOpencodeLine,
+  },
 };
 
 // Живой чат. onEvent получает {t:'activity'|'delta'|'answer'|'error', text}.
@@ -39,10 +46,10 @@ export function startChat({ agent, cwd, env, readOnly = false, onEvent = () => {
   }
 
   // В read-only снимаем обход разрешений из профиля: иначе флаг режима ничего не значит.
-  const profileArgs = readOnly ? agent.args.filter((a) => a !== '--dangerously-skip-permissions') : agent.args;
+  const profileArgs = readOnly ? agent.args.filter((a) => a !== '--dangerously-skip-permissions' && a !== '--auto') : agent.args;
   const baseArgs = [...profileArgs, ...(readOnly ? wire.readOnly : []), ...wire.args];
 
-  let session = wire.mode === 'spawn' ? randomUUID() : null;
+  let session = null;
   let started = false; // была ли уже реплика: только со второй нужен resume
   let proc = null;
   let pending = null;
@@ -68,6 +75,8 @@ export function startChat({ agent, cwd, env, readOnly = false, onEvent = () => {
       return settle('reject', new CliError(m.error, 1, 'agent_failed'));
     }
     if (m.result !== null && m.result !== undefined) {
+      // Процесс на ход: текст идёт кусками, ответ — последний, ход кончается с процессом.
+      if (wire.mode === 'spawn') return void (turnText = m.result);
       onEvent({ t: 'answer', text: m.result });
       settle('resolve', m.result);
     }

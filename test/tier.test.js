@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pickTier } from '../src/tier.js';
-import { runAction } from '../src/engine.js';
+import { runAction, spawnSession } from '../src/engine.js';
 import { createEventStream } from '../src/agent/events.js';
 import { DEFAULTS } from '../src/config.js';
 
@@ -71,7 +71,7 @@ test('engine: агент задачи Jira берётся по уровню, ф�
   rmSync(root, { recursive: true, force: true });
 });
 
-test('engine: рейт-лимит claude — ран доделывает фолбэк agy', async () => {
+test('engine: рейт-лимит claude — ран доделывает фолбэк opencode', async () => {
   const { root, spec, ctx, runsDir } = setup();
   const bins = [];
   const ok = okSpawn(bins);
@@ -88,6 +88,33 @@ test('engine: рейт-лимит claude — ран доделывает фол�
   await run.result;
   assert.equal(bins.length, 2);
   assert.match(bins[0], /^claude .*--effort xhigh/);
-  assert.match(bins[1], /^agy .*gemini-3\.8-flash-high/);
+  assert.match(bins[1], /^opencode run .*deepseek-v4\.1-flash#max --format json$/);
   rmSync(root, { recursive: true, force: true });
+});
+
+// Событие error — провал даже при коде 0, а в сообщении текст ошибки модели.
+test('spawnSession: opencode — ответ из последнего text, сессия из потока, error — провал с причиной', async () => {
+  const lines = (...evs) => (p) => {
+    const events = createEventStream();
+    for (const ev of evs) events.push({ t: 'log', stream: 'stdout', text: JSON.stringify(ev) });
+    calls.push(p);
+    return { events, result: Promise.resolve({ ok: true, code: 0 }), abort: () => {} };
+  };
+  const calls = [];
+  const x = (spawnAgentImpl) => ({ opts: { cfg, agent: 'opencode', spawnAgentImpl }, ws: { dir: '/tmp' } });
+
+  const ok = x(lines(
+    { type: 'text', sessionID: 'ses_1', part: { text: 'сначала гляну код' } },
+    { type: 'tool_use', sessionID: 'ses_1', part: { tool: 'read', state: { input: { path: 'a.txt' } } } },
+    { type: 'text', sessionID: 'ses_1', part: { text: 'готово' } },
+  ));
+  assert.equal(await spawnSession(ok, 'сделай'), 'готово');
+  assert.equal(ok.sessionId, 'ses_1');
+  assert.equal(calls[0].input, 'сделай');
+  assert.ok(!calls[0].args.includes('--session'), 'на первом ходу id ещё нет');
+  await spawnSession(ok, 'доделай', { resume: true });
+  assert.deepEqual(calls[1].args.slice(-4), ['--session', 'ses_1', '--format', 'json']);
+
+  const bad = x(lines({ type: 'error', sessionID: 'ses_2', error: { status: 402, message: 'нужно больше кредитов' } }));
+  await assert.rejects(() => spawnSession(bad, 'сделай'), (e) => e.code === 'agent_failed' && /402 нужно больше кредитов/.test(e.message));
 });

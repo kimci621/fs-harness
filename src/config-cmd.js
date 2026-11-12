@@ -6,6 +6,7 @@ import { CliError } from './errors.js';
 
 const AGENT_DESCRIPTIONS = {
   agy: 'Antigravity CLI (Google DeepMind / Antigravity)',
+  opencode: 'opencode CLI (deepseek-v4.1-flash через opencode-go)',
   claude: 'Claude Code (Anthropic по подписке / OAuth)',
   cc: 'Claude Code (алиас claude)',
   cco: 'Claude Code через OpenRouter (~/.openrouter_key)',

@@ -71,21 +71,23 @@ export const DEFAULTS = {
       },
     },
     // Планировщик задач: claude на opus с максимальным reasoning effort.
-    opus: { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'xhigh'], fallback: 'agy-high' },
+    opus: { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'xhigh'], fallback: 'opencode' },
     // Профили уровней сложности (tiers ниже). fallback — профиль, на который ран уходит
-    // при рейт-лимите: кончился лимит claude — задачу доделывает agy.
-    'opus-high': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'high'], fallback: 'agy-high' },
-    'sonnet-xhigh': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'xhigh'], fallback: 'agy-high' },
-    'sonnet-low': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'low'], fallback: 'agy-low' },
+    // при рейт-лимите: кончился лимит claude — задачу доделывает opencode.
+    'opus-high': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'high'], fallback: 'opencode' },
+    'sonnet-xhigh': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'xhigh'], fallback: 'opencode' },
+    'sonnet-low': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'low'], fallback: 'opencode' },
     'agy-high': { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-high'] },
     'agy-low': { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-low'] },
-    // agy (Antigravity CLI) — опционален: нет в PATH, мастер молча берёт cc.
+    // opencode — опционален: нет в PATH, мастер молча берёт cc. Фолбэк claude и исполнитель implement.
+    opencode: { bin: 'opencode', family: 'opencode', args: ['run', '--auto', '-m', 'opencode-go/deepseek-v4.1-flash#max'] },
+    // agy (Antigravity CLI) — запасной вариант, только по явному --agent.
     agy: { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions'] },
-    // Исполнитель задач: gemini flash high через agy.
+    // gemini flash high через agy.
     gemini: { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-high'] },
   },
   // Мастер по самому fsh (fsh ask, клавиша A в TUI). Профиль из agents.
-  chat: { agent: 'agy' },
+  chat: { agent: 'opencode' },
   workspace: {
     root: '~/.local/state/fs-harness/worktrees',
     deps: { strategy: 'clone' },

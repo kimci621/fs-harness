@@ -297,7 +297,7 @@ export const COMMANDS = [
         type: 'object',
         properties: {
           dir: { type: 'string', description: 'каталог репозитория (по умолчанию текущий)' },
-          agent: { type: 'string', description: 'профиль агента из конфига (cc, ccq, cco, ccd, agy)' },
+          agent: { type: 'string', description: 'профиль агента из конфига (cc, ccq, cco, ccd, opencode, agy)' },
         },
       },
       call: (ctx, a) => {
@@ -393,7 +393,7 @@ export const COMMANDS = [
     name: 'config',
     usage: 'config init|show|migrate|agent [имя]',
     description: 'Настроить/показать конфиг, перевести на v2 или выбрать активного агента',
-    example: 'fsh config agent agy',
+    example: 'fsh config agent opencode',
     run: (ctx, args, opts) => cmdConfig(args, opts),
   },
   {

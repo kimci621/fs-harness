@@ -65,12 +65,12 @@ export function buildAskBrief({ run, question, readOnly = false, repoDir = HARNE
   }).text;
 }
 
-// Профиль мастера: --agent > chat.agent из конфига > agy > cc.
-// agy опционален: нет в PATH - молча берём claude-профиль, дефолтный конфиг не ломается.
+// Профиль мастера: --agent > chat.agent из конфига > opencode > cc.
+// opencode опционален: нет в PATH - молча берём claude-профиль, дефолтный конфиг не ломается.
 export function pickChatAgent(cfg, name) {
-  const wanted = name || cfg?.chat?.agent || 'agy';
+  const wanted = name || cfg?.chat?.agent || 'opencode';
   const agent = resolveAgent(cfg, wanted);
-  if (wanted !== 'agy' || hasBin(agent.bin)) return agent;
+  if (!['opencode', 'agy'].includes(wanted) || hasBin(agent.bin)) return agent;
   return resolveAgent(cfg, 'cc');
 }
 

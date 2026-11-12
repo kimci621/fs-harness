@@ -45,8 +45,8 @@ src/commands/watch.js   fsh watch: один опрос и сообщение н�
 src/agents.js           профили агента: имя → bin/args/env/keyFile, ключ читается при запуске
 src/agent/spawn.js      запуск агента процессом: промпт в stdin, стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
-src/agent/stream.js     разбор stream-json: claude (type) и agy (event) — активность, дельты, отчёт
-src/chat.js             многоходовый чат с агентом: живой процесс на NDJSON (claude, agy)
+src/agent/stream.js     разбор stream-json: claude (type), agy (event), opencode (run --format json)
+src/chat.js             многоходовый чат с агентом: живой процесс на NDJSON (claude, agy), процесс на ход (opencode)
 src/commands/ask.js     мастер по самому fsh: бриф об упавшем ране, выбор профиля, read-only из CLI
 src/agent/journal.js    раны в ~/.local/state/fs-harness/runs/<id>/: meta.json (state/error/pid/pre), patchRunMeta/setRunState, listRuns, pidAlive/runIsActive
 src/judge/index.js      judge(): рубрика + профиль → вердикт, фолбэк, ремонтный round-trip
@@ -59,7 +59,7 @@ src/prompts/flows/*.md  сценарии работы для агента: пр�
 src/engine.js           runAction: фазы действия, события, изоляция, гейт судьи; resumeOf — доигрывание упавшего рана в том же worktree/сессии; runActionCLI, judgeRun
 src/publish.js          publish <runId>: доопубликовать упавший на push/build ран без агента и судьи; reconstructPre для ранов без meta.pre
 src/actions/*.js        декларации действий (conflict, ci-fix, threads, review, analyze, implement): precheck/context/verify/publish и блок action
-src/actions/implement.js реализация задачи Jira: план (opus) → код (gemini) → ревью судьёй (до 3) → push + черновик MR; в ревью отправляет fsh task submit
+src/actions/implement.js реализация задачи Jira: план (opus) → код (opencode) → ревью судьёй (до 3) → push + черновик MR; в ревью отправляет fsh task submit
 src/actions/ci-fix.js   починка упавших джоб: выжимка из логов, счётчик попыток в ~/.local/state/fs-harness/ci-fix
 src/prompts.js          шаблоны: loadTemplate/renderTemplate/listTemplates/checkTemplates
 src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
@@ -226,10 +226,11 @@ resolve target → precheck → (skip?) → context → isolate → plan? → pr
   печатается `разобраться: fsh ask`.
 - Транспорт выбирается по семейству профиля: `claude` и `agy` держат
   `--input-format stream-json` - **один живой процесс, NDJSON-строка на реплику**, контекст держит
-  сам агент, id сессии не нужен. Отсюда `keepStdin` и `write()` в `spawnAgent`.
-- Профиль: `--agent` > `chat.agent` в конфиге > `agy` > `cc`. **`agy` опционален**: нет в
+  сам агент, id сессии не нужен. Отсюда `keepStdin` и `write()` в `spawnAgent`. `opencode` - процесс
+  на реплику, со второй `--session <id>` из потока.
+- Профиль: `--agent` > `chat.agent` в конфиге > `opencode` > `cc`. **`opencode` опционален**: нет в
   PATH - `pickChatAgent` молча берёт `cc`, дефолтный конфиг без него рабочий. Это и есть условие, на
-  котором `agy` не нарушает ограничение №1.
+  котором `opencode` не нарушает ограничение №1.
 - Права: окно в TUI работает профилем как есть (гейт - человек за клавиатурой, он видит каждый шаг),
   `fsh ask` без TTY снимает `--dangerously-skip-permissions` и ставит режим плана.
 - **В бриф не попадает конфиг ни в каком виде**: в `telegram.bot_token` живой секрет. Кладутся
