@@ -6,7 +6,7 @@ import { formatErrorJSON } from './output.js';
 
 const FLAGS_USAGE = `Флаги:
   -R, --repo <repo>       Репозиторий (дефолт из конфига / GL_HELPER_REPO)
-  -P, --project <имя>     Проект из конфига (дефолт activeProject / FS_HARNESS_PROJECT)
+  -P, --project <имя>     Проект из конфига (дефолт FS_HARNESS_PROJECT, затем проект текущего каталога, затем activeProject)
   --host <hostname>       GitLab-хост (дефолт из конфига)
   --json                  Вывод в JSON (mrs, mr, jobs, run, deploy) — удобно агентам
   --agent <профиль>       Агент для действий и commit: cc (по умолчанию), ccq, cco, ccd, opencode, agy
@@ -101,7 +101,7 @@ export async function main(argv) {
 
   let cfg = null;
   try {
-    cfg = loadConfig(process.env, { project: opts.project });
+    cfg = loadConfig(process.env, { project: opts.project, cwd: opts.projectDir || process.cwd() });
   } catch {
     // конфиг недоступен — покажем справку без падения
   }
@@ -128,7 +128,7 @@ export async function main(argv) {
   }
 
   try {
-    cfg ??= loadConfig(process.env, { project: opts.project });
+    cfg ??= loadConfig(process.env, { project: opts.project, cwd: opts.projectDir || process.cwd() });
     const ctx = createCtx({
       g: createGlab(undefined, { host: opts.host || cfg.host }),
       cfg,
