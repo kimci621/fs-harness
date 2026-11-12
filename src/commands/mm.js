@@ -1,4 +1,4 @@
-import { expandHome } from '../config.js';
+import { expandHome, projectByDir } from '../config.js';
 import { createMattermost, reviewMessage } from '../mattermost.js';
 import { writeSecret } from '../secrets.js';
 import { makeGit } from '../workspace.js';
@@ -110,7 +110,9 @@ async function post(ctx, [channel, ...words], opts) {
 
 // Сценарий «задача уехала в ревью»: MR по текущей ветке плюс ссылка на задачу.
 async function review(ctx, [maybeKey], opts) {
-  const dir = expandHome(opts.projectDir || ctx.cfg.projectDir || '');
+  // Запуск из worktree проекта: ветка берётся из него, а не из основного checkout.
+  const here = projectByDir(ctx.cfg, process.cwd()) === ctx.cfg.activeProject ? process.cwd() : '';
+  const dir = expandHome(opts.projectDir || here || ctx.cfg.projectDir || '');
   if (!dir) throw new CliError('Не задан каталог проекта: --project-dir или projects.<имя>.dir в конфиге.', 1, 'config_invalid');
   const branch = makeGit(dir)(['rev-parse', '--abbrev-ref', 'HEAD']);
   const open = await ctx.g.listOpenMRs(ctx.repo, { source_branch: branch });
