@@ -445,6 +445,12 @@ test('jira delete: dry-run не удаляет, без подтверждени�
   await assert.rejects(() => cmdJira(ctxWith(j), ['delete', 'мусор'], { asObject: true }), (e) => e.code === 'usage');
 });
 
+test('jira delete: -y удаляет без вопроса и без asObject', async () => {
+  const j = fakeCrud();
+  await cmdJira(ctxWith(j), ['delete', 'FD-1'], { yes: true, json: true });
+  assert.deepEqual(j.done.at(-1), ['delete', 'FD-1']);
+});
+
 test('jira.js: createIssue и deleteIssue идут в правильные пути', async () => {
   const { j, calls } = jira([{ status: 201, body: { key: 'FD-9' } }, { status: 204 }]);
   await j.createIssue({ project: { key: 'FD' }, summary: 'x' });

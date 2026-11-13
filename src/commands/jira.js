@@ -346,15 +346,15 @@ async function attachGet(j, [key, which], ctx, { out, asObject, dryRun } = {}) {
   return { ok: true, key, saved };
 }
 
-// Запись в Jira: удаление задачи. Необратимо, поэтому подтверждение всегда (даже с --yes — нет).
-async function del(j, [key], ctx, { asObject, dryRun } = {}) {
+// Запись в Jira: удаление задачи. Необратимо, поэтому подтверждение по умолчанию; -y его снимает.
+async function del(j, [key], ctx, { yes, asObject, dryRun } = {}) {
   if (!key || !ISSUE_KEY.test(key)) {
     throw new CliError('Использование: fsh jira delete <KEY>.', 1, 'usage');
   }
   const issue = await j.issue(key);
   const title = issue.fields?.summary ?? '';
   if (dryRun) return { ok: true, dry_run: true, key, summary: title };
-  if (!asObject && !confirm(`Удалить ${key} «${truncate(title, 60)}» навсегда? [y/N] `)) {
+  if (!yes && !asObject && !confirm(`Удалить ${key} «${truncate(title, 60)}» навсегда? [y/N] `)) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   await j.deleteIssue(key);
