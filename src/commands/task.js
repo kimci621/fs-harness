@@ -247,7 +247,7 @@ async function submit(ctx, [maybeKey], opts) {
   // Повторный submit не должен звать ревьюеров второй раз: отвечают в тред первого поста.
   const prior = await findTaskPost(ctx, key, opts).catch((err) => {
     throw new CliError(`Jira и MR уже сдвинуты, но пост в Mattermost не отправлен: не проверить, был ли он (${err.message}). `
-      + `Отправь сам: fsh mm review ${key}`, 1, 'api_failed');
+      + `Отправь сам из каталога задачи (MR берётся по текущей ветке): fsh mm review ${key}`, 1, 'api_failed');
   });
   const existed = prior.root ? { ok: true, existed: true, post_id: prior.root.id, post_url: await permalink(ctx, prior.root.id, prior.target) } : null;
   const posted = existed ?? await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
