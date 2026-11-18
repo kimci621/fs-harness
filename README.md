@@ -83,7 +83,7 @@ fsh config show
 | `threads <mr\|ветка>` | Разбирает нерешённые треды ревью: агент правит код и готовит ответы, fs-harness после `approve` пушит, отвечает и резолвит треды |
 | `review <mr\|ветка>` | Ревью диффа MR по правилам проекта. Читающее: ничего не правит и не комментирует MR |
 | `analyze <KEY>` | Разбор задачи Jira по коду проекта: что делать, где, что сломается, вопросы к постановщику. Читающее |
-| `jira [mine\|<KEY>\|move\|sprint\|comment\|field\|attach\|create\|delete]` | Задачи Jira: список с фильтрами (`--assignee`, `--sprint`, `--component`, `--status`, `--jql`), одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля из `editmeta`, вложения (список, аплоад, выгрузка), создание и удаление задачи |
+| `jira [mine\|<KEY>\|move\|sprint\|comment\|field\|attach\|create\|link\|delete]` | Задачи Jira: список с фильтрами (`--assignee`, `--sprint`, `--component`, `--status`, `--jql`), одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля из `editmeta`, вложения (список, аплоад, выгрузка), создание, связь (`link FD-2 blocks FD-1`) и удаление задачи |
 | `task start <KEY>\|push [KEY]\|submit [KEY]\|judge [KEY]` | Взять задачу в работу (ветка по `branchPattern`, статус `taskFlow.startStatus`), сдать в ревью одной командой (поля, статус, MR, Mattermost), запушить с открытием MR в `targetBranch` (перебивается `--target`), показать приёмку судьи. `push --post` заодно пишет в Mattermost |
 | `growthbook [list\|get <id>\|create <id> <on\|off>\|toggle <id> <on\|off>\|delete <id>]` | Фича-флаги GrowthBook: список, один флаг, создание, включение и выключение в окружении (`--env`) |
 | `mm [login\|whoami\|channels\|post\|review]` | Сообщения в Mattermost от своего имени (см. «Сообщения в Mattermost») |
@@ -154,7 +154,7 @@ fsh jira attach FD-7647                        # список вложений
 fsh jira attach FD-7647 скрин.png              # аплоад
 fsh jira attach get FD-7647 --out ./вложения   # выгрузить всё (или одно по имени/id)
 fsh jira create FD Task "Починить оплату"      # создать задачу (тип ищется по createmeta)
-fsh jira delete FD-7999                        # удалить (спросит дважды)
+fsh jira delete FD-7999                        # удалить (спросит подтверждение, -y его снимает)
 ```
 
 `move` ищет переход по имени перехода или целевого статуса среди доступных, после записи статус
