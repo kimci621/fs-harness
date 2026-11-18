@@ -394,10 +394,10 @@ export const COMMANDS = [
   },
   {
     name: 'config',
-    usage: 'config init|show|migrate|agent [имя]',
-    description: 'Настроить/показать конфиг, перевести на v2 или выбрать активного агента',
-    example: 'fsh config agent opencode',
-    run: (ctx, args, opts) => cmdConfig(args, opts),
+    usage: 'config init|show|get <ключ>|migrate|agent [имя]',
+    description: 'Настроить/показать конфиг, одно значение (get repo|host|dir|project|targetBranch|branchPattern), перевести на v2 или выбрать активного агента',
+    example: 'fsh config get repo\n  fsh config agent opencode',
+    run: (ctx, args, opts) => cmdConfig(args, opts, ctx.cfg),
   },
   {
     name: 'watch',
