@@ -28,6 +28,7 @@ glab auth login --hostname ваш.gitlab.example.com
 ```bash
 fsh config init    # создаст ~/.config/gl-helper/config.json
 fsh config show
+fsh config get repo   # одно значение: project, repo, host, dir, targetBranch, branchPattern
 ```
 
 ```json
@@ -85,10 +86,11 @@ fsh config show
 | `analyze <KEY>` | Разбор задачи Jira по коду проекта: что делать, где, что сломается, вопросы к постановщику. Читающее |
 | `jira [mine\|<KEY>\|show\|search\|move\|sprint\|comment\|field\|parent\|attach\|create\|link\|delete]` | Задачи Jira: список с фильтрами (`--assignee`, `--sprint`, `--component`, `--status`, `--jql`), одна задача с комментариями (`show`/`view` — синонимы ключа), поиск по JQL (`search`), смена статуса (`transition` — синоним `move`) и спринта, комментарий (текстом или `--file`), чтение и запись любого поля из `editmeta` (`--append` дописывает в текстовое), родитель-эпик (`parent`), вложения (список, аплоад, выгрузка), создание, связь (`link FD-2 blocks FD-1`) и удаление задачи |
 | `task start <KEY>\|push [KEY]\|submit [KEY]\|judge [KEY]` | Взять задачу в работу (ветка по `branchPattern`, статус `taskFlow.startStatus`), сдать в ревью одной командой (поля, статус, MR, Mattermost), запушить с открытием MR в `targetBranch` (перебивается `--target`), показать приёмку судьи. `push --post` заодно пишет в Mattermost |
-| `growthbook [list\|get <id>\|create <id> <on\|off>\|toggle <id> <on\|off>\|delete <id>]` | Фича-флаги GrowthBook: список, один флаг, создание, включение и выключение в окружении (`--env`) |
-| `mm [login\|whoami\|channels\|post\|review\|reply\|thread\|react]` | Сообщения в Mattermost от своего имени (см. «Сообщения в Mattermost») |
+| `growthbook [help\|list\|get <id>\|create <id> <on\|off>\|toggle <id> <on\|off>\|delete <id>]` | Фича-флаги GrowthBook: список, один флаг, создание, включение и выключение в окружении (`--env`). `help` — примеры, хост API и откуда берётся ключ, без сети |
+| `mm [login\|whoami\|channels\|post\|review\|reply\|thread\|edit\|delete\|react]` | Сообщения в Mattermost от своего имени (см. «Сообщения в Mattermost») |
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id. Если пайплайна нет или он устарел, создаёт новый — чистым чтением команда не является |
-| `mr-comments <mr\|ветка>` | Комментарии MR по тредам: `--resolved` — только решённые, `-open` — только нерешённые |
+| `mr-comments <mr\|ветка>` | Комментарии MR по тредам: `--resolved` — только решённые, `-open` — только нерешённые. У треда номер `#N` и полный id |
+| `mr reply <mr> <#N\|id> (--file\|текст)` / `mr resolve <mr> <#N\|id>` | Ответить в тред MR и зарезолвить его. Тред — номер или id из `mr-comments` |
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
 | `deploy <ветка\|mr> [N]` | build → ждать ✅ → запустить `deploy_dev` (или `deploy_dev2`…`deploy_dev10`) → ждать итог. С `--rebuild` — перезапускает build и deploy даже при success (когда кто-то перезаписал слот своим MR) |
 | `commit` | Агент формирует сообщение коммита по паттерну и коммитит все изменения (без push). Паттерн — встроенный или из `.llm-commit-pattern` проекта |
@@ -283,6 +285,7 @@ fsh prompts check                                  # сверить front-matter
 fsh watch           # один опрос моих MR: снимок → дифф с прошлым → сообщение на MR в Telegram
 fsh watch --daemon  # то же по кругу и по всем проектам конфига
 fsh wait add mm <permalink> --from g.rekunov  # ответ в треде придёт в Telegram; до конца дня
+# файл ожиданий: FS_HARNESS_WAITS_FILE (одно значение и у агента, и у fsh up)
 fsh up              # бот + демон на переднем плане, токен из ~/.tg_fs_harness_bot; Ctrl+C гасит обоих
 fsh watch install   # готовый launchd-plist (или systemd-unit) для автозапуска — печатает, не ставит
 ```
@@ -358,6 +361,9 @@ fsh mm review FD-7655           # «задача уехала в ревью» в
 fsh task push --post            # то же самое сразу после пуша
 fsh mm reply FD-7655 "поправил" # ответ в тред этой задачи в канале review
 fsh mm post @ник "текст"         # в личку
+fsh mm thread <permalink> --last 20   # последние 20 сообщений треда (--since 2026-11-18 — с даты)
+fsh mm edit <permalink> --file new.md # поправить свой пост
+fsh mm delete <permalink> -y         # удалить свой пост, необратимо
 ```
 
 `post` и `reply` возвращают permalink поста (`post_url` в `--json`): по нему потом `fsh mm thread`
@@ -441,12 +447,12 @@ export GL_HELPER_YES=1    # не спрашивать подтверждение
 ```
 
 Под Claude Code (он ставит `CLAUDECODE=1`) подтверждения не спрашиваются, кроме необратимых:
-`jira delete`, `growthbook delete` и `set`, `growthbook create`/`toggle` в production, `resolve-all`,
+`jira delete`, `mm delete`, `growthbook delete` и `set`, `growthbook create`/`toggle` в production, `resolve-all`,
 `init` (пишет разрешение `Bash(fsh:*)`), `worktrees gc`, `queue clear` — им нужен `-y`, в том числе
 под `--json`. Отказ без терминала выходит с кодом 1. Если подтвердить
 некому, в stderr одна строка `Отменено. Повтори с -y: fsh … -y` с готовой командой.
 Нет связи с Jira или Mattermost (DNS, отказ соединения, `EPERM` от песочницы) — ошибка сразу,
-без повторов, с подсказкой про `NODE_USE_ENV_PROXY=1`, если в окружении задан прокси.
+без повторов, с подсказкой про `NODE_USE_ENV_PROXY=1`, если в окружении задан прокси. На Node с `http.setGlobalProxyFromEnv` fsh сам ведёт fetch через `HTTPS_PROXY`/`HTTP_PROXY`.
 
 - `--json` на read-командах — данные; на side-effect (`run`, `deploy`, `conflict`, `commit`) — **финальный результат** в stdout, прогресс в stderr.
 - Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `job_timeout`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `workspace_failed`, `dirty_checkout`, `config_invalid`, `canceled`, `prompt_missing`, `prompt_var_missing`, `judge_rejected`, `judge_schema`, `judge_failed`, `judge_rubric_missing`, `secret_missing`, `run_not_found`, `run_incomplete`, `no_mr`, `not_found`, `telegram_failed`, `tui_requires_tty`.
