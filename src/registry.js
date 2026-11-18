@@ -213,8 +213,8 @@ export const COMMANDS = [
   fromAction(implementAction),
   {
     name: 'jira',
-    usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|field <KEY> "<поле>" <значение>|attach <KEY> [файл...]|attach get <KEY> [имя]|create <ПРОЕКТ> <тип> <summary>|link <KEY> <тип> <KEY2>|delete <KEY>]',
-    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля, вложения (список, аплоад, выгрузка), создание, связь и удаление задачи',
+    usage: 'jira [mine|<KEY>|show <KEY>|search "<JQL>"|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|--file|field <KEY> "<поле>" [значение] [--append]|parent <KEY> <EPIC>|attach <KEY> [файл...]|attach get <KEY> [имя]|create <ПРОЕКТ> <тип> <summary> [--parent --sprint --assignee]|link <KEY> <тип> <KEY2>|delete <KEY>]',
+    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, поиск по JQL, смена статуса и спринта, комментарий, чтение и запись (или дописывание) любого поля, родитель-эпик, вложения (список, аплоад, выгрузка), создание с эпиком, спринтом и исполнителем, связь и удаление задачи',
     example: 'fsh jira mine --sprint current --component Frontend',
     run: (ctx, args, opts) => cmdJira(ctx, args, opts),
     mcp: {

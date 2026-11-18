@@ -40,13 +40,15 @@ const FLAGS_USAGE = `Флаги:
   --threads               В mrs: только с открытыми тредами
   --pipeline <статус>     В mrs: по статусу пайплайна (failed, success, running, none)
   --sync                  В conflict: синхронизировать ветку с target при отставании
-  --assignee me|<кто>     В mrs — исполнитель MR; в jira — чьи задачи (дефолт me)
-  --sprint current|<имя>  В jira: только задачи спринта
+  --assignee me|<кто>     В mrs — исполнитель MR; в jira — чьи задачи (дефолт me); в jira create — исполнитель
+  --sprint current|<имя>  В jira: только задачи спринта; в jira create — спринт новой задачи (имя или id)
+  --parent <EPIC>         В jira create: родитель (эпик) новой задачи
+  --append                В jira field: дописать к текущему значению с новой строки (текстовые поля)
   --component <значение>  В jira: фильтр по checkbox-полю «Компонент»
   --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые);
                           в task submit: статус Jira для перевода в ревью (дефолт «Ревью»)
   --jql "<запрос>"        В jira: свой JQL вместо собранного из флагов
-  --file <путь|->         В jira field/create: значение из файла или stdin
+  --file <путь|->         В jira field/create/comment: значение из файла или stdin
   --env <окружение>       В growthbook: окружение флага (дефолт growthbook.env)
   --type <тип>            В growthbook create: тип значения (boolean, string, number, json)
   --default <значение>    В growthbook create: дефолтное значение флага
@@ -209,6 +211,8 @@ function parseArgs(argv) {
     else if (a === '--note') opts.note = av[++i];
     else if (a === '--file') opts.file = av[++i];
     else if (a === '--attach') opts.attach = true;
+    else if (a === '--append') opts.append = true;
+    else if (a === '--parent') opts.parent = av[++i];
     else if (a === '--post') opts.post = true;
     else if (a === '--channel') opts.channel = av[++i];
     else if (a === '--out') opts.out = av[++i];
