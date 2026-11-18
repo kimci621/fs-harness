@@ -6,6 +6,7 @@ import path from 'node:path';
 import { startChat, WIRE } from '../src/chat.js';
 import { parseAgyLine, parseOpencodeLine } from '../src/agent/stream.js';
 import { buildAskBrief, lastFailedRun, eventLine } from '../src/commands/ask.js';
+import { CliError } from '../src/errors.js';
 
 // Подменённый spawnAgent: копит аргументы и написанные строки, отдаёт события по команде теста.
 function fakeSpawn() {
@@ -247,3 +248,26 @@ test('чат: signal прерывает ход', async () => {
   assert.equal(aborted, true, 'процесс агента должен быть прерван при abort');
 });
 
+
+test('fsh ask: агент не ответил (agy отказал по региону) — вопрос уходит следующему, --agent не подменяется', async () => {
+  const { askAgents, askWithFallback } = await import('../src/commands/ask.js');
+  const cfg = { agents: { agy: { bin: 'agy', family: 'agy', args: [] }, opencode: { bin: 'node', family: 'opencode', args: [] }, cc: { bin: 'claude', args: [] } }, chat: { agent: 'agy' } };
+  const chain = askAgents(cfg, null).map((a) => a.name);
+  assert.equal(chain[0], 'agy');
+  assert.ok(chain.includes('cc') && chain.length >= 2, chain.join(','));
+  assert.deepEqual(askAgents(cfg, 'agy').map((a) => a.name), ['agy']);
+
+  const tried = [];
+  const notes = [];
+  const answer = await askWithFallback(askAgents(cfg, null), async (agent) => {
+    tried.push(agent.name);
+    if (agent.name === 'agy') throw new CliError('User location is not supported for the API use.', 1, 'agent_failed');
+    return `ответ от ${agent.name}`;
+  }, (line) => notes.push(line));
+  assert.equal(answer.agent.name, chain[1]);
+  assert.deepEqual(tried, ['agy', chain[1]]);
+  assert.match(notes[0], /agy/);
+
+  // Ошибка не агента (usage, отмена) не повод звать другого.
+  await assert.rejects(() => askWithFallback(askAgents(cfg, null), async () => { throw new CliError('x', 1, 'usage'); }, () => {}), (e) => e.code === 'usage');
+});
