@@ -75,3 +75,15 @@ test('init: dry-run печатает план, несуществующий ка
   assert.throws(() => cmdInit(COMMANDS, { cfg: {} }, { asObject: true, yes: true }), (e) => e.code === 'config_invalid');
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('скилл: пишущие примеры в таблице — с -y, новые возможности jira названы', () => {
+  const skill = buildSkill(COMMANDS);
+  const table = skill.split('## Когда именно брать fsh')[1].split('## Чего fsh не делает')[0];
+  const examples = [...table.matchAll(/`(fsh [^`]+)`/g)].map((m) => m[1]);
+  for (const ex of examples.filter((e) => / (move|toggle|comment|parent|create) /.test(e) || / field .*(--file|--append)/.test(e))) {
+    assert.match(ex, / -y$/, ex);
+  }
+  for (const piece of ['fsh jira field FD-1234 "Technical details for QA"`', '--append', 'fsh jira parent', '--parent', '--sprint', '--assignee', 'comment FD-1234 --file']) {
+    assert.ok(table.includes(piece), piece);
+  }
+});
