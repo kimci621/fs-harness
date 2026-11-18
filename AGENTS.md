@@ -53,7 +53,7 @@ src/judge/index.js      judge(): рубрика + профиль → верди�
 src/judge/schema.js     zod-схема вердикта, VERDICT_SHAPE, extractJson
 src/judge/payload.js    что показывать судье в роли acceptance
 src/checks.js           коды выхода проверок проекта для судьи; упавшая проверка повторяется (флейк)
-src/judge/providers/    cli (процесс claude) и openai (всё OpenAI-совместимое)
+src/judge/providers/    cli (процесс claude), opencode (opencode run без инструментов, подписка Go) и openai (всё OpenAI-совместимое)
 src/prompts/judge/*.md  рубрики по ролям — файл на роль
 src/prompts/flows/*.md  сценарии работы для агента: протокол на файл, description во front-matter
 src/engine.js           runAction: фазы действия, события, изоляция, гейт судьи; resumeOf — доигрывание упавшего рана в том же worktree/сессии; runActionCLI, judgeRun
