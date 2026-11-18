@@ -67,7 +67,7 @@ fsh config show
 - `projects` — проекты по имени: `repo`, `host`, `dir` (в нём `conflict` и `threads` создают временный worktree, а `review` и `analyze` читают его как есть), плюс необязательные `agent`, `buildJob`, `targetBranch` (куда `task push` открывает MR), `branchPattern` (дефолт `feature/{key}`), `checks`, `jira`, `growthbook`, `dict`. Активный выбирается так: `-P <имя>` > `FS_HARNESS_PROJECT` > проект, в чьём репозитории (или его worktree) запущен `fsh` > `activeProject` > единственный.
 - `jira` — `baseUrl`, `email`, `projectKey`, `componentField` (имя checkbox-поля для `--component`, дефолт «Компонент»). Токен не в конфиге, а в keychain: `security add-generic-password -s fs-harness -a jira -w '<токен>'`. Без токена работает всё, кроме `jira` и `analyze`.
 - `agents` — профили агентов: `bin`, `args`, `env`, `keyFile`. Встроенные — `cc` (Claude Code), `ccq`/`cco`/`ccd` (тот же Claude Code, но через Alibaba / OpenRouter / DeepSeek), `opencode` (deepseek-v4.1-flash, фолбэк при рейт-лимите claude, исполнитель `implement` и мастер `fsh ask`), `agy`. Проект выбирает свой полем `agent`, разово перебивается флагом `--agent`.
-- `chat.agent` — каким профилем отвечает мастер `fsh ask`.
+- `chat.agent` — каким профилем отвечает мастер `fsh ask`. Если он не ответил (agy отказывает по региону, процесс упал), вопрос уходит `opencode`, затем `cc`; явный `--agent` не подменяется.
 - `judge` — профили судьи и назначение их на роли (см. раздел «Судья»).
 - `telegram` — `chat_id` и `bot_token` (опционально, можно задать в keychain или через `TELEGRAM_BOT_TOKEN`). Пустые — уведомления не шлются. `approvals: true` + `allowed_user_ids: [<id>]` — гейт pre-push ждёт кнопку в Telegram вместо push; бот — `fsh bot`.
 - `mattermost` — `baseUrl` и `channels` (канал на сценарий). Токен не в конфиге: его кладёт в keychain `fsh mm login`.
@@ -83,10 +83,10 @@ fsh config show
 | `threads <mr\|ветка>` | Разбирает нерешённые треды ревью: агент правит код и готовит ответы, fs-harness после `approve` пушит, отвечает и резолвит треды |
 | `review <mr\|ветка>` | Ревью диффа MR по правилам проекта. Читающее: ничего не правит и не комментирует MR |
 | `analyze <KEY>` | Разбор задачи Jira по коду проекта: что делать, где, что сломается, вопросы к постановщику. Читающее |
-| `jira [mine\|<KEY>\|move\|sprint\|comment\|field\|attach\|create\|link\|delete]` | Задачи Jira: список с фильтрами (`--assignee`, `--sprint`, `--component`, `--status`, `--jql`), одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля из `editmeta`, вложения (список, аплоад, выгрузка), создание, связь (`link FD-2 blocks FD-1`) и удаление задачи |
+| `jira [mine\|<KEY>\|show\|search\|move\|sprint\|comment\|field\|parent\|attach\|create\|link\|delete]` | Задачи Jira: список с фильтрами (`--assignee`, `--sprint`, `--component`, `--status`, `--jql`), одна задача с комментариями (`show`/`view` — синонимы ключа), поиск по JQL (`search`), смена статуса (`transition` — синоним `move`) и спринта, комментарий (текстом или `--file`), чтение и запись любого поля из `editmeta` (`--append` дописывает в текстовое), родитель-эпик (`parent`), вложения (список, аплоад, выгрузка), создание, связь (`link FD-2 blocks FD-1`) и удаление задачи |
 | `task start <KEY>\|push [KEY]\|submit [KEY]\|judge [KEY]` | Взять задачу в работу (ветка по `branchPattern`, статус `taskFlow.startStatus`), сдать в ревью одной командой (поля, статус, MR, Mattermost), запушить с открытием MR в `targetBranch` (перебивается `--target`), показать приёмку судьи. `push --post` заодно пишет в Mattermost |
 | `growthbook [list\|get <id>\|create <id> <on\|off>\|toggle <id> <on\|off>\|delete <id>]` | Фича-флаги GrowthBook: список, один флаг, создание, включение и выключение в окружении (`--env`) |
-| `mm [login\|whoami\|channels\|post\|review]` | Сообщения в Mattermost от своего имени (см. «Сообщения в Mattermost») |
+| `mm [login\|whoami\|channels\|post\|review\|reply\|thread\|react]` | Сообщения в Mattermost от своего имени (см. «Сообщения в Mattermost») |
 | `jobs <mr\|ветка>` | Джобы последнего MR-пайплайна: stage, имя, статус, id. Если пайплайна нет или он устарел, создаёт новый — чистым чтением команда не является |
 | `mr-comments <mr\|ветка>` | Комментарии MR по тредам: `--resolved` — только решённые, `-open` — только нерешённые |
 | `run <джоба> <mr\|ветка>` | Запустить manual-джобу по имени или id. С `-w` — ждать завершения |
@@ -108,7 +108,7 @@ fsh config show
 | `bot` | Telegram-бот (long-polling): `/mrs` `/watch` `/status` `/run`, кнопки Approve/Revise/Reject и «Обновить и разобрать» от watcher |
 | `tui` | Полноэкранный режим: вкладки MR / задачи / процессы / промпты / флаги / словарь, действия и пайплайны с клавиши, живой лог агента и судьи |
 | `config init\|show\|migrate` | Конфиг: создать, показать активный проект, перевести старый файл на v2 (с бэкапом `.v1.bak`) |
-| `help` | Справка |
+| `help [--agent\|--all]` | Справка. `--agent` — короткая, на 40 строк с рабочими примерами; под Claude Code (`CLAUDECODE`) она и по умолчанию. `--all` — полная |
 
 Флаги: `-R/--repo`, `--host`, `-P/--project`, `--json` (read-команды), `--agent <профиль>` (`cc`, `ccq`, `cco`, `ccd`, `opencode`, `agy` — живут в конфиге, `agents.<имя>`), `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit/jira/mm — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show), `--file <путь|->` и `--attach` (jira field), `--post` и `--channel` (task push, mm), `--daemon` (watch, doctor), `--sizes` и `--older-than` (worktrees), `--once` и `--concurrency` (worker).
 
@@ -141,7 +141,12 @@ fsh jira FD-7647                          # задача с описанием �
 fsh jira move FD-7647 "В тестирование"    # смена статуса (спросит подтверждение)
 fsh jira sprint FD-7647 "Спринт 18"       # перенести в спринт
 fsh jira comment FD-7647 "проверил на деве"
+fsh jira comment FD-7647 --file comment.md     # многострочный комментарий файлом или из stdin (-)
+fsh jira show FD-7647                          # то же, что fsh jira FD-7647 (view — тоже)
+fsh jira search 'project = FD AND labels = payments'
 ```
+
+Подкоманда без аргументов (`fsh jira create`, `fsh jira field`) печатает свою справку и выходит с 0.
 
 Фильтры складываются в JQL, `--jql` перебивает их целиком. `--assignee` принимает `me` (дефолт),
 почту или `any`. `--sprint current` — открытые спринты, иначе имя спринта.
@@ -150,10 +155,15 @@ fsh jira comment FD-7647 "проверил на деве"
 
 ```bash
 fsh jira field FD-7647 "Technical details for QA" --file notes.md   # любое поле из editmeta, значение можно дать файлом или из stdin (-)
+fsh jira field FD-7647 "Technical details for QA"                   # без значения — прочитать поле
+fsh jira field FD-7647 "Контент" --file new.txt --append            # дописать в конец текстового поля
+fsh jira field FD-7647 Исполнитель me          # пользователь — по имени, me или accountId; Исполнитель/Описание/Метки/Приоритет/Автор — алиасы
+fsh jira parent FD-7647 FD-7147                # привязать к эпику (читает обратно и сверяет)
 fsh jira attach FD-7647                        # список вложений
 fsh jira attach FD-7647 скрин.png              # аплоад
 fsh jira attach get FD-7647 --out ./вложения   # выгрузить всё (или одно по имени/id)
 fsh jira create FD Task "Починить оплату"      # создать задачу (тип ищется по createmeta)
+fsh jira create FD Task "Починить оплату" --component Frontend --file desc.md --parent FD-7147 --sprint 4176 --assignee me
 fsh jira delete FD-7999                        # удалить (спросит подтверждение, -y его снимает)
 ```
 
@@ -347,7 +357,11 @@ fsh mm channels merge           # свои каналы с фильтром — 
 fsh mm review FD-7655           # «задача уехала в ревью» в канал сценария review
 fsh task push --post            # то же самое сразу после пуша
 fsh mm reply FD-7655 "поправил" # ответ в тред этой задачи в канале review
+fsh mm post @ник "текст"         # в личку
 ```
+
+`post` и `reply` возвращают permalink поста (`post_url` в `--json`): по нему потом `fsh mm thread`
+и `fsh wait add mm`. Голый `fsh mm` печатает список подкоманд.
 
 Сообщение сценария `review` - описание задачи (как в GitLab), затем ссылки:
 
@@ -426,9 +440,15 @@ export GL_HELPER_JSON=1   # JSON-вывод и структурированны�
 export GL_HELPER_YES=1    # не спрашивать подтверждение (как -y)
 ```
 
+Под Claude Code (он ставит `CLAUDECODE=1`) подтверждения не спрашиваются, кроме необратимых:
+`jira delete`, `growthbook delete`, `worktrees gc`, `queue clear` — им нужен `-y`. Если подтвердить
+некому, в stderr одна строка `Отменено. Повтори с -y: fsh … -y` с готовой командой.
+Нет связи с Jira или Mattermost (DNS, отказ соединения, `EPERM` от песочницы) — ошибка сразу,
+без повторов, с подсказкой про `NODE_USE_ENV_PROXY=1`, если в окружении задан прокси.
+
 - `--json` на read-командах — данные; на side-effect (`run`, `deploy`, `conflict`, `commit`) — **финальный результат** в stdout, прогресс в stderr.
 - Ошибки при `--json`: `{"ok":false,"error":{"code","message"}}` + exit code ≠ 0. Коды: `usage`, `api_failed`, `mr_not_found`, `mr_ambiguous`, `job_not_found`, `job_failed`, `job_timeout`, `build_failed`, `deploy_failed`, `agent_failed`, `not_pushed`, `no_commit`, `git_failed`, `workspace_failed`, `dirty_checkout`, `config_invalid`, `canceled`, `prompt_missing`, `prompt_var_missing`, `judge_rejected`, `judge_schema`, `judge_failed`, `judge_rubric_missing`, `secret_missing`, `run_not_found`, `run_incomplete`, `no_mr`, `not_found`, `telegram_failed`, `tui_requires_tty`.
-- Полная инструкция для агента встроена в CLI: `fsh agent-guide`.
+- Короткая справка для агента: `fsh help --agent`; полная инструкция: `fsh agent-guide`. `fsh flow show` понимает и русское название сценария («взять задачу»), на промахе предлагает похожие.
 - Перед side-effect командами можно смотреть план: `--dry-run`.
 - Для нативного вызова инструментов из AI-клиентов: `fsh mcp` (см. раздел MCP-режим).
 
