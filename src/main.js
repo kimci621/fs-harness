@@ -37,6 +37,7 @@ const FLAGS_USAGE = `Флаги:
   --label <метка>         В mrs: только с этой меткой
   --search <текст>        В mrs: поиск по названию и описанию
   --draft / --no-draft    В mrs: только черновики / только готовые; в task push: открыть MR черновиком
+  --keep-draft            В task submit: не снимать черновик с MR (без флага снимается только с готового MR)
   --conflicts             В mrs: только конфликтующие
   --threads               В mrs: только с открытыми тредами
   --pipeline <статус>     В mrs: по статусу пайплайна (failed, success, running, none)
@@ -79,7 +80,7 @@ function buildUsage(cfg) {
 
 Команды:
 ${commands}
-  help [--agent|--all]    Эта справка; --agent — короткая для AI-агента (по умолчанию под Claude Code), --all — полная
+  help [--all]            Эта справка; под Claude Code — короткая для агента, --all — полная
 
 ${FLAGS_USAGE}
 
@@ -110,8 +111,8 @@ export async function main(argv) {
     // конфиг недоступен — покажем справку без падения
   }
 
-  // Агенту — короткая справка (help --agent или под Claude Code), --all — полная.
-  const helpText = () => (!opts.all && (argv.includes('--agent') || process.env.CLAUDECODE)
+  // Под Claude Code — короткая справка для агента, --all — полная.
+  const helpText = () => (!opts.all && process.env.CLAUDECODE
     ? AGENT_HELP
     : buildUsage(cfg));
   if (opts.help || rest[0] === 'help') {
@@ -239,6 +240,7 @@ function parseArgs(argv) {
     else if (a === '--search') opts.search = av[++i];
     else if (a === '--draft') opts.draft = true;
     else if (a === '--no-draft') opts.draft = false;
+    else if (a === '--keep-draft') opts.keepDraft = true;
     else if (a === '--conflicts') opts.conflicts = true;
     else if (a === '--sync') opts.sync = true;
     else if (a === '--threads') opts.threads = true;

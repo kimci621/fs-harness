@@ -205,11 +205,15 @@ async function submit(ctx, [maybeKey], opts) {
 
   const to = t ? t.to?.name ?? t.name : from;
   const info = { ok: true, key, branch, mr: { iid: mr.iid, web_url: mr.web_url }, jira: { from, to } };
+  // Черновик ставят и по внешней причине (ждём бэк, контент, флаг): снимаем только с готового MR.
+  const keepWhy = wasDraft ? (opts.keepDraft ? 'остаётся черновиком (--keep-draft)' : notReady(await ctx.g.getMR(ctx.repo, mr.iid))) : null;
+  const unDraft = wasDraft && !keepWhy;
+  const mrNote = !wasDraft ? 'уже не черновик' : unDraft ? 'черновик снят' : keepWhy;
   if (opts.dryRun) {
     return { ...info, dry_run: true, plan: [
       ...selfFill.map((f) => `Jira ${key}: «${f.name}» ← я`),
       t ? `Jira ${key}: ${from} → ${to}` : `Jira ${key}: перехода «${statusName}» нет, статус не трогаю`,
-      wasDraft ? `PUT /merge_requests/${mr.iid}: снять черновик (title: ${title})` : `MR !${mr.iid} уже не черновик`,
+      unDraft ? `PUT /merge_requests/${mr.iid}: снять черновик (title: ${title})` : `MR !${mr.iid}: ${wasDraft ? `черновик остаётся — ${keepWhy}` : mrNote}`,
       'сообщение в Mattermost (сценарий review)',
     ] };
   }
@@ -238,11 +242,20 @@ async function submit(ctx, [maybeKey], opts) {
   for (const n of flow.requiredFields ?? []) if (fieldIdByName(before, n)) steps.push({ step: `«${n}»`, ok: true, note: 'заполнено' });
   if (flow.mrBlocks?.length) steps.push({ step: 'описание MR', ok: true, note: flow.mrBlocks.join(', ') });
 
-  const updated = wasDraft ? await ctx.g.updateMR(ctx.repo, mr.iid, { title }) : mr;
-  steps.push({ step: 'MR', ok: true, note: wasDraft ? 'черновик снят' : 'уже не черновик' });
+  const updated = unDraft ? await ctx.g.updateMR(ctx.repo, mr.iid, { title }) : mr;
+  steps.push({ step: 'MR', ok: true, note: mrNote });
   const posted = await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
   steps.push({ step: 'Mattermost', ok: Boolean(posted?.ok), note: posted?.scenario || posted?.channel || '' });
-  return { ...info, title: updated?.title ?? title, draft_removed: wasDraft, jira: { from, to: now, transition: t?.name ?? null }, posted, steps };
+  return { ...info, title: updated?.title ?? title, draft_removed: unDraft, jira: { from, to: now, transition: t?.name ?? null }, posted, steps };
+}
+
+// Почему MR ещё не готов к снятию черновика; null — готов.
+function notReady(mr) {
+  const status = mr?.head_pipeline?.status;
+  if (status !== 'success') return `черновик оставлен: пайплайн ${status ?? 'не запускался'}`;
+  if (mr.has_conflicts) return 'черновик оставлен: конфликт с целевой веткой';
+  if (mr.blocking_discussions_resolved === false) return 'черновик оставлен: есть нерешённые треды';
+  return null;
 }
 
 // Поля по названию из taskFlow.requiredFields. Поля нет у типа задачи (Tech task) — не требуем.
