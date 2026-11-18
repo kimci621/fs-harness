@@ -249,11 +249,17 @@ async function submit(ctx, [maybeKey], opts) {
   return { ...info, title: updated?.title ?? title, draft_removed: unDraft, jira: { from, to: now, transition: t?.name ?? null }, posted, steps };
 }
 
+const CHECKING = ['unchecked', 'checking', 'cannot_be_merged_recheck'];
+
 // Почему MR ещё не готов к снятию черновика; null — готов.
 function notReady(mr) {
   // manual — всё прошло, ждут только ручные джобы (build/deploy в fitstars-nuxt).
   const status = mr?.head_pipeline?.status;
   if (!['success', 'manual'].includes(status)) return `черновик оставлен: пайплайн ${status ?? 'не запускался'}`;
+  // Пока слияние не перепроверено, has_conflicts=false врёт: на проекте 36 так и с конфликтом (recheck).
+  if (CHECKING.includes(mr.merge_status) || CHECKING.includes(mr.detailed_merge_status)) {
+    return 'черновик оставлен: GitLab ещё проверяет слияние';
+  }
   if (mr.has_conflicts) return 'черновик оставлен: конфликт с целевой веткой';
   if (mr.blocking_discussions_resolved === false) return 'черновик оставлен: есть нерешённые треды';
   return null;
