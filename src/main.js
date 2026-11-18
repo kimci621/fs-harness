@@ -60,6 +60,8 @@ const FLAGS_USAGE = `Флаги:
   --older-than <дни>      В worktrees gc: порог возраста для очистки
   --once                  В worker: выполнить текущие задания и выйти
   --concurrency <N>       В worker и resolve-all: число параллельных слотов (дефолт workers.concurrency, 2)
+  --last <N>              В mm thread: только последние N сообщений
+  --since <ISO-время>     В mm thread: только сообщения с этого момента
   --manual                В resolve-all: ждать кнопку Approve в Telegram перед пушем (дефолт — полный цикл без кнопки)
 
 Режим агента (env):
@@ -258,6 +260,8 @@ function parseArgs(argv) {
     else if (a === '--once') opts.once = true;
     else if (a === '--concurrency') opts.concurrency = Number(av[++i]);
     else if (a === '--manual') opts.manual = true;
+    else if (a === '--last') opts.last = Number(av[++i]);
+    else if (a === '--since') opts.since = av[++i];
     else if (a === '-h' || a === '--help') opts.help = true;
     else if (a.startsWith('-')) throw new CliError(`Неизвестный флаг "${a}". См. fsh help.`);
     else rest.push(a);
