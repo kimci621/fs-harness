@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createJira, ISSUE_KEY, fieldByName, fieldIdByName, fieldText, editKind, editValueFor, openSprints } from '../src/jira.js';
 import { CliError } from '../src/errors.js';
-import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition, pickSprint, boardOf } from '../src/commands/jira.js';
+import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition, pickSprint, boardOf, pickLinkType } from '../src/commands/jira.js';
 
 // Подменённый fetch: отдаёт заготовленные ответы по порядку и пишет, что спрашивали.
 function fakeFetch(responses) {
@@ -445,6 +445,12 @@ test('jira delete: dry-run не удаляет, без подтверждени�
   await assert.rejects(() => cmdJira(ctxWith(j), ['delete', 'мусор'], { asObject: true }), (e) => e.code === 'usage');
 });
 
+test('jira delete: -y удаляет без вопроса и без asObject', async () => {
+  const j = fakeCrud();
+  await cmdJira(ctxWith(j), ['delete', 'FD-1'], { yes: true, json: true });
+  assert.deepEqual(j.done.at(-1), ['delete', 'FD-1']);
+});
+
 test('jira.js: createIssue и deleteIssue идут в правильные пути', async () => {
   const { j, calls } = jira([{ status: 201, body: { key: 'FD-9' } }, { status: 204 }]);
   await j.createIssue({ project: { key: 'FD' }, summary: 'x' });
@@ -538,4 +544,94 @@ test('jira attach get: имя вложения из Jira — чужой ввод
   assert.deepEqual(j.done.at(-1), ['get', 'https://j.example/a/7']);
 
   await assert.rejects(() => cmdJira(ctxWith(j), ['attach', 'get', 'FD-1', 'нет-такого'], { asObject: true, out: dir }), (e) => e.code === 'usage');
+});
+
+// --- связи ---
+
+const LINK_TYPES = [
+  { id: '1', name: 'Blocks', outward: 'blocks', inward: 'is blocked by' },
+  { id: '2', name: 'Relates', outward: 'relates to', inward: 'relates to' },
+  { id: '3', name: 'Cloners', outward: 'clones', inward: 'is cloned by' },
+];
+
+test('pickLinkType: имя, фраза outward и inward; неоднозначное и чужое — ошибка со списком', () => {
+  assert.deepEqual([pickLinkType(LINK_TYPES, 'blocks').type.name, pickLinkType(LINK_TYPES, 'blocks').asInward], ['Blocks', false]);
+  assert.deepEqual([pickLinkType(LINK_TYPES, 'Is Blocked By').type.name, pickLinkType(LINK_TYPES, 'is blocked by').asInward], ['Blocks', true]);
+  assert.equal(pickLinkType(LINK_TYPES, 'blocked').asInward, true);
+  assert.deepEqual([pickLinkType(LINK_TYPES, 'relates').type.name, pickLinkType(LINK_TYPES, 'relates').asInward], ['Relates', false]);
+  assert.throws(() => pickLinkType(LINK_TYPES, 'is'), (e) => e.code === 'usage' && /нескольким/.test(e.message));
+  assert.throws(() => pickLinkType(LINK_TYPES, 'дублирует'), (e) => e.code === 'usage' && /Blocks \(blocks \/ is blocked by\)/.test(e.message));
+});
+
+// Поддельная Jira связей: созданная связь появляется у задач так, как её показывает настоящая Jira —
+// у inwardIssue в связях стоит outwardIssue, и наоборот. flip портит направление для проверки read-back.
+function fakeLinks({ flip = false } = {}) {
+  const created = [];
+  const byKey = {};
+  return {
+    created,
+    linkTypes: async () => LINK_TYPES,
+    createLink: async ({ type, inward, outward }) => {
+      created.push({ type, inward, outward });
+      const [a, b] = flip ? [outward, inward] : [inward, outward];
+      (byKey[a] ??= []).push({ type: { name: type }, outwardIssue: { key: b } });
+      (byKey[b] ??= []).push({ type: { name: type }, inwardIssue: { key: a } });
+    },
+    issueLinks: async (key) => byKey[key] ?? [],
+  };
+}
+
+test('jira link: «FD-2 blocks FD-1» — FD-2 в inwardIssue, read-back со стороны FD-2', async () => {
+  const j = fakeLinks();
+  const res = await cmdJira(ctxWith(j), ['link', 'FD-2', 'blocks', 'FD-1'], { asObject: true, yes: true });
+  assert.deepEqual(j.created, [{ type: 'Blocks', inward: 'FD-2', outward: 'FD-1' }]);
+  assert.deepEqual([res.link, res.type, res.url], ['FD-2 blocks FD-1', 'Blocks', 'https://j.example/browse/FD-2']);
+});
+
+test('jira link: фраза inward разворачивает задачи в запросе', async () => {
+  const j = fakeLinks();
+  const res = await cmdJira(ctxWith(j), ['link', 'FD-1', 'is', 'blocked', 'by', 'FD-2'], { asObject: true, yes: true });
+  assert.deepEqual(j.created, [{ type: 'Blocks', inward: 'FD-2', outward: 'FD-1' }]);
+  assert.equal(res.link, 'FD-1 is blocked by FD-2');
+});
+
+test('jira link: dry-run не пишет, обратное направление после записи — ошибка, мусор — подсказка', async () => {
+  const dry = fakeLinks();
+  const res = await cmdJira(ctxWith(dry), ['link', 'FD-2', 'relates', 'FD-1'], { asObject: true, dryRun: true });
+  assert.deepEqual([res.dry_run, res.link], [true, 'FD-2 relates to FD-1']);
+  assert.deepEqual(dry.created, []);
+
+  await assert.rejects(
+    () => cmdJira(ctxWith(fakeLinks({ flip: true })), ['link', 'FD-2', 'blocks', 'FD-1'], { asObject: true, yes: true }),
+    (e) => e.code === 'api_failed' && /FD-2 is blocked by FD-1/.test(e.message),
+  );
+  for (const args of [['link', 'FD-2', 'FD-1'], ['link', 'FD-2', 'blocks', 'мусор'], ['link', 'FD-2', 'blocks', 'FD-2']]) {
+    await assert.rejects(() => cmdJira(ctxWith(fakeLinks()), args, { asObject: true, yes: true }), (e) => e.code === 'usage');
+  }
+});
+
+test('jira.js: связи — типы GET-ом, создание POST в /issueLink, связи задачи из fields=issuelinks', async () => {
+  const { j, calls } = jira([
+    { status: 200, body: { issueLinkTypes: LINK_TYPES } },
+    { status: 201, body: null },
+    { status: 200, body: { fields: { issuelinks: [{ id: '7' }] } } },
+  ]);
+  assert.equal((await j.linkTypes()).length, 3);
+  await j.createLink({ type: 'Blocks', inward: 'FD-2', outward: 'FD-1' });
+  assert.deepEqual(await j.issueLinks('FD-2'), [{ id: '7' }]);
+  assert.equal(calls[0].url, 'https://j.invalid/rest/api/2/issueLinkType');
+  assert.deepEqual([calls[1].url, calls[1].method, calls[1].body], [
+    'https://j.invalid/rest/api/2/issueLink',
+    'POST',
+    { type: { name: 'Blocks' }, inwardIssue: { key: 'FD-2' }, outwardIssue: { key: 'FD-1' } },
+  ]);
+  assert.equal(calls[2].url, 'https://j.invalid/rest/api/2/issue/FD-2?fields=issuelinks');
+});
+
+test('jira link: такая связь уже есть — второй раз не создаётся', async () => {
+  const j = fakeLinks();
+  await cmdJira(ctxWith(j), ['link', 'FD-2', 'blocks', 'FD-1'], { asObject: true, yes: true });
+  const again = await cmdJira(ctxWith(j), ['link', 'FD-1', 'is blocked by', 'FD-2'], { asObject: true, yes: true });
+  assert.equal(again.existed, true);
+  assert.equal(j.created.length, 1);
 });

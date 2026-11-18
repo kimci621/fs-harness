@@ -150,6 +150,23 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     deleteIssue: (key) =>
       api(`/rest/api/2/issue/${encodeURIComponent(key)}`, { method: 'DELETE', retries: 1, allow404: true }),
 
+    // Типы связей инстанса: name плюс фразы inward/outward («is blocked by» / «blocks»).
+    linkTypes: () => api('/rest/api/2/issueLinkType').then((r) => r?.issueLinkTypes ?? []),
+
+    // Запись 8. Направление в API перевёрнуто относительно фраз: задача из inwardIssue
+    // читается фразой outward («inwardIssue blocks outwardIssue»), поэтому команда сверяет итог чтением.
+    // Ответ — 201 с пустым телом, разбирать нечего.
+    createLink: ({ type, inward, outward }) =>
+      api('/rest/api/2/issueLink', {
+        method: 'POST',
+        body: { type: { name: type }, inwardIssue: { key: inward }, outwardIssue: { key: outward } },
+        raw: true,
+        retries: 1,
+      }).then(() => null),
+
+    issueLinks: (key) =>
+      api(`/rest/api/2/issue/${encodeURIComponent(key)}?fields=issuelinks`).then((r) => r?.fields?.issuelinks ?? []),
+
     // Вложения задачи: id, имя, размер и ссылка на содержимое.
     attachments: (key) =>
       api(`/rest/api/2/issue/${encodeURIComponent(key)}?fields=attachment`).then((r) => r?.fields?.attachment ?? []),

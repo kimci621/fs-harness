@@ -96,6 +96,8 @@ export async function cmdJira(ctx, args, opts = {}) {
             ? await attach(j, rest, ctx, opts)
           : query === 'delete'
             ? await del(j, rest, ctx, opts)
+          : query === 'link'
+            ? await link(j, rest, ctx, opts)
           : !query || query === 'mine'
             ? await mine(j, { ...opts, componentField: ctx.cfg.jira?.componentField }, ctx)
             : await one(j, query, ctx);
@@ -346,19 +348,73 @@ async function attachGet(j, [key, which], ctx, { out, asObject, dryRun } = {}) {
   return { ok: true, key, saved };
 }
 
-// Запись в Jira: удаление задачи. Необратимо, поэтому подтверждение всегда (даже с --yes — нет).
-async function del(j, [key], ctx, { asObject, dryRun } = {}) {
+// Запись в Jira: удаление задачи. Необратимо, поэтому подтверждение по умолчанию; -y его снимает.
+async function del(j, [key], ctx, { yes, asObject, dryRun } = {}) {
   if (!key || !ISSUE_KEY.test(key)) {
     throw new CliError('Использование: fsh jira delete <KEY>.', 1, 'usage');
   }
   const issue = await j.issue(key);
   const title = issue.fields?.summary ?? '';
   if (dryRun) return { ok: true, dry_run: true, key, summary: title };
-  if (!asObject && !confirm(`Удалить ${key} «${truncate(title, 60)}» навсегда? [y/N] `)) {
+  if (!yes && !asObject && !confirm(`Удалить ${key} «${truncate(title, 60)}» навсегда? [y/N] `)) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   await j.deleteIssue(key);
   return { ok: true, key, summary: title };
+}
+
+// Тип связи по слову человека: имя типа или его фраза. Фраза inward («is blocked by») значит,
+// что первая задача — принимающая сторона. Неоднозначность — ошибка со списком.
+export function pickLinkType(types, phrase) {
+  const all = types ?? [];
+  const q = String(phrase).trim().toLowerCase();
+  const words = (t) => [t.name, t.outward, t.inward].map((w) => String(w ?? '').toLowerCase());
+  const exact = all.find((t) => words(t).includes(q));
+  const hits = exact ? [exact] : all.filter((t) => words(t).some((w) => w.includes(q)));
+  if (hits.length !== 1) {
+    const list = all.map((t) => `${t.name} (${t.outward} / ${t.inward})`).join(', ') || 'Jira не отдала типов';
+    const why = hits.length ? `"${phrase}" подходит нескольким типам` : `Типа связи "${phrase}" нет`;
+    throw new CliError(`${why}. Доступны: ${list}.`, 1, 'usage');
+  }
+  const type = hits[0];
+  const [name, outward, inward] = words(type);
+  const asInward = inward !== outward && (inward === q || (inward.includes(q) && !outward.includes(q) && name !== q));
+  return { type, asInward };
+}
+
+const LINK_USAGE = 'Использование: fsh jira link <KEY> <тип или фраза> <KEY2>, например fsh jira link FD-2 blocks FD-1 или fsh jira link FD-2 relates FD-1.';
+
+// Запись в Jira: связь двух задач. Читается как фраза: «FD-2 blocks FD-1».
+async function link(j, args, ctx, { yes, asObject, dryRun } = {}) {
+  const [from, ...rest] = args;
+  const to = rest.pop();
+  const phrase = rest.join(' ').trim();
+  if (!from || !to || !phrase || !ISSUE_KEY.test(from) || !ISSUE_KEY.test(to)) throw new CliError(LINK_USAGE, 1, 'usage');
+  if (from === to) throw new CliError(`${from} не связывается сама с собой.`, 1, 'usage');
+  const { type, asInward } = pickLinkType(await j.linkTypes(), phrase);
+  const verb = asInward ? type.inward : type.outward;
+  const sentence = `${from} ${verb} ${to}`;
+  // Связи со стороны первой задачи: outwardIssue в её связях = «from <outward> to».
+  const shownNow = async () =>
+    (await j.issueLinks(from))
+      .filter((l) => l.type?.name === type.name)
+      .map((l) => (l.outwardIssue?.key === to ? type.outward : l.inwardIssue?.key === to ? type.inward : null))
+      .filter(Boolean);
+  if ((await shownNow()).includes(verb)) {
+    return { ok: true, key: from, link: sentence, type: type.name, target: to, existed: true, url: issueUrl(ctx, from) };
+  }
+  if (dryRun) return { ok: true, dry_run: true, key: from, link: sentence, type: type.name, target: to };
+  if (!yes && !asObject && !confirm(`Связать: ${sentence}? [y/N] `)) throw new CliError('Отменено.', 0, 'canceled');
+
+  const [inward, outward] = asInward ? [to, from] : [from, to];
+  await j.createLink({ type: type.name, inward, outward });
+
+  const shown = await shownNow();
+  if (!shown.length) throw new CliError(`Jira приняла связь «${sentence}», но у ${from} её не видно. Проверь в Jira.`, 1, 'api_failed');
+  if (!shown.includes(verb)) {
+    throw new CliError(`Связь легла в обратную сторону: ${from} ${shown[0]} ${to}. Удали её в Jira и сообщи об ошибке fsh.`, 1, 'api_failed');
+  }
+  return { ok: true, key: from, link: sentence, type: type.name, target: to, url: issueUrl(ctx, from) };
 }
 
 async function one(j, key, ctx) {
@@ -390,6 +446,10 @@ async function one(j, key, ctx) {
 export const issueUrl = (ctx, key) => `${(ctx.cfg.jira?.baseUrl || '').replace(/\/+$/, '')}/browse/${key}`;
 
 function render(r, ctx) {
+  if (r.link) {
+    console.log(`${r.link}${r.existed ? ' — связь уже была' : r.dry_run ? ' — не связано (dry-run)' : ' — связано'}`);
+    return;
+  }
   if (r.dry_run && r.project) {
     console.log(`${r.project}: задача типа ${r.type} ${r.dry_run ? 'не создана (dry-run)' : `создана: ${r.key}`}`);
     console.log(truncate(r.summary, 80));
