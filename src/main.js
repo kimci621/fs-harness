@@ -50,7 +50,7 @@ const FLAGS_USAGE = `Флаги:
   --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые);
                           в task submit: статус Jira для перевода в ревью (дефолт «Ревью»)
   --jql "<запрос>"        В jira: свой JQL вместо собранного из флагов
-  --file <путь|->         В jira field/create/comment: значение из файла или stdin
+  --file <путь|->         В jira field/create/comment, mr reply, mm edit: текст из файла или stdin
   --env <окружение>       В growthbook: окружение флага (дефолт growthbook.env)
   --type <тип>            В growthbook create: тип значения (boolean, string, number, json)
   --default <значение>    В growthbook create: дефолтное значение флага

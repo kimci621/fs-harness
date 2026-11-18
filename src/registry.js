@@ -1,6 +1,7 @@
 import { cmdMRS } from './commands/mrs.js';
 import { cmdMR } from './commands/mr.js';
 import { cmdMRComments } from './commands/mr-comments.js';
+import { cmdMRThread } from './commands/mr-thread.js';
 import { cmdJobs } from './commands/jobs.js';
 import { cmdRun } from './commands/run.js';
 import { cmdDeploy } from './commands/deploy.js';
@@ -105,10 +106,12 @@ export const COMMANDS = [
   },
   {
     name: 'mr',
-    usage: 'mr <ветка|номер>',
-    description: 'Один MR в том же формате (часть имени ветки, неточный поиск)',
-    example: 'fsh mr special-offer',
-    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMR(ctx.g, ctx.repo, args[0], { json: opts.json })),
+    usage: 'mr <ветка|номер> | mr reply <mr> <#N|id треда> (--file <путь>|"<текст>") | mr resolve <mr> <#N|id треда>',
+    description: 'Один MR в том же формате (часть имени ветки, неточный поиск); reply — ответ в тред ревью, resolve — закрыть тред (номер треда из mr-comments)',
+    example: 'fsh mr special-offer\n  fsh mr reply 2547 "#2" --file reply.md -y\n  fsh mr resolve 2547 "#2" -y',
+    run: (ctx, args, opts) => withRepoHost(ctx, () => (['reply', 'resolve'].includes(args[0])
+      ? cmdMRThread(ctx.g, ctx.repo, args[0], args.slice(1), opts)
+      : cmdMR(ctx.g, ctx.repo, args[0], { json: opts.json }))),
     mcp: {
       description: 'Один MR по номеру (!2547, 2547) или части имени ветки (неточный поиск). Только чтение.',
       inputSchema: {

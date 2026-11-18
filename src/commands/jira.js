@@ -265,7 +265,7 @@ function findField(pairs, name) {
     ?? pairs.find(([id]) => id === FIELD_ALIASES[lower]);
 }
 
-const readText = (file) => String(readFileSync(file === '-' ? 0 : file, 'utf8'));
+export const readText = (file) => String(readFileSync(file === '-' ? 0 : file, 'utf8'));
 
 // Чтение одного поля как есть: textarea приходит wiki-разметкой, её и отдаём, чтобы дописать.
 async function readField(j, key, name, ctx) {
