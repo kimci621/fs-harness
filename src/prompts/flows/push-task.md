@@ -30,15 +30,15 @@ fsh task push --dry-run
 ## 3. Запушить
 
 ```
-fsh task push
-fsh task push --target stage
+fsh task push -y
+fsh task push --target stage -y
 ```
 
 Команда пушит текущую ветку в `origin` и открывает MR с заголовком `FD-XXXX: название задачи` и
 ссылкой на задачу в описании. Открытый MR из этой ветки не дублируется — он просто возвращается.
 
 Ключ задачи берётся из имени ветки; если ветка названа иначе, передай его явно:
-`fsh task push FD-XXXX`.
+`fsh task push FD-XXXX -y`.
 
 ## 4. Отписать в чат, что задача уехала в ревью
 
@@ -46,15 +46,15 @@ fsh task push --target stage
 на задачу:
 
 ```
-fsh mm review
 fsh mm review FD-XXXX --dry-run
+fsh mm review -y
 ```
 
 Команда сама находит MR по текущей ветке и ключ задачи по её имени. То же самое делает флаг у пуша,
 если сразу понятно, что задача уезжает в ревью:
 
 ```
-fsh task push --post
+fsh task push --post -y
 ```
 
 Без флага и без этой команды в чат ничего не уходит. Канал задан в конфиге

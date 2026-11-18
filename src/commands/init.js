@@ -46,7 +46,11 @@ description: Use when в работе всплыл ключ задачи Jira (F
 | --- | --- |
 | «возьми FD-1234 в работу» | \`fsh flow show take-task\`, дальше по протоколу |
 | «что в задаче», «мои задачи», «задачи спринта» | \`fsh jira FD-1234\`, \`fsh jira mine --sprint current\` |
-| «переведи в тестирование», «в ревью» | \`fsh jira move FD-1234 тестирование\` |
+| «переведи в тестирование», «в ревью» | \`fsh jira move FD-1234 тестирование -y\` |
+| «что в поле», «заполни поле», «допиши в поле» | \`fsh jira field FD-1234 "Technical details for QA"\` (чтение), \`fsh jira field FD-1234 "<поле>" --file qa.md -y\`, дописать — \`fsh jira field FD-1234 "<поле>" "строка" --append -y\` |
+| «добавь комментарий» | \`fsh jira comment FD-1234 --file comment.md -y\` |
+| «привяжи к эпику» | \`fsh jira parent FD-1234 FD-7147 -y\` |
+| «заведи задачу» | \`fsh jira create FD Task "<заголовок>" --component Frontend --file desc.md --parent FD-7147 --sprint 4176 --assignee me -y\` |
 | «заполни Technical details for QA», «положи в Контент» | \`fsh flow show fill-jira\` |
 | «запушь задачу», «открой MR» | \`fsh flow show push-task\` |
 | «мои MR», «что с MR», «где конфликты» | \`fsh mrs --author me\`, \`fsh mr <ветка>\` |
@@ -56,7 +60,7 @@ description: Use when в работе всплыл ключ задачи Jira (F
 | «сделай ревью MR <ссылка на пост MM или MR>» | \`fsh flow show review-mr\`: замечания — треды в GitLab и 👀 на пост, без замечаний — approve и ✅ |
 | «что с пайплайном», «задеплой ветку» | \`fsh jobs <mr>\`, \`fsh deploy <ветка>\` |
 | «почини упавший пайплайн», «CI красный» | \`fsh ci-fix <mr>\` |
-| «включи флаг», «какие есть флаги» | \`fsh growthbook list\`, \`fsh growthbook toggle <id> on\` |
+| «включи флаг», «какие есть флаги» | \`fsh growthbook list\`, \`fsh growthbook toggle <id> on -y\` |
 
 Ключ задачи (FD-1234) или номер MR (!2547) в реплике человека — почти всегда сигнал, что работа
 начинается отсюда.
