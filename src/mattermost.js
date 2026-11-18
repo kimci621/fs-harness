@@ -111,6 +111,8 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
 
     patchPost: (postId, message) => api(`/posts/${postId}/patch`, { method: 'PUT', body: { message } }),
 
+    deletePost: (postId) => api(`/posts/${postId}`, { method: 'DELETE' }),
+
     // Все каналы вместе с личками: у бота без команды других и нет.
     allMyChannels: () => api('/users/me/channels'),
 

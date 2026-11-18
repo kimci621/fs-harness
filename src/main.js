@@ -65,7 +65,7 @@ const FLAGS_USAGE = `Флаги:
 Режим агента (env):
   GL_HELPER_JSON=1        JSON-вывод и структурированные ошибки для агентов
   GL_HELPER_YES=1         Не спрашивать подтверждение (как -y)
-  CLAUDECODE=1            Ставит Claude Code: подтверждения как с -y, кроме необратимых (jira delete, growthbook delete и set, growthbook create/toggle в production, resolve-all, init, worktrees gc, queue clear)
+  CLAUDECODE=1            Ставит Claude Code: подтверждения как с -y, кроме необратимых (jira delete, mm delete, growthbook delete и set, growthbook create/toggle в production, resolve-all, init, worktrees gc, queue clear)
   FS_HARNESS_PROJECT      Активный проект (как -P)`;
 
 // USAGE генерируется из реестра — новую команду сюда добавлять не нужно.
