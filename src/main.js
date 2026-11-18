@@ -3,6 +3,7 @@ import { loadConfig } from './config.js';
 import { CliError } from './errors.js';
 import { createCtx, findCommand, COMMANDS } from './registry.js';
 import { formatErrorJSON } from './output.js';
+import { AGENT_HELP } from './commands/agent-guide.js';
 
 const FLAGS_USAGE = `Флаги:
   -R, --repo <repo>       Репозиторий (дефолт из конфига / GL_HELPER_REPO)
@@ -78,7 +79,7 @@ function buildUsage(cfg) {
 
 Команды:
 ${commands}
-  help                    Эта справка
+  help [--agent|--all]    Эта справка; --agent — короткая для AI-агента (по умолчанию под Claude Code), --all — полная
 
 ${FLAGS_USAGE}
 
@@ -109,14 +110,18 @@ export async function main(argv) {
     // конфиг недоступен — покажем справку без падения
   }
 
+  // Агенту — короткая справка (help --agent или под Claude Code), --all — полная.
+  const helpText = () => (!opts.all && (argv.includes('--agent') || process.env.CLAUDECODE)
+    ? AGENT_HELP
+    : buildUsage(cfg));
   if (opts.help || rest[0] === 'help') {
-    console.log(buildUsage(cfg));
+    console.log(helpText());
     return 0;
   }
   // Голый fsh в живом терминале — это TUI; в пайпе и в CI — справка.
   if (!rest.length) {
     if (!process.stdout.isTTY || opts.json) {
-      console.log(buildUsage(cfg));
+      console.log(helpText());
       return 0;
     }
     rest = ['tui'];
@@ -200,6 +205,7 @@ function parseArgs(argv) {
     else if (a === '--keep-worktree') opts.keepWorktree = true;
     else if (a === '--rebuild') opts.rebuild = true;
     else if (a === '--dry-run') opts.dryRun = true;
+    else if (a === '--all') opts.all = true;
     else if (a === '--daemon') opts.daemon = true;
     else if (a === '--auto-execute') opts.autoExecute = true;
     else if (a === '--no-judge') opts.noJudge = true;
