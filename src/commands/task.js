@@ -7,7 +7,7 @@ import { finish } from '../output.js';
 import { confirm } from '../ui.js';
 import { CliError } from '../errors.js';
 import { issueUrl, pickTransition } from './jira.js';
-import { postReview } from './mm.js';
+import { findTaskPost, permalink, postReview } from './mm.js';
 
 // Ветки, в которые нельзя ни переключаться работой, ни пушить задачу.
 // targetBranch проекта добавляется к списку на месте.
@@ -244,8 +244,13 @@ async function submit(ctx, [maybeKey], opts) {
 
   const updated = unDraft ? await ctx.g.updateMR(ctx.repo, mr.iid, { title }) : mr;
   steps.push({ step: 'MR', ok: true, note: mrNote });
-  const posted = await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
-  steps.push({ step: 'Mattermost', ok: Boolean(posted?.ok), note: posted?.scenario || posted?.channel || '' });
+  // Повторный submit не должен звать ревьюеров второй раз: отвечают в тред первого поста.
+  // Поиск не удался — публикуем, как раньше: Jira и MR уже сдвинуты, молча пропустить пост хуже дубля.
+  const prior = await findTaskPost(ctx, key, opts).catch((err) => ({ error: err.message }));
+  const existed = prior.root ? { ok: true, existed: true, post_id: prior.root.id, post_url: await permalink(ctx, prior.root.id, prior.target) } : null;
+  const posted = existed ?? await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
+  const mmNote = existed ? `уже есть: ${existed.post_url ?? existed.post_id}` : posted?.scenario || posted?.channel || '';
+  steps.push({ step: 'Mattermost', ok: Boolean(posted?.ok), note: prior.error ? `${mmNote} (дубль не проверен: ${prior.error})` : mmNote });
   return { ...info, title: updated?.title ?? title, draft_removed: unDraft, jira: { from, to: now, transition: t?.name ?? null }, posted, steps };
 }
 
