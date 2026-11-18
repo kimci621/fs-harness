@@ -15,7 +15,7 @@ const MM_USAGE = [
   'fsh mm post <сценарий|канал|@ник> "<текст>" -y',
   'fsh mm review [KEY] -y',
   'fsh mm reply <KEY|permalink> "<текст>" -y',
-  'fsh mm thread <permalink|id поста>',
+  'fsh mm thread <permalink|id поста> [--last N] [--since <ISO-время>]',
   'fsh mm react <permalink|id поста> <эмодзи>',
   'fsh mm edit <permalink|id поста> (--file <путь> | "<текст>") -y',
   'fsh mm delete <permalink|id поста> -y',
@@ -36,7 +36,7 @@ export async function cmdMM(ctx, args, opts = {}) {
         : sub === 'post' ? await post(ctx, rest, opts)
           : sub === 'review' ? await review(ctx, rest, opts)
             : sub === 'reply' ? await reply(ctx, rest, opts)
-              : sub === 'thread' ? await thread(ctx, rest)
+              : sub === 'thread' ? await thread(ctx, rest, opts)
                 : sub === 'react' ? await react(ctx, rest, opts)
                   : sub === 'edit' ? await edit(ctx, rest, opts)
                     : sub === 'delete' ? await del(ctx, rest, opts)
@@ -216,11 +216,19 @@ export function postIdFrom(ref = '', usage = 'fsh mm thread <permalink|id пос
   return id;
 }
 
-// Чтение треда целиком, по возрастанию времени: только GET, в чат ничего не пишет.
-async function thread(ctx, [ref]) {
+// Чтение треда по возрастанию времени: только GET, в чат ничего не пишет.
+// --since и --last режут уже скачанный тред: total остаётся числом всех сообщений.
+async function thread(ctx, [ref], { last, since } = {}) {
+  const sinceMs = since ? Date.parse(since) : 0;
+  if (Number.isNaN(sinceMs)) throw new CliError(`--since ждёт дату или время ISO (2026-11-18T10:00), а не "${since}".`, 1, 'usage');
+  if (last !== undefined && last !== null && !(Number.isInteger(last) && last > 0)) {
+    throw new CliError('--last ждёт целое число больше нуля.', 1, 'usage');
+  }
   const mm = ctx.mm();
   const { order = [], posts = {} } = await mm.thread(postIdFrom(ref));
-  const list = order.map((id) => posts[id]).filter(Boolean).sort((a, b) => a.create_at - b.create_at);
+  const all = order.map((id) => posts[id]).filter(Boolean).sort((a, b) => a.create_at - b.create_at);
+  const fresh = all.filter((p) => p.create_at >= sinceMs);
+  const list = last ? fresh.slice(-last) : fresh;
   const userIds = [...new Set(list.map((p) => p.user_id))];
   const users = Object.fromEntries((userIds.length ? await mm.usersByIds(userIds) : []).map((u) => [u.id, u.username]));
   const messages = list.map((p) => ({
@@ -230,7 +238,7 @@ async function thread(ctx, [ref]) {
     text: p.message ?? '',
     files: (p.metadata?.files ?? []).map((f) => f.name),
   }));
-  return { ok: true, root_id: list[0]?.root_id || list[0]?.id || '', messages, total: messages.length };
+  return { ok: true, root_id: all[0]?.root_id || all[0]?.id || '', messages, shown: messages.length, total: all.length };
 }
 
 // Запись в общий чат: как и все записи в харнессе — dry-run показывает, подтверждение спрашивает.
@@ -310,6 +318,7 @@ function render(r) {
   if (r.edited) return void console.log(`${r.dry_run ? '📝 план: заменить' : '✅ изменён'} → ${r.post_url || r.post_id}\n${r.text}`);
   if (r.emoji) return void console.log(`${r.dry_run ? '📝 план' : '✅ реакция'} :${r.emoji}: → пост ${r.post_id}`);
   if (r.messages) {
+    if (r.shown < r.total) console.log(`показано ${r.shown} из ${r.total}\n`);
     return void console.log(r.messages.map((m) => {
       const files = m.files.length ? `\n📎 ${m.files.join(', ')}` : '';
       return `— ${m.at.slice(0, 16).replace('T', ' ')} ${m.user}\n${m.text}${files}`;
