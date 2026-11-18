@@ -245,13 +245,13 @@ async function submit(ctx, [maybeKey], opts) {
   const updated = unDraft ? await ctx.g.updateMR(ctx.repo, mr.iid, { title }) : mr;
   steps.push({ step: 'MR', ok: true, note: mrNote });
   // Повторный submit не должен звать ревьюеров второй раз: отвечают в тред первого поста.
-  // Поиск не удался — пост не шлём: шаг красный, повторный submit досылает его.
-  const prior = await findTaskPost(ctx, key, opts).catch((err) => ({ error: err.message }));
+  const prior = await findTaskPost(ctx, key, opts).catch((err) => {
+    throw new CliError(`Jira и MR уже сдвинуты, но пост в Mattermost не отправлен: не проверить, был ли он (${err.message}). `
+      + `Отправь сам: fsh mm review ${key}`, 1, 'api_failed');
+  });
   const existed = prior.root ? { ok: true, existed: true, post_id: prior.root.id, post_url: await permalink(ctx, prior.root.id, prior.target) } : null;
-  const posted = prior.error ? { ok: false, error: prior.error }
-    : existed ?? await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
-  const mmNote = prior.error ? `не отправлено: не проверить, был ли пост (${prior.error}); повтори fsh task submit`
-    : existed ? `уже есть: ${existed.post_url ?? existed.post_id}` : posted?.scenario || posted?.channel || '';
+  const posted = existed ?? await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
+  const mmNote = existed ? `уже есть: ${existed.post_url ?? existed.post_id}` : posted?.scenario || posted?.channel || '';
   steps.push({ step: 'Mattermost', ok: Boolean(posted?.ok), note: mmNote });
   return { ...info, title: updated?.title ?? title, draft_removed: unDraft, jira: { from, to: now, transition: t?.name ?? null }, posted, steps };
 }
