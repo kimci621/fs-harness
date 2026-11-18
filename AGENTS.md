@@ -16,7 +16,7 @@ src/resolve.js          поиск MR: по номеру или части им�
 src/pipeline.js         ensureMRPipeline, findJob, deployJobName, mapLimit
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto, worktrees, worker, resolve-all
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, mr-thread (mr reply/resolve), prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto, worktrees, worker, resolve-all
 src/commands/resolve-all.js все мои открытые MR параллельно под локом MR: conflict в режиме sync → threads → реплика в тред задачи в MM
 src/worktrees.js        инвентаризация и gc временных worktree (orphan, run-done, task)
 src/commands/worktrees.js команда fsh worktrees: список и очистка (gc)
@@ -188,7 +188,7 @@ resolve target → precheck → (skip?) → context → isolate → plan? → pr
 
 - `GL_HELPER_JSON=1` — все команды отдают JSON; side-effect команды — финальный результат `{ok:true, ...}` в stdout, прогресс в stderr. Ошибки: `{ok:false,error:{code,message}}` в stdout, exit ≠ 0.
 - `GL_HELPER_YES=1` — авто-подтверждение (аналог -y).
-- `CLAUDECODE` (ставит Claude Code) — `confirm()` сам отвечает «да», кроме вызовов с `{ irreversible: true }` (jira delete, growthbook delete и set, growthbook create/toggle в production, resolve-all, init, worktrees gc, queue clear). Новую необратимую запись помечай так же. Отказ без терминала печатает одну строку с командой повтора (`cancelLine` в `main.js`) и выходит с кодом 1 (`exitCodeFor`).
+- `CLAUDECODE` (ставит Claude Code) — `confirm()` сам отвечает «да», кроме вызовов с `{ irreversible: true }` (jira delete, mm delete, growthbook delete и set, growthbook create/toggle в production, resolve-all, init, worktrees gc, queue clear). Новую необратимую запись помечай так же. Отказ без терминала печатает одну строку с командой повтора (`cancelLine` в `main.js`) и выходит с кодом 1 (`exitCodeFor`).
 - `fsh help` под `CLAUDECODE` — короткая справка `AGENT_HELP` из `commands/agent-guide.js`. Новая пользовательская команда, которую агент должен знать, — пример туда; тест сверяет, что все упомянутые команды есть в реестре.
 - Сетевые сбои Jira и Mattermost идут через `netError` из `errors.js`: `ENOTFOUND`, `ECONNREFUSED`, `EPERM` не ретраятся.
 - `--dry-run` — план без side-effect'ов для run/deploy/действий/commit.
@@ -280,6 +280,8 @@ Watcher (`fsh watch --daemon`) шлёт сообщение на MR с кнопк
 - `fsh mm reply <KEY> "<текст>"` отвечает в тред задачи: ищет в канале сценария `review` свой
   последний корневой пост с ключом (сообщение `mm review`) и пишет с его `root_id`. Поста нет —
   `not_found` с подсказкой `fsh mm review <KEY>`. `--dry-run` ходит в сеть только на чтение.
+- Поиск поста задачи один: `findTaskPost` в `mm.js`, его зовут `reply` и `task submit` (дубль поста «в ревью»).
+  `mm edit`/`mm delete` проверяют, что пост свой (`user_id` = `me`).
 
 ## Бэкенд в контуре задачи (fitstars-api4)
 

@@ -135,12 +135,14 @@ fsh task push -y
 fsh task submit -y
 fsh mrs --author me
 fsh mr-comments feature/FD-1234 --open
+fsh mr reply feature/FD-1234 "#2" --file reply.md -y
 fsh jobs feature/FD-1234
 fsh deploy feature/FD-1234 3 -y
 
 Mattermost и флаги:
 fsh mm review FD-1234 -y
 fsh mm reply FD-1234 "Поправил" -y
+fsh mm thread <permalink> --last 20
 fsh mm post @ник "текст" -y
 fsh growthbook toggle new-onboarding on --env production -y
 
