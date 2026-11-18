@@ -105,6 +105,47 @@ action_unknown, run_not_publishable, deps_unavailable.
   (строка отказа содержит готовую команду повтора с -y). Под Claude Code (env CLAUDECODE) подтверждение
   не спрашивается, кроме необратимых: jira delete, growthbook delete, worktrees gc, queue clear.`;
 
+// Короткая справка для агента: fsh help --agent, и под Claude Code вместо полной.
+// Служебные и демонические команды сюда не попадают — они есть в fsh help --all.
+export const AGENT_HELP = `fsh для агента. Полная справка: fsh help --all. Подробно со схемами JSON: fsh agent-guide.
+Пишущие команды - с -y: под Claude Code они идут и без него, но так команду можно повторить в терминале.
+Не уверен - сначала --dry-run. --json: результат JSON в stdout, ошибка {ok:false,error:{code,message}}.
+
+Начало:
+fsh doctor
+fsh flow list
+fsh flow show "взять задачу"
+
+Jira:
+fsh jira mine
+fsh jira show FD-1234
+fsh jira search "project = FD AND sprint in openSprints()"
+fsh jira field FD-1234 "Technical details for QA"
+fsh jira field FD-1234 "Technical details for QA" --file qa.md -y
+fsh jira field FD-1234 "Technical details for QA" "ещё строка" --append -y
+fsh jira field FD-1234 Исполнитель me -y
+fsh jira move FD-1234 "В работе" -y
+fsh jira comment FD-1234 --file comment.md -y
+fsh jira parent FD-1234 FD-7147 -y
+fsh jira create FD Task "Заголовок" --component Frontend --file desc.md --parent FD-7147 --sprint 4176 --assignee me -y
+
+Задача и MR:
+fsh task start FD-1234
+fsh task push -y
+fsh task submit -y
+fsh mrs --author me
+fsh mr-comments feature/FD-1234 --open
+fsh jobs feature/FD-1234
+fsh deploy feature/FD-1234 3 -y
+
+Mattermost и флаги:
+fsh mm review FD-1234 -y
+fsh mm reply FD-1234 "Поправил" -y
+fsh mm post @ник "текст" -y
+fsh growthbook toggle new-onboarding on --env production -y
+
+Застрял: fsh ask "вопрос" (по упавшему рану: --run <id>).`;
+
 // Генерирует гайд со списком команд из реестра и сценариев из src/prompts/flows.
 export function buildAgentGuide(commands, { projectDir } = {}) {
   const lines = commands
