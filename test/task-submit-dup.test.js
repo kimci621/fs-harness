@@ -90,15 +90,15 @@ test('task submit: has_conflicts=false, но GitLab ещё проверяет с
   }
 });
 
-test('task submit: не удалось проверить, был ли пост, — пост не шлём, шаг Mattermost красный', async () => {
+test('task submit: не удалось проверить, был ли пост, — пост не шлём, команда падает с подсказкой', async () => {
   const { ctx, posts } = ctxWith();
   const mm = ctx.mm;
   ctx.mm = () => ({ ...mm(), channelPosts: async () => { throw new Error('MM 502'); } });
-  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+  await assert.rejects(
+    () => cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true }),
+    (e) => e.code === 'api_failed' && e.exitCode === 1 && /MM 502/.test(e.message) && /fsh mm review FD-1/.test(e.message),
+  );
   assert.deepEqual(posts, []);
-  const step = res.steps.find((s) => s.step === 'Mattermost');
-  assert.equal(step.ok, false);
-  assert.match(step.note, /не отправлено.*MM 502.*повтори fsh task submit/);
 });
 
 test('task submit: detailed_merge_status=preparing — черновик не снимаем', async () => {
