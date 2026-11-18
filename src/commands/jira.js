@@ -356,7 +356,7 @@ async function del(j, [key], ctx, { yes, asObject, dryRun } = {}) {
   const issue = await j.issue(key);
   const title = issue.fields?.summary ?? '';
   if (dryRun) return { ok: true, dry_run: true, key, summary: title };
-  if (!yes && !asObject && !confirm(`Удалить ${key} «${truncate(title, 60)}» навсегда? [y/N] `)) {
+  if (!yes && !asObject && !confirm(`Удалить ${key} «${truncate(title, 60)}» навсегда? [y/N] `, { irreversible: true })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   await j.deleteIssue(key);

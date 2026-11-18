@@ -115,7 +115,7 @@ const brief = (f) => ({ id: f.id, type: f.valueType, default: f.defaultValue, en
 async function del(gb, [id], opts) {
   if (!id) throw new CliError('Использование: fsh growthbook delete <id>.', 1, 'usage');
   if (opts.dryRun) return { ok: true, dry_run: true, deleted: id };
-  if (!opts.yes && !opts.asObject && !confirm(`Удалить флаг "${id}" без возможности вернуть? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Удалить флаг "${id}" без возможности вернуть? [y/N] `, { irreversible: true })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   const r = await gb.deleteFeature(id);

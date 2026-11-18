@@ -61,6 +61,7 @@ const FLAGS_USAGE = `Флаги:
 Режим агента (env):
   GL_HELPER_JSON=1        JSON-вывод и структурированные ошибки для агентов
   GL_HELPER_YES=1         Не спрашивать подтверждение (как -y)
+  CLAUDECODE=1            Ставит Claude Code: подтверждения как с -y, кроме необратимых (jira delete, growthbook delete, worktrees gc, queue clear)
   FS_HARNESS_PROJECT      Активный проект (как -P)`;
 
 // USAGE генерируется из реестра — новую команду сюда добавлять не нужно.
@@ -141,7 +142,7 @@ export async function main(argv) {
     if (opts.json) {
       console.log(formatErrorJSON(cliErr));
     } else {
-      console.error(`\n❌ ${cliErr.message}`);
+      console.error(`\n❌ ${cancelLine(cliErr, argv, { tty: process.stdin.isTTY && !process.env.CLAUDECODE })}`);
       // Упавший ран не бросаем на полпути: печатаем, что с ним делать дальше.
       if (cliErr.run) {
         console.error(`   ран: ${cliErr.run}${cliErr.runDir ? ` · ${cliErr.runDir}` : ''}`);
@@ -155,6 +156,14 @@ export async function main(argv) {
     }
     return cliErr.exitCode ?? 1;
   }
+}
+
+const shellArg = (a) => (/^[\p{L}\p{N}_@%+=:,./-]+$/u.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`);
+
+// Отказ confirm() без терминала: агенты читают хвост вывода, поэтому команда повтора — в той же строке.
+export function cancelLine(err, argv, { tty }) {
+  if (tty || err.code !== 'canceled' || err.message !== 'Отменено.') return err.message;
+  return `Отменено. Повтори с -y: fsh ${argv.map(shellArg).join(' ')} -y`;
 }
 
 function parseArgs(argv) {
