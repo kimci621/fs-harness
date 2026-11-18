@@ -105,7 +105,7 @@ action_unknown, run_not_publishable, deps_unavailable.
   (строка отказа содержит готовую команду повтора с -y). Под Claude Code (env CLAUDECODE) подтверждение
   не спрашивается, кроме необратимых: jira delete, growthbook delete, worktrees gc, queue clear.`;
 
-// Короткая справка для агента: fsh help --agent, и под Claude Code вместо полной.
+// Короткая справка для агента: под Claude Code вместо полной.
 // Служебные и демонические команды сюда не попадают — они есть в fsh help --all.
 export const AGENT_HELP = `fsh для агента. Полная справка: fsh help --all. Подробно со схемами JSON: fsh agent-guide.
 Пишущие команды - с -y: под Claude Code они идут и без него, но так команду можно повторить в терминале.
