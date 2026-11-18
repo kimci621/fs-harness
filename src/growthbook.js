@@ -11,7 +11,7 @@ export function createGrowthBook({ baseUrl, token, fetchImpl = fetch, sleepMs = 
   }
   const root = baseUrl.replace(/\/+$/, '');
 
-  async function api(path, { method = 'GET', body, retries = 3 } = {}) {
+  async function api(path, { method = 'GET', body, retries = 3, action = 'этот запрос' } = {}) {
     let lastErr;
     for (let attempt = 1; attempt <= retries; attempt++) {
       let res;
@@ -29,7 +29,7 @@ export function createGrowthBook({ baseUrl, token, fetchImpl = fetch, sleepMs = 
       }
       if (res.ok) return res.status === 204 ? null : res.json();
       if (res.status === 401 || res.status === 403) {
-        throw new CliError(`GrowthBook отклонил ключ (${res.status}). Проверь ~/.growthbook_apikey.`, 1, 'api_failed');
+        throw new CliError(`ключу GrowthBook не хватает прав на ${action} (${res.status}). Проверь ключ: ~/.growthbook_apikey или FS_HARNESS_GROWTHBOOK.`, 1, 'api_failed');
       }
       if ((res.status === 429 || res.status >= 500) && attempt < retries) {
         await sleep(backoff(attempt, sleepMs));
@@ -47,24 +47,24 @@ export function createGrowthBook({ baseUrl, token, fetchImpl = fetch, sleepMs = 
     // Постранично: флагов в проекте сотни, а limit у API 100.
     async features({ project, limit = 100, offset = 0 } = {}) {
       const q = new URLSearchParams({ limit: String(limit), offset: String(offset), ...(project ? { projectId: project } : {}) });
-      const res = await api(`/api/v1/features?${q}`);
+      const res = await api(`/api/v1/features?${q}`, { action: 'чтение флагов' });
       return { features: res.features ?? [], total: res.total ?? 0, nextOffset: res.hasMore ? res.nextOffset : null };
     },
 
-    feature: (id) => api(`/api/v1/features/${encodeURIComponent(id)}`).then((r) => r.feature ?? r),
+    feature: (id) => api(`/api/v1/features/${encodeURIComponent(id)}`, { action: 'чтение флагов' }).then((r) => r.feature ?? r),
 
-    createFeature: (body) => api('/api/v1/features', { method: 'POST', body }).then((r) => r.feature ?? r),
+    createFeature: (body) => api('/api/v1/features', { method: 'POST', body, action: 'создание флага' }).then((r) => r.feature ?? r),
 
     // Частичная правка: POST, не PUT — так у GrowthBook REST.
-    updateFeature: (id, body) => api(`/api/v1/features/${encodeURIComponent(id)}`, { method: 'POST', body }).then((r) => r.feature ?? r),
+    updateFeature: (id, body) => api(`/api/v1/features/${encodeURIComponent(id)}`, { method: 'POST', body, action: 'правку флага' }).then((r) => r.feature ?? r),
 
     // Отдельный эндпоинт, а не PUT: включение флага в окружении требует причины для аудита.
     toggleFeature: (id, environments, reason) =>
-      api(`/api/v1/features/${encodeURIComponent(id)}/toggle`, { method: 'POST', body: { reason, environments } }).then((r) => r.feature ?? r),
+      api(`/api/v1/features/${encodeURIComponent(id)}/toggle`, { method: 'POST', body: { reason, environments }, action: 'включение и выключение флага' }).then((r) => r.feature ?? r),
 
     // Живой (неархивированный) флаг удаляется только при включённом «REST API always
     // bypasses approval requirements»; иначе API сам подскажет архивировать.
-    deleteFeature: (id) => api(`/api/v1/features/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) => r ?? { deletedId: id }),
+    deleteFeature: (id) => api(`/api/v1/features/${encodeURIComponent(id)}`, { method: 'DELETE', action: 'удаление флага' }).then((r) => r ?? { deletedId: id }),
   };
 }
 
