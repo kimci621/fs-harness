@@ -188,6 +188,9 @@ resolve target → precheck → (skip?) → context → isolate → plan? → pr
 
 - `GL_HELPER_JSON=1` — все команды отдают JSON; side-effect команды — финальный результат `{ok:true, ...}` в stdout, прогресс в stderr. Ошибки: `{ok:false,error:{code,message}}` в stdout, exit ≠ 0.
 - `GL_HELPER_YES=1` — авто-подтверждение (аналог -y).
+- `CLAUDECODE` (ставит Claude Code) — `confirm()` сам отвечает «да», кроме вызовов с `{ irreversible: true }` (jira delete, growthbook delete, worktrees gc, queue clear). Новую необратимую запись помечай так же. Отказ без терминала печатает одну строку с командой повтора (`cancelLine` в `main.js`).
+- `fsh help --agent` (и `help` под `CLAUDECODE`) — короткая справка `AGENT_HELP` из `commands/agent-guide.js`. Новая пользовательская команда, которую агент должен знать, — пример туда; тест сверяет, что все упомянутые команды есть в реестре.
+- Сетевые сбои Jira и Mattermost идут через `netError` из `errors.js`: `ENOTFOUND`, `ECONNREFUSED`, `EPERM` не ретраятся.
 - `--dry-run` — план без side-effect'ов для run/deploy/действий/commit.
 - `fsh agent-guide` — самодостаточная инструкция, которую агент запускает первой.
 - В командах весь прогресс печатай через `makeLogger(json)` из `output.js`, итог — через `finish(json, obj)`. Ошибки — `CliError(msg, exitCode, code)` с машинным кодом.
