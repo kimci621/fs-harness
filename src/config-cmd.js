@@ -51,7 +51,7 @@ export function cmdConfig(args, opts = {}, cfg = null) {
 }
 
 function get(key, opts, cfg) {
-  if (!GET_KEYS[key]) throw new CliError(`Использование: fsh config get <${Object.keys(GET_KEYS).join('|')}>.`, 1, 'usage');
+  if (!Object.hasOwn(GET_KEYS, key ?? '')) throw new CliError(`Использование: fsh config get <${Object.keys(GET_KEYS).join('|')}>.`, 1, 'usage');
   const result = { ok: true, key, value: GET_KEYS[key](cfg) ?? '' };
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);

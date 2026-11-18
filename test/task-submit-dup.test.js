@@ -89,3 +89,21 @@ test('task submit: has_conflicts=false, но GitLab ещё проверяет с
     assert.match(res.steps.find((s) => s.step === 'MR').note, /GitLab ещё проверяет слияние/);
   }
 });
+
+test('task submit: не удалось проверить, был ли пост, — пост не шлём, шаг Mattermost красный', async () => {
+  const { ctx, posts } = ctxWith();
+  const mm = ctx.mm;
+  ctx.mm = () => ({ ...mm(), channelPosts: async () => { throw new Error('MM 502'); } });
+  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+  assert.deepEqual(posts, []);
+  const step = res.steps.find((s) => s.step === 'Mattermost');
+  assert.equal(step.ok, false);
+  assert.match(step.note, /не отправлено.*MM 502.*повтори fsh task submit/);
+});
+
+test('task submit: detailed_merge_status=preparing — черновик не снимаем', async () => {
+  const { ctx, updates } = ctxWith({ mr: { ...READY_MR, merge_status: 'can_be_merged', detailed_merge_status: 'preparing' } });
+  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+  assert.equal(res.draft_removed, false);
+  assert.deepEqual(updates, []);
+});

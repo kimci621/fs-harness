@@ -313,7 +313,7 @@ async function edit(ctx, [ref, ...words], opts) {
 async function del(ctx, [ref], opts) {
   const p = await ownPost(ctx, ref, 'fsh mm delete <permalink|id поста>');
   if (opts.dryRun) return { ok: true, dry_run: true, deleted: p.id, text: p.message ?? '' };
-  if (!opts.yes && !opts.asObject && !confirm(`Удалить пост ${p.id} без возврата?\n${p.message ?? ''}\n[y/N] `, { irreversible: true })) {
+  if (!opts.yes && !opts.asObject && !confirm(`Удалить пост ${p.id} без возврата${p.root_id ? '' : ' (корень треда: ответы в нём тоже пропадут)'}?\n${p.message ?? ''}\n[y/N] `, { irreversible: true })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   await ctx.mm().deletePost(p.id);

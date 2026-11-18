@@ -33,3 +33,16 @@ test('wait: нет прав на файл — понятная ошибка с �
     chmodSync(dir, 0o700);
   }
 });
+
+test('wait list: каталог без прав — ошибка, а не пустой список', async () => {
+  const dir = path.join(mkdtempSync(path.join(tmpdir(), 'fsh-wf-')), 'locked');
+  mkdirSync(dir);
+  const file = path.join(dir, 'waits.json');
+  await cmdWait(ctx, ['add', 'jira', 'FD-1'], {}, { file });
+  chmodSync(dir, 0o000);
+  try {
+    await assert.rejects(() => cmdWait(ctx, ['list'], {}, { file }), (e) => e.code === 'permission_denied');
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+});

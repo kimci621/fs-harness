@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { useEnvProxy } from '../src/main.js';
 
-test('прокси из HTTPS_PROXY/HTTP_PROXY: fetch fsh идёт через него', async () => {
+const noProxyApi = typeof http.setGlobalProxyFromEnv !== 'function' && 'нет http.setGlobalProxyFromEnv в этой версии Node';
+
+test('прокси из HTTPS_PROXY/HTTP_PROXY: fetch fsh идёт через него', { skip: noProxyApi }, async () => {
   const seen = [];
   const srv = http.createServer((req, res) => { seen.push(req.url); res.end('{}'); });
   srv.on('connect', (req, sock) => { seen.push(`CONNECT ${req.url}`); sock.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'); });

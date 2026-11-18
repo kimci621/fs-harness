@@ -245,16 +245,18 @@ async function submit(ctx, [maybeKey], opts) {
   const updated = unDraft ? await ctx.g.updateMR(ctx.repo, mr.iid, { title }) : mr;
   steps.push({ step: 'MR', ok: true, note: mrNote });
   // Повторный submit не должен звать ревьюеров второй раз: отвечают в тред первого поста.
-  // Поиск не удался — публикуем, как раньше: Jira и MR уже сдвинуты, молча пропустить пост хуже дубля.
+  // Поиск не удался — пост не шлём: шаг красный, повторный submit досылает его.
   const prior = await findTaskPost(ctx, key, opts).catch((err) => ({ error: err.message }));
   const existed = prior.root ? { ok: true, existed: true, post_id: prior.root.id, post_url: await permalink(ctx, prior.root.id, prior.target) } : null;
-  const posted = existed ?? await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
-  const mmNote = existed ? `уже есть: ${existed.post_url ?? existed.post_id}` : posted?.scenario || posted?.channel || '';
-  steps.push({ step: 'Mattermost', ok: Boolean(posted?.ok), note: prior.error ? `${mmNote} (дубль не проверен: ${prior.error})` : mmNote });
+  const posted = prior.error ? { ok: false, error: prior.error }
+    : existed ?? await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
+  const mmNote = prior.error ? `не отправлено: не проверить, был ли пост (${prior.error}); повтори fsh task submit`
+    : existed ? `уже есть: ${existed.post_url ?? existed.post_id}` : posted?.scenario || posted?.channel || '';
+  steps.push({ step: 'Mattermost', ok: Boolean(posted?.ok), note: mmNote });
   return { ...info, title: updated?.title ?? title, draft_removed: unDraft, jira: { from, to: now, transition: t?.name ?? null }, posted, steps };
 }
 
-const CHECKING = ['unchecked', 'checking', 'cannot_be_merged_recheck'];
+const CHECKING = ['unchecked', 'checking', 'preparing', 'cannot_be_merged_recheck'];
 
 // Почему MR ещё не готов к снятию черновика; null — готов.
 function notReady(mr) {
