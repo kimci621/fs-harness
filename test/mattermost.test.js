@@ -340,3 +340,41 @@ test('mm review: из worktree проекта ветка берётся из wor
   await cmdMM(ctx, ['review'], { asObject: true, dryRun: true });
   assert.equal(branches[1], 'dev');
 });
+
+test('mm post: после отправки — permalink поста с командой канала, а не id канала', async () => {
+  const mm = {
+    teams: async () => [{ id: 't0', name: 'other' }, { id: 't1', name: 'fitstars' }],
+    channel: async () => ({ id: 'chan123', team_id: 't1' }),
+    post: async () => ({ id: 'p'.repeat(26), channel_id: 'chan123' }),
+  };
+  const out = await cmdMM(ctxWith(mm), ['post', 'a'.repeat(26), 'привет'], { asObject: true, yes: true });
+  assert.equal(out.post_url, `https://mm.example/fitstars/pl/${'p'.repeat(26)}`);
+
+  const replied = await cmdMM(ctxWith({ ...replyMM(), ...mm, post: async () => ({ id: 'r'.repeat(26) }) }, REPLY_CFG), ['reply', 'FD-7926', 'ок'], { asObject: true, yes: true });
+  assert.equal(replied.post_url, `https://mm.example/fitstars/pl/${'r'.repeat(26)}`);
+});
+
+test('mm post @ник: личное сообщение через direct-канал', async () => {
+  const sent = [];
+  const mm = {
+    me: async () => ({ id: 'me' }),
+    usersByUsernames: async (names) => (names[0] === 'j.doe' ? [{ id: 'u2', username: 'j.doe' }] : []),
+    directChannel: async (a, b) => ({ id: `dm-${a}-${b}`, team_id: '' }),
+    teams: async () => [{ id: 't1', name: 'fitstars' }],
+    channel: async (id) => ({ id, team_id: '' }),
+    post: async (channel, message) => { sent.push({ channel, message }); return { id: 'x'.repeat(26) }; },
+  };
+  const out = await cmdMM(ctxWith(mm), ['post', '@j.doe', 'посмотри', 'MR'], { asObject: true, yes: true });
+  assert.deepEqual(sent, [{ channel: 'dm-me-u2', message: 'посмотри MR' }]);
+  assert.equal(out.post_url, `https://mm.example/fitstars/pl/${'x'.repeat(26)}`);
+  await assert.rejects(() => cmdMM(ctxWith(mm), ['post', '@нет', 'текст'], { asObject: true, yes: true }), (e) => e.code === 'not_found');
+});
+
+test('mm без подкоманды — справка, а не ошибка; reply без review подсказывает оба выхода', async () => {
+  const help = await cmdMM({ cfg: CFG }, [], { asObject: true });
+  assert.match(help.usage, /fsh mm post/);
+  await assert.rejects(
+    () => cmdMM(ctxWith(replyMM(), REPLY_CFG), ['reply', 'FD-1', 'текст'], { asObject: true, yes: true }),
+    (e) => /permalink/.test(e.message) && /fsh mm review FD-1/.test(e.message),
+  );
+});
