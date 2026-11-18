@@ -14,7 +14,7 @@ export function cmdQueue(ctx, args, opts = {}) {
   const at = root ? { root } : {};
 
   if (sub === 'clear') {
-    if (!opts.yes && !opts.json && !confirm('Очистить очередь заданий? [y/N] ')) {
+    if (!opts.yes && !opts.json && !confirm('Очистить очередь заданий? [y/N] ', { irreversible: true })) {
       throw new CliError('Отменено.', 1, 'canceled');
     }
     const keys = clearQueue(at);

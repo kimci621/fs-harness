@@ -214,11 +214,13 @@ function readPipedLine() {
   return line;
 }
 
-// Простое подтверждение из stdin (при неинтерактивном запуске — отказ).
-export function confirm(msg) {
+// Простое подтверждение из stdin (при неинтерактивном запуске — отказ, команду повтора печатает main).
+// Под Claude Code (CLAUDECODE) согласие агента — сам вызов; необратимое всё равно требует -y.
+export function confirm(msg, { irreversible = false } = {}) {
+  if (process.env.CLAUDECODE && !irreversible) return true;
   process.stderr.write(msg);
-  if (!process.stdin.isTTY) {
-    process.stderr.write('\nstdin не терминал — подтвердить некому. Повтори с -y.\n');
+  if (process.env.CLAUDECODE || !process.stdin.isTTY) {
+    process.stderr.write('\n');
     return false;
   }
   let fd;

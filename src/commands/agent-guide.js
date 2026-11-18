@@ -101,7 +101,9 @@ action_unknown, run_not_publishable, deps_unavailable.
   <projectDir>/.fs-harness/prompts/<имя>.md, личный ~/.config/fs-harness/prompts/<имя>.md,
   встроенный. Смотреть и проверять: fsh prompts list|show <имя> [--for <mr>]|check.
 - git-операции конфликта делаются только в ветке MR (source), target не трогается, force-push запрещён.
-- Side-effect команды без -y/GL_HELPER_YES спрашивают подтверждение и при неинтерактивном stdin откажутся.`;
+- Side-effect команды без -y/GL_HELPER_YES спрашивают подтверждение и при неинтерактивном stdin откажутся
+  (строка отказа содержит готовую команду повтора с -y). Под Claude Code (env CLAUDECODE) подтверждение
+  не спрашивается, кроме необратимых: jira delete, growthbook delete, worktrees gc, queue clear.`;
 
 // Генерирует гайд со списком команд из реестра и сценариев из src/prompts/flows.
 export function buildAgentGuide(commands, { projectDir } = {}) {
