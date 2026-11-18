@@ -11,8 +11,22 @@ import { CliError } from '../errors.js';
 
 // fsh mm login|whoami|channels|post|review|reply|thread|react — сообщения в Mattermost от имени человека.
 // Сценарий здесь один (review): канал на сценарий берётся из mattermost.channels.
+const MM_USAGE = [
+  'fsh mm post <сценарий|канал|@ник> "<текст>" -y',
+  'fsh mm review [KEY] -y',
+  'fsh mm reply <KEY|permalink> "<текст>" -y',
+  'fsh mm thread <permalink|id поста>',
+  'fsh mm react <permalink|id поста> <эмодзи>',
+  'fsh mm channels [строка] | fsh mm whoami | fsh mm login [логин]',
+].join('\n');
+
 export async function cmdMM(ctx, args, opts = {}) {
   const [sub, ...rest] = args;
+  if (!sub) {
+    const help = { ok: true, usage: MM_USAGE };
+    if (!opts.asObject) opts.json ? finish(true, help) : console.log(MM_USAGE);
+    return help;
+  }
   const result =
     sub === 'login' ? await login(ctx, rest)
       : sub === 'whoami' ? await whoami(ctx)
@@ -22,7 +36,7 @@ export async function cmdMM(ctx, args, opts = {}) {
             : sub === 'reply' ? await reply(ctx, rest, opts)
               : sub === 'thread' ? await thread(ctx, rest)
                 : sub === 'react' ? await react(ctx, rest, opts)
-                  : (() => { throw new CliError('Использование: fsh mm [login [логин]|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY|permalink> "<текст>"|thread <permalink|id поста>|react <permalink|id поста> <эмодзи>].', 1, 'usage'); })();
+                  : (() => { throw new CliError(`Использование: fsh mm <подкоманда>\n${MM_USAGE}`, 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -52,6 +66,12 @@ export function resolveChannel(cfg, name) {
 export async function channelId(ctx, ref) {
   if (CHANNEL_ID.test(ref)) return ref;
   const mm = ctx.mm();
+  // @ник — личка: direct-канал создаётся при первом обращении, дальше тот же.
+  if (ref.startsWith('@')) {
+    const [user] = (await mm.usersByUsernames([ref.slice(1)])) ?? [];
+    if (!user) throw new CliError(`Пользователя ${ref} нет в Mattermost.`, 1, 'not_found');
+    return (await mm.directChannel((await mm.me()).id, user.id)).id;
+  }
   if (ref.includes('/')) {
     const [team, name] = ref.split('/');
     const ch = await mm.channelByName(team, name);
@@ -104,7 +124,7 @@ async function whoami(ctx) {
 
 async function post(ctx, [channel, ...words], opts) {
   const text = words.join(' ').trim();
-  if (!text) throw new CliError('Использование: fsh mm post <сценарий|id канала> "<текст>".', 1, 'usage');
+  if (!text) throw new CliError('Использование: fsh mm post <сценарий|канал|@ник> "<текст>".', 1, 'usage');
   return send(ctx, resolveChannel(ctx.cfg, channel), text, opts);
 }
 
@@ -154,7 +174,7 @@ async function reply(ctx, [ref, ...words], opts) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   const created = await ctx.mm().post(target, text, { rootId });
-  return { ok: true, channel: target, scenario, root_id: rootId, text, post_id: created?.id ?? null };
+  return { ok: true, channel: target, scenario, root_id: rootId, text, post_id: created?.id ?? null, post_url: await permalink(ctx, created?.id, target) };
 }
 
 async function taskRoot(ctx, key, opts) {
@@ -167,7 +187,12 @@ async function taskRoot(ctx, key, opts) {
   const root = order.map((postId) => posts[postId])
     .find((p) => p && !p.root_id && p.user_id === me.id && mention.test(p.message ?? ''));
   if (!root) {
-    throw new CliError(`В ${scenario || target} нет твоего поста про ${key}: сначала fsh mm review ${key}.`, 1, 'not_found');
+    throw new CliError(
+      `В ${scenario || target} среди последних постов нет твоего поста про ${key}. Ответь по ссылке на тред: `
+        + `fsh mm reply <permalink> "<текст>" -y, или, если задачу ещё не отписывали, сначала fsh mm review ${key} -y.`,
+      1,
+      'not_found',
+    );
   }
   return { target, scenario, rootId: root.id, label: `${key} (${scenario || target})` };
 }
@@ -212,7 +237,20 @@ async function send(ctx, { id, scenario }, text, opts) {
   }
   const target = await channelId(ctx, id);
   const created = await ctx.mm().post(target, text);
-  return { ok: true, channel: target, scenario, text, post_id: created?.id ?? null };
+  return { ok: true, channel: target, scenario, text, post_id: created?.id ?? null, post_url: await permalink(ctx, created?.id, target) };
+}
+
+// Ссылка на пост: команда — та, где канал; у лички команды нет, подходит любая своя.
+async function permalink(ctx, postId, channel) {
+  if (!postId) return null;
+  try {
+    const mm = ctx.mm();
+    const [teams, ch] = await Promise.all([mm.teams(), mm.channel(channel)]);
+    const team = teams.find((t) => t.id === ch?.team_id) ?? teams[0];
+    return team ? `${ctx.cfg.mattermost.baseUrl.replace(/\/+$/, '')}/${team.name}/pl/${postId}` : null;
+  } catch {
+    return null; // пост уже ушёл: сбой ссылки не должен выглядеть провалом отправки
+  }
 }
 
 // Эмодзи из Unicode в имя Mattermost; имя (eyes, :eyes:) проходит как есть.
@@ -246,5 +284,5 @@ function render(r) {
     ]));
   }
   const thread = r.root_id ? `, тред ${r.root_id}` : '';
-  console.log(`${r.dry_run ? '📝 план' : '✅ отправлено'} → ${r.scenario || r.channel}${thread}\n${r.text}`);
+  console.log(`${r.dry_run ? '📝 план' : '✅ отправлено'} → ${r.post_url || `${r.scenario || r.channel}${thread}`}\n${r.text}`);
 }
