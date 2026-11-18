@@ -228,7 +228,7 @@ export const COMMANDS = [
   },
   {
     name: 'task',
-    usage: 'task start <KEY> | task push [KEY] [--target <ветка>] | task submit [KEY] [--status <имя>] | task judge [KEY]',
+    usage: 'task start <KEY> | task push [KEY] [--target <ветка>] | task submit [KEY] [--status <имя>] [--keep-draft] | task judge [KEY]',
     description: 'Взять задачу в работу (ветка feature/<KEY> от целевой), запушить её с открытием MR, отправить в ревью команде, показать приёмку судьи',
     example: 'fsh task start FD-7719',
     run: (ctx, args, opts) => cmdTask(ctx, args, opts),
