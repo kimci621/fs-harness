@@ -35,7 +35,8 @@ export function classifyDiscussions(discussions, { resolved = false, open = fals
   const isResolved = (d) => d.resolvable && d.resolved;
 
   // Треды без живых комментов (только системные события) — не комментарии, убираем везде.
-  const withComments = items.filter((d) => d.humanNotes.length > 0);
+  // n — номер треда по полному списку: под фильтром не съезжает, по нему отвечает fsh mr reply.
+  const withComments = items.filter((d) => d.humanNotes.length > 0).map((d, i) => ({ ...d, n: i + 1 }));
 
   let filtered = withComments;
   if (resolved) filtered = withComments.filter(isResolved);
@@ -67,6 +68,7 @@ export async function cmdMRComments(g, repo, args, { json, resolved = false, ope
     filter: resolved ? 'resolved' : open ? 'open' : 'all',
     summary: { threads_total: items.length, comments_total: total, threads_open: openCount, threads_resolved: resolvedCount },
     discussions: items.map((d) => ({
+      n: d.n,
       id: d.id,
       state: d.resolvable ? (d.resolved ? 'resolved' : 'open') : 'open',
       // false у обычных комментов: их нельзя закрыть, хотя в --open они попадают
@@ -89,9 +91,10 @@ export async function cmdMRComments(g, repo, args, { json, resolved = false, ope
     console.log('Комментариев нет.');
     return result;
   }
-  for (const [i, d] of items.entries()) {
+  console.log(`Ответить: fsh mr reply ${mr.iid} <#N|id> --file ответ.md -y · закрыть: fsh mr resolve ${mr.iid} <#N|id> -y`);
+  for (const d of items) {
     const state = d.resolvable ? (d.resolved ? '✅ resolved' : '🔓 open') : '💬';
-    console.log(`\n${state} тред #${i + 1} (${String(d.id).slice(0, 8)}) · комментов: ${d.humanNotes.length}`);
+    console.log(`\n${state} тред #${d.n} (${d.id}) · комментов: ${d.humanNotes.length}`);
     for (const n of d.notes) {
       const tag = n.system ? ' [система]' : '';
       console.log(`  @${n.author} · ${humanize(n.created_at)}${tag}`);
