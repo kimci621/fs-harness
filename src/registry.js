@@ -256,9 +256,9 @@ export const COMMANDS = [
   },
   {
     name: 'growthbook',
-    usage: 'growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|set <id> <значение>|delete <id>]',
-    description: 'Фича-флаги GrowthBook: список, один флаг, создание, включение/выключение в окружении, дефолтное значение, удаление',
-    example: 'fsh growthbook toggle new-onboarding on --env production',
+    usage: 'growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|set <id> <значение>|delete <id>|help]',
+    description: 'Фича-флаги GrowthBook: список, один флаг, создание, включение/выключение в окружении, дефолтное значение, удаление; help — примеры, ключ, хост и тело create',
+    example: 'fsh growthbook toggle new-onboarding on --env production\n  fsh growthbook create new-onboarding off -y\n  fsh growthbook help',
     run: (ctx, args, opts) => cmdGrowthBook(ctx, args, opts),
     mcp: {
       description: 'Фича-флаги GrowthBook. list/get — только чтение; create создаёт boolean-флаг, toggle включает или выключает флаг в окружении, set меняет дефолтное значение (из поля default) во всех окружениях, delete удаляет флаг необратимо (меняет продакшен-поведение приложения).',
