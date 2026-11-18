@@ -1,4 +1,4 @@
-import { CliError } from './errors.js';
+import { CliError, netError } from './errors.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -34,7 +34,8 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
         });
       } catch (err) {
         lastErr = err;
-        if (attempt === retries) throw new CliError(`Jira недоступна: ${err.message}`, 1, 'api_failed');
+        const net = netError('Jira', err);
+        if (!net.retry || attempt === retries) throw net;
         await sleep(backoff(attempt, sleepMs));
         continue;
       }
