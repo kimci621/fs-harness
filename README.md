@@ -108,7 +108,7 @@ fsh config show
 | `bot` | Telegram-бот (long-polling): `/mrs` `/watch` `/status` `/run`, кнопки Approve/Revise/Reject и «Обновить и разобрать» от watcher |
 | `tui` | Полноэкранный режим: вкладки MR / задачи / процессы / промпты / флаги / словарь, действия и пайплайны с клавиши, живой лог агента и судьи |
 | `config init\|show\|migrate` | Конфиг: создать, показать активный проект, перевести старый файл на v2 (с бэкапом `.v1.bak`) |
-| `help [--agent\|--all]` | Справка. `--agent` — короткая, на 40 строк с рабочими примерами; под Claude Code (`CLAUDECODE`) она и по умолчанию. `--all` — полная |
+| `help [--all]` | Справка. Под Claude Code (`CLAUDECODE`) — короткая, на 40 строк с рабочими примерами. `--all` — полная |
 
 Флаги: `-R/--repo`, `--host`, `-P/--project`, `--json` (read-команды), `--agent <профиль>` (`cc`, `ccq`, `cco`, `ccd`, `opencode`, `agy` — живут в конфиге, `agents.<имя>`), `--project-dir`, `-B/--build-job` (дефолт `build_image`), `-w/--watch`, `-y/--yes`, `--keep-worktree`, `--rebuild` (deploy), `--dry-run` (run/deploy/действия/commit/jira/mm — план без запусков), `--no-judge` / `--judge <профиль>` / `--judge-only <runId>` (действия), `--for <mr>` (prompts show), `--file <путь|->` и `--attach` (jira field), `--post` и `--channel` (task push, mm), `--daemon` (watch, doctor), `--sizes` и `--older-than` (worktrees), `--once` и `--concurrency` (worker).
 
@@ -441,7 +441,9 @@ export GL_HELPER_YES=1    # не спрашивать подтверждение
 ```
 
 Под Claude Code (он ставит `CLAUDECODE=1`) подтверждения не спрашиваются, кроме необратимых:
-`jira delete`, `growthbook delete`, `worktrees gc`, `queue clear` — им нужен `-y`. Если подтвердить
+`jira delete`, `growthbook delete` и `set`, `growthbook create`/`toggle` в production, `resolve-all`,
+`init` (пишет разрешение `Bash(fsh:*)`), `worktrees gc`, `queue clear` — им нужен `-y`, в том числе
+под `--json`. Отказ без терминала выходит с кодом 1. Если подтвердить
 некому, в stderr одна строка `Отменено. Повтори с -y: fsh … -y` с готовой командой.
 Нет связи с Jira или Mattermost (DNS, отказ соединения, `EPERM` от песочницы) — ошибка сразу,
 без повторов, с подсказкой про `NODE_USE_ENV_PROXY=1`, если в окружении задан прокси.

@@ -168,7 +168,7 @@ export async function cmdResolveAll(ctx, opts = {}, deps = {}) {
     finish(opts.json && !opts.asObject, result);
     return result;
   }
-  if (todo.length && !opts.yes && !opts.asObject && !confirm(`Запускаю resolve-all для ${todo.length} MR. Продолжить? [y/N] `)) {
+  if (todo.length && !opts.yes && !opts.asObject && !confirm(`Запускаю resolve-all для ${todo.length} MR. Продолжить? [y/N] `, { irreversible: true })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
 

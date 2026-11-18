@@ -63,7 +63,7 @@ async function create(gb, ctx, [id, state], opts) {
     environments: { [env]: { enabled: on, rules: [] } },
   };
   if (opts.dryRun) return { ok: true, dry_run: true, created: id, body };
-  if (!opts.yes && !opts.asObject && !confirm(`Создать флаг "${id}" (${env}=${on ? 'on' : 'off'})? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Создать флаг "${id}" (${env}=${on ? 'on' : 'off'})? [y/N] `, { irreversible: env === 'production' })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   return { ok: true, created: id, flag: brief(await gb.createFeature(body)) };
@@ -74,7 +74,7 @@ async function toggle(gb, ctx, [id, state], opts) {
   const env = opts.env || ctx.cfg.growthbook.env;
   const on = state === 'on';
   if (opts.dryRun) return { ok: true, dry_run: true, toggled: id, env, enabled: on };
-  if (!opts.yes && !opts.asObject && !confirm(`Флаг "${id}": ${env} → ${on ? 'on' : 'off'}? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Флаг "${id}": ${env} → ${on ? 'on' : 'off'}? [y/N] `, { irreversible: env === 'production' })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   const f = await gb.toggleFeature(id, { [env]: on }, `fsh: ${env} → ${on ? 'on' : 'off'}`);
@@ -92,7 +92,7 @@ async function set(gb, [id, value], opts) {
   const bad = checkValue(f.valueType, value);
   if (bad) throw new CliError(`Флаг "${id}" типа ${f.valueType}: ${bad}`, 1, 'usage');
   if (opts.dryRun) return { ok: true, dry_run: true, set: id, default: value };
-  if (!opts.yes && !opts.asObject && !confirm(`Флаг "${id}": default ${f.defaultValue} → ${value}? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Флаг "${id}": default ${f.defaultValue} → ${value}? [y/N] `, { irreversible: true })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   const after = await gb.updateFeature(id, { defaultValue: value });

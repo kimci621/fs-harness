@@ -208,7 +208,7 @@ async function submit(ctx, [maybeKey], opts) {
   // Черновик ставят и по внешней причине (ждём бэк, контент, флаг): снимаем только с готового MR.
   const keepWhy = wasDraft ? (opts.keepDraft ? 'остаётся черновиком (--keep-draft)' : notReady(await ctx.g.getMR(ctx.repo, mr.iid))) : null;
   const unDraft = wasDraft && !keepWhy;
-  const mrNote = !wasDraft ? 'уже не черновик' : unDraft ? 'черновик снят' : keepWhy;
+  const mrNote = !wasDraft ? 'уже не черновик' : unDraft ? 'черновик снят' : `${keepWhy}; снять потом: glab mr update ${mr.iid} --ready`;
   if (opts.dryRun) {
     return { ...info, dry_run: true, plan: [
       ...selfFill.map((f) => `Jira ${key}: «${f.name}» ← я`),
@@ -251,8 +251,9 @@ async function submit(ctx, [maybeKey], opts) {
 
 // Почему MR ещё не готов к снятию черновика; null — готов.
 function notReady(mr) {
+  // manual — всё прошло, ждут только ручные джобы (build/deploy в fitstars-nuxt).
   const status = mr?.head_pipeline?.status;
-  if (status !== 'success') return `черновик оставлен: пайплайн ${status ?? 'не запускался'}`;
+  if (!['success', 'manual'].includes(status)) return `черновик оставлен: пайплайн ${status ?? 'не запускался'}`;
   if (mr.has_conflicts) return 'черновик оставлен: конфликт с целевой веткой';
   if (mr.blocking_discussions_resolved === false) return 'черновик оставлен: есть нерешённые треды';
   return null;
