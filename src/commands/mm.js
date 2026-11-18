@@ -3,7 +3,7 @@ import { createMattermost, reviewMessage } from '../mattermost.js';
 import { writeSecret } from '../secrets.js';
 import { makeGit } from '../workspace.js';
 import { ISSUE_KEY, keyFromBranch } from '../jira.js';
-import { issueUrl } from './jira.js';
+import { issueUrl, readText } from './jira.js';
 import { finish } from '../output.js';
 import { table } from '../format.js';
 import { confirm, promptSecret } from '../ui.js';
@@ -17,6 +17,8 @@ const MM_USAGE = [
   'fsh mm reply <KEY|permalink> "<текст>" -y',
   'fsh mm thread <permalink|id поста>',
   'fsh mm react <permalink|id поста> <эмодзи>',
+  'fsh mm edit <permalink|id поста> (--file <путь> | "<текст>") -y',
+  'fsh mm delete <permalink|id поста> -y',
   'fsh mm channels [строка] | fsh mm whoami | fsh mm login [логин]',
 ].join('\n');
 
@@ -36,6 +38,8 @@ export async function cmdMM(ctx, args, opts = {}) {
             : sub === 'reply' ? await reply(ctx, rest, opts)
               : sub === 'thread' ? await thread(ctx, rest)
                 : sub === 'react' ? await react(ctx, rest, opts)
+                  : sub === 'edit' ? await edit(ctx, rest, opts)
+                    : sub === 'delete' ? await del(ctx, rest, opts)
                   : (() => { throw new CliError(`Использование: fsh mm <подкоманда>\n${MM_USAGE}`, 1, 'usage'); })();
 
   if (opts.asObject) return result;
@@ -267,7 +271,43 @@ async function react(ctx, [ref, emoji], opts) {
   return { ok: true, post_id: postId, emoji: name };
 }
 
+// Править и удалять даём только свои посты: Mattermost отказал бы 403, но наш текст про
+// протухшую сессию в этом случае врал бы.
+async function ownPost(ctx, ref, usage) {
+  const id = postIdFrom(ref, usage);
+  const mm = ctx.mm();
+  const [p, me] = await Promise.all([mm.getPost(id), mm.me()]);
+  if (!p) throw new CliError(`Поста ${id} нет или он тебе не виден.`, 1, 'not_found');
+  if (p.user_id !== me.id) throw new CliError(`Пост ${id} не твой: править и удалять можно только свои.`, 1, 'usage');
+  return p;
+}
+
+async function edit(ctx, [ref, ...words], opts) {
+  const usage = 'fsh mm edit <permalink|id поста> (--file <путь> | "<текст>")';
+  const text = (opts.file ? readText(opts.file) : words.join(' ')).trim();
+  if (!ref || !text) throw new CliError(`Использование: ${usage}.`, 1, 'usage');
+  const p = await ownPost(ctx, ref, usage);
+  if (opts.dryRun) return { ok: true, dry_run: true, post_id: p.id, edited: true, text };
+  if (!opts.yes && !opts.asObject && !confirm(`Заменить текст поста ${p.id}?\n${text}\n[y/N] `)) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  await ctx.mm().patchPost(p.id, text);
+  return { ok: true, post_id: p.id, edited: true, text, post_url: await permalink(ctx, p.id, p.channel_id) };
+}
+
+async function del(ctx, [ref], opts) {
+  const p = await ownPost(ctx, ref, 'fsh mm delete <permalink|id поста>');
+  if (opts.dryRun) return { ok: true, dry_run: true, deleted: p.id, text: p.message ?? '' };
+  if (!opts.yes && !opts.asObject && !confirm(`Удалить пост ${p.id} без возврата?\n${p.message ?? ''}\n[y/N] `, { irreversible: true })) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  await ctx.mm().deletePost(p.id);
+  return { ok: true, deleted: p.id };
+}
+
 function render(r) {
+  if (r.deleted) return void console.log(`${r.dry_run ? '📝 план: удалить' : '✅ удалён'} пост ${r.deleted}${r.text ? `\n${r.text}` : ''}`);
+  if (r.edited) return void console.log(`${r.dry_run ? '📝 план: заменить' : '✅ изменён'} → ${r.post_url || r.post_id}\n${r.text}`);
   if (r.emoji) return void console.log(`${r.dry_run ? '📝 план' : '✅ реакция'} :${r.emoji}: → пост ${r.post_id}`);
   if (r.messages) {
     return void console.log(r.messages.map((m) => {
