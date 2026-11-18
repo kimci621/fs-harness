@@ -18,3 +18,9 @@ test('config get: секреты и неизвестные ключи не от�
   assert.throws(() => cmdConfig(['get', 'telegram'], { asObject: true }, cfg), (e) => e.code === 'usage' && /repo/.test(e.message));
   assert.throws(() => cmdConfig(['get'], { asObject: true }, cfg), (e) => e.code === 'usage');
 });
+
+test('config get: ключи прототипа (constructor, toString) не отдают конфиг', () => {
+  for (const key of ['constructor', 'toString', 'valueOf', '__proto__']) {
+    assert.throws(() => cmdConfig(['get', key], { asObject: true }, cfg), (e) => e.code === 'usage', key);
+  }
+});

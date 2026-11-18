@@ -42,7 +42,7 @@ function ctxWith({ mrs = [], created = [], posts = [] } = {}) {
     },
     repo: 'g/p',
     jira: () => ({ issue: async () => ISSUE }),
-    mm: () => ({ post: async (channel, message) => { posts.push({ channel, message }); return { id: 'p1' }; } }),
+    mm: () => ({ me: async () => ({ id: 'me' }), channelPosts: async () => ({ order: [], posts: {} }), post: async (channel, message) => { posts.push({ channel, message }); return { id: 'p1' }; } }),
     g: {
       listOpenMRs: async () => mrs,
       getMR: async () => READY_MR,

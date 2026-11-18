@@ -1,6 +1,6 @@
 // fsh wait — список «жду ответа» на один день: тред Mattermost или комментарии задачи Jira.
 // Проверяет его демон watch: ответ пришёл — сообщение в Telegram и пункт снят; день сменился — снят молча.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -17,11 +17,11 @@ const JIRA_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
 export const today = (ms = Date.now()) => new Date(ms).toLocaleDateString('sv');
 
 export function readWaits(file = waitsFile()) {
-  if (!existsSync(file)) return [];
   let text;
   try {
     text = readFileSync(file, 'utf8');
   } catch (err) {
+    if (err.code === 'ENOENT') return [];
     throw accessError(err, file);
   }
   try {
