@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { createGlab } from './glab.js';
 import { loadConfig } from './config.js';
 import { CliError } from './errors.js';
@@ -93,7 +94,19 @@ ${examples}
 `;
 }
 
+// fetch в node прокси из env сам не берёт, а песочница Claude Code выпускает в сеть только через него.
+// NODE_USE_ENV_PROXY=1 ставим и в env: так дочерние node-процессы получат тот же прокси.
+export function useEnvProxy(env = process.env) {
+  if (!(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy)) return false;
+  // На старом node функции нет: тогда netError подскажет NODE_USE_ENV_PROXY=1.
+  if (typeof http.setGlobalProxyFromEnv !== 'function') return false;
+  http.setGlobalProxyFromEnv(env);
+  env.NODE_USE_ENV_PROXY = '1';
+  return true;
+}
+
 export async function main(argv) {
+  useEnvProxy();
   let opts;
   let rest;
   try {
