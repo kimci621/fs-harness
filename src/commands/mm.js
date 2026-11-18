@@ -181,7 +181,9 @@ async function reply(ctx, [ref, ...words], opts) {
   return { ok: true, channel: target, scenario, root_id: rootId, text, post_id: created?.id ?? null, post_url: await permalink(ctx, created?.id, target) };
 }
 
-async function taskRoot(ctx, key, opts) {
+// ponytail: свой корневой пост с ключом ищем только в последних 200 постах канала, без порога по дате;
+// ушедший глубже не найдётся — тогда листать channelPosts по page или /posts/search.
+export async function findTaskPost(ctx, key, opts = {}) {
   const { id, scenario } = resolveChannel(ctx.cfg, opts.channel || 'review');
   const mm = ctx.mm();
   const target = await channelId(ctx, id);
@@ -189,7 +191,12 @@ async function taskRoot(ctx, key, opts) {
   const { order = [], posts = {} } = await mm.channelPosts(target);
   const mention = new RegExp(`\\b${key}\\b`);
   const root = order.map((postId) => posts[postId])
-    .find((p) => p && !p.root_id && p.user_id === me.id && mention.test(p.message ?? ''));
+    .find((p) => p && !p.root_id && p.user_id === me.id && mention.test(p.message ?? '')) ?? null;
+  return { target, scenario, root };
+}
+
+async function taskRoot(ctx, key, opts) {
+  const { target, scenario, root } = await findTaskPost(ctx, key, opts);
   if (!root) {
     throw new CliError(
       `В ${scenario || target} среди последних постов нет твоего поста про ${key}. Ответь по ссылке на тред: `
@@ -253,7 +260,7 @@ async function send(ctx, { id, scenario }, text, opts) {
 }
 
 // Ссылка на пост: команда — та, где канал; у лички команды нет, подходит любая своя.
-async function permalink(ctx, postId, channel) {
+export async function permalink(ctx, postId, channel) {
   if (!postId) return null;
   try {
     const mm = ctx.mm();
