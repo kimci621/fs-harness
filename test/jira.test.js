@@ -681,6 +681,15 @@ test('jira field: человек ищется и по accountId, «Исполн�
   );
 });
 
+test('jira field: accountId вне первых 50 назначаемых уходит в Jira как есть', async () => {
+  const j = {
+    ...fakeFields({ assignee: { name: 'Assignee', schema: { type: 'user', system: 'assignee' } } }),
+    assignableUsers: async () => [{ accountId: '557058:other', displayName: 'Кто-то' }],
+  };
+  await cmdJira(ctxWith(j), ['field', 'FD-1', 'Assignee', '712020:fee71ae5-539f-4d46-8831-f6ead07c3a95'], { asObject: true, yes: true });
+  assert.deepEqual(j.stored.assignee, { accountId: '712020:fee71ae5-539f-4d46-8831-f6ead07c3a95' });
+});
+
 // Поддельная Jira с картой имён: чтение поля идёт через issue(expand=names).
 function fakeNamed(fields) {
   const j = fakeFields();

@@ -220,6 +220,13 @@ test('task submit: черновик снимается только с гото�
   }
 });
 
+test('task submit: пайплайн manual (зелёный, ждут ручные deploy) — готов, черновик снимается', async () => {
+  const { ctx, updates } = submitCtx({ ...READY_MR, head_pipeline: { status: 'manual' } });
+  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+  assert.equal(res.draft_removed, true);
+  assert.deepEqual(updates, [{ title: 'FD-1: Починить' }]);
+});
+
 test('task submit --keep-draft: готовый MR остаётся черновиком', async () => {
   const { ctx, updates } = submitCtx(READY_MR);
   const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true, keepDraft: true });

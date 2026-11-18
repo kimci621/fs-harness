@@ -87,7 +87,17 @@ const SUB_USAGE = {
   link: 'fsh jira link <KEY> <тип или фраза> <KEY2> -y',
   delete: 'fsh jira delete <KEY> -y',
   search: 'fsh jira search "<JQL>"',
+  one: 'fsh jira show <KEY>',
 };
+
+const ACCOUNT_ID = /^(\d+:[0-9a-f-]{8,}|[0-9a-f]{24})$/;
+
+// Пустой JQL собрал бы дефолтный «мои задачи» — молча не тот ответ.
+function searchJql(words) {
+  const jql = words.join(' ').trim();
+  if (!jql) throw new CliError(`Использование: ${SUB_USAGE.search}.`, 1, 'usage');
+  return jql;
+}
 
 // Слова, которыми агенты зовут подкоманды по привычке из других CLI.
 const SYNONYMS = { show: 'one', view: 'one', transition: 'move' };
@@ -108,7 +118,7 @@ export async function cmdJira(ctx, args, opts = {}) {
     query === 'one'
       ? await one(j, rest[0], ctx)
       : query === 'search'
-        ? await mine(j, { jql: rest.join(' ').trim() }, ctx)
+        ? await mine(j, { jql: searchJql(rest) }, ctx)
       : query === 'parent'
         ? await parent(j, rest, ctx, opts)
       : query === 'move'
@@ -316,6 +326,8 @@ function shapeValue(meta, kind, text, customOpts = null) {
     const q = raw.trim().toLowerCase();
     const opt = opts.find((v) => [v.value, v.name, v.displayName, v.emailAddress, v.accountId].some((n) => n && String(n).toLowerCase() === q))
       ?? (customOpts ? opts.find((v) => [v.displayName, v.name, v.emailAddress].some((n) => n && String(n).toLowerCase().includes(q))) : null);
+    // Список людей Jira отдаёт первыми 50: accountId за его пределами Jira примет и так.
+    if (!opt && customOpts && ACCOUNT_ID.test(raw.trim())) return { accountId: raw.trim() };
     if (!opt) {
       const list = opts.map((v) => fieldText(v)).filter(Boolean).join(', ') || 'варианты отдаёт только Jira';
       const how = customOpts ? ' Пиши имя как в Jira, me или accountId.' : '';

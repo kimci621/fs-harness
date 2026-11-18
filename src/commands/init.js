@@ -135,7 +135,7 @@ export function cmdInit(commands, ctx, opts = {}) {
     if (!opts.asObject && !opts.json) console.log(`Всё на месте: ${file}`);
     return opts.json ? finish(true, result) : result;
   }
-  if (!opts.yes && !opts.asObject && !confirm(`Записать скилл в ${file}${perm === 'present' ? '' : ` и разрешение ${PERMISSION} в ${settings}`}? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Записать скилл в ${file}${perm === 'present' ? '' : ` и разрешение ${PERMISSION} в ${settings}`}? [y/N] `, { irreversible: true })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
 

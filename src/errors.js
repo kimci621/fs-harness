@@ -14,7 +14,7 @@ export function toCliError(err) {
 }
 
 // Сетевые коды, при которых повтор не поможет: DNS, отказ в соединении, запрет песочницы.
-const NO_RETRY = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EPERM', 'EACCES', 'EHOSTUNREACH', 'ENETUNREACH']);
+const NO_RETRY = new Set(['ENOTFOUND', 'ECONNREFUSED', 'EPERM', 'EACCES', 'EHOSTUNREACH', 'ENETUNREACH']);
 
 // fetch упал до ответа сервиса: это сеть, DNS или прокси, а не ошибка самого сервиса.
 // retry — стоит ли повторять (обрыв да, нет DNS — нет).

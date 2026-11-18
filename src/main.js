@@ -65,7 +65,7 @@ const FLAGS_USAGE = `Флаги:
 Режим агента (env):
   GL_HELPER_JSON=1        JSON-вывод и структурированные ошибки для агентов
   GL_HELPER_YES=1         Не спрашивать подтверждение (как -y)
-  CLAUDECODE=1            Ставит Claude Code: подтверждения как с -y, кроме необратимых (jira delete, growthbook delete, worktrees gc, queue clear)
+  CLAUDECODE=1            Ставит Claude Code: подтверждения как с -y, кроме необратимых (jira delete, growthbook delete и set, growthbook create/toggle в production, resolve-all, init, worktrees gc, queue clear)
   FS_HARNESS_PROJECT      Активный проект (как -P)`;
 
 // USAGE генерируется из реестра — новую команду сюда добавлять не нужно.
@@ -147,10 +147,11 @@ export async function main(argv) {
     return typeof result === 'number' ? result : 0;
   } catch (err) {
     const cliErr = err instanceof CliError ? err : new CliError(String(err?.message || err));
+    const tty = process.stdin.isTTY && !process.env.CLAUDECODE;
     if (opts.json) {
       console.log(formatErrorJSON(cliErr));
     } else {
-      console.error(`\n❌ ${cancelLine(cliErr, argv, { tty: process.stdin.isTTY && !process.env.CLAUDECODE })}`);
+      console.error(`\n❌ ${cancelLine(cliErr, argv, { tty })}`);
       // Упавший ран не бросаем на полпути: печатаем, что с ним делать дальше.
       if (cliErr.run) {
         console.error(`   ран: ${cliErr.run}${cliErr.runDir ? ` · ${cliErr.runDir}` : ''}`);
@@ -162,8 +163,13 @@ export async function main(argv) {
         console.error('   разобраться: fsh ask "почему упало"');
       }
     }
-    return cliErr.exitCode ?? 1;
+    return exitCodeFor(cliErr, { tty });
   }
+}
+
+// Без терминала отмену никто не выбирал сам: для вызывающего это отказ, а не успех.
+export function exitCodeFor(err, { tty }) {
+  return err.code === 'canceled' && !tty ? 1 : err.exitCode ?? 1;
 }
 
 const shellArg = (a) => (/^[\p{L}\p{N}_@%+=:,./-]+$/u.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`);

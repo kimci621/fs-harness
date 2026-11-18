@@ -6,7 +6,7 @@ import { matchFlow } from '../src/commands/flow.js';
 
 const HIDDEN = ['bot', 'qa-bot', 'up', 'watch', 'worker', 'queue', 'tui', 'mcp', 'auto', 'prompts', 'worktrees', 'retry', 'resume', 'revise'];
 
-test('help --agent: короткая, без выравнивания, только живые команды', () => {
+test('help под Claude Code: короткая, без выравнивания, только живые команды', () => {
   const lines = AGENT_HELP.trim().split('\n');
   assert.ok(lines.length >= 25 && lines.length <= 40, `строк ${lines.length}`);
   assert.equal(/ {3,}/.test(AGENT_HELP), false, 'выравнивающие пробелы');
