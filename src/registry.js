@@ -20,7 +20,7 @@ import { cmdJira } from './commands/jira.js';
 import { cmdTask } from './commands/task.js';
 import { cmdGrowthBook } from './commands/growthbook.js';
 import { cmdFlow } from './commands/flow.js';
-import { cmdInit } from './commands/init.js';
+import { cmdInit, cmdInitEverywhere } from './commands/init.js';
 import { cmdWatch, cmdWatchDaemon, cmdWatchInstall } from './commands/watch.js';
 import { cmdWait, renderWait } from './waits.js';
 import { cmdQueue } from './commands/queue.js';
@@ -332,10 +332,14 @@ export const COMMANDS = [
   },
   {
     name: 'init',
-    usage: 'init [--check] [--project-dir <dir>]',
-    description: 'Поставить в проект скилл fsh (.claude/skills/fsh) и разрешение на запуск; --check сверяет с реестром',
+    usage: 'init [everywhere] [--check] [--project-dir <dir>]',
+    description: 'Поставить в проект скилл fsh (.claude/skills/fsh) и разрешение на запуск; everywhere — обновить во всех каталогах из init-dirs.json рядом с конфигом fsh; --check сверяет с реестром',
     example: 'fsh init --project-dir ~/Projects/fitstars-frontend',
-    run: (ctx, args, opts) => cmdInit(COMMANDS, ctx, opts),
+    run: (ctx, args, opts) => {
+      if (args[0] === 'everywhere' && args.length === 1) return cmdInitEverywhere(COMMANDS, opts);
+      if (args.length) throw new CliError(`Неизвестные аргументы init: ${args.join(' ')}. Есть только: init everywhere.`, 1, 'usage');
+      return cmdInit(COMMANDS, ctx, opts);
+    },
   },
   {
     name: 'doctor',
