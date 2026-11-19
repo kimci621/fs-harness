@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { cmdInit, buildSkill, CLAUDE_BLOCK } from '../src/commands/init.js';
+import { cmdInit, cmdInitEverywhere, readInitDirs, buildSkill, CLAUDE_BLOCK } from '../src/commands/init.js';
 import { COMMANDS } from '../src/registry.js';
 
 const ctx = { cfg: {} };
@@ -86,4 +86,54 @@ test('скилл: пишущие примеры в таблице — с -y, н�
   for (const piece of ['fsh jira field FD-1234 "Technical details for QA"`', '--append', 'fsh jira parent', '--parent', '--sprint', '--assignee', 'comment FD-1234 --file']) {
     assert.ok(table.includes(piece), piece);
   }
+});
+
+test('init everywhere: init запоминает каталог, everywhere обновляет все и сообщает о пропавшем', () => {
+  const root = fresh();
+  const dirsFile = path.join(root, 'cfg', 'init-dirs.json');
+  const a = path.join(root, 'a');
+  const b = path.join(root, 'b');
+  mkdirSync(a);
+  mkdirSync(b);
+  cmdInit(COMMANDS, ctx, { projectDir: a, asObject: true, yes: true, dirsFile });
+  cmdInit(COMMANDS, ctx, { projectDir: b, asObject: true, yes: true, dirsFile });
+  cmdInit(COMMANDS, ctx, { projectDir: a, asObject: true, yes: true, dirsFile });
+  assert.deepEqual(readInitDirs(dirsFile), [a, b]);
+
+  writeFileSync(path.join(a, '.claude/skills/fsh/SKILL.md'), 'старьё');
+  const check = cmdInitEverywhere(COMMANDS, { check: true, asObject: true, dirsFile });
+  assert.deepEqual(check.results.map((r) => r.state), ['stale', 'current']);
+  assert.equal(readFileSync(path.join(a, '.claude/skills/fsh/SKILL.md'), 'utf8'), 'старьё');
+
+  const res = cmdInitEverywhere(COMMANDS, { asObject: true, dirsFile });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.results.map((r) => r.changed), [true, false]);
+  assert.equal(readFileSync(path.join(a, '.claude/skills/fsh/SKILL.md'), 'utf8'), buildSkill(COMMANDS, { projectDir: a }));
+
+  rmSync(b, { recursive: true });
+  const gone = cmdInitEverywhere(COMMANDS, { asObject: true, dirsFile });
+  assert.deepEqual([gone.ok, gone.results[0].ok, gone.results[1].ok], [false, true, false]);
+  assert.match(gone.results[1].error, /нет/);
+  assert.deepEqual(readInitDirs(dirsFile), [a, b]);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('init everywhere: пустой или кривой список — ошибка config_invalid', () => {
+  const root = fresh();
+  const dirsFile = path.join(root, 'init-dirs.json');
+  assert.throws(() => cmdInitEverywhere(COMMANDS, { asObject: true, dirsFile }), (e) => e.code === 'config_invalid');
+  writeFileSync(dirsFile, '{"dirs":"не массив"}');
+  assert.throws(() => cmdInitEverywhere(COMMANDS, { asObject: true, dirsFile }), (e) => e.code === 'config_invalid');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('init: битый список каталогов останавливает init до записи скилла', () => {
+  const root = fresh();
+  const dir = path.join(root, 'p');
+  mkdirSync(dir);
+  const dirsFile = path.join(root, 'init-dirs.json');
+  writeFileSync(dirsFile, '{');
+  assert.throws(() => cmdInit(COMMANDS, ctx, { projectDir: dir, asObject: true, yes: true, dirsFile }), (e) => e.code === 'config_invalid');
+  assert.ok(!existsSync(path.join(dir, '.claude')));
+  rmSync(root, { recursive: true, force: true });
 });

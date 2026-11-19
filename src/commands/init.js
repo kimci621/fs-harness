@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { listFlows } from './flow.js';
-import { expandHome } from '../config.js';
+import { configPath, expandHome } from '../config.js';
 import { finish } from '../output.js';
 import { confirm } from '../ui.js';
 import { CliError } from '../errors.js';
@@ -130,7 +130,10 @@ export function cmdInit(commands, ctx, opts = {}) {
     for (const line of result.plan) console.log(`  ${line}`);
     return result;
   }
+  // Битый список каталогов ловим до записи скилла, а не после.
+  readInitDirs(opts.dirsFile);
   if (state === 'current' && perm === 'present') {
+    rememberDir(dir, opts.dirsFile);
     const result = { ok: true, dir, skill: file, state, permission: perm, changed: false };
     if (!opts.asObject && !opts.json) console.log(`Всё на месте: ${file}`);
     return opts.json ? finish(true, result) : result;
@@ -142,6 +145,7 @@ export function cmdInit(commands, ctx, opts = {}) {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, want);
   if (perm !== 'present') addPermission(settings);
+  rememberDir(dir, opts.dirsFile);
 
   const result = { ok: true, dir, skill: file, state, permission: 'present', changed: true, claude_block: CLAUDE_BLOCK };
   if (opts.asObject) return result;
@@ -182,3 +186,53 @@ const plan = (state, perm, file, settings) => [
   perm === 'present' ? `разрешение ${PERMISSION} уже есть` : `добавить ${PERMISSION} в ${settings}`,
   'напечатать блок для CLAUDE.md проекта',
 ];
+
+// Список каталогов, где стоит скилл, лежит рядом с конфигом fsh: его пополняет каждый fsh init,
+// а fsh init everywhere обходит. Править руками можно — это обычный JSON.
+export const initDirsFile = () => path.join(path.dirname(configPath()), 'init-dirs.json');
+
+export function readInitDirs(file = initDirsFile()) {
+  const json = readJson(file);
+  if (json === null) return [];
+  if (!Array.isArray(json.dirs) || !json.dirs.every((d) => typeof d === 'string')) {
+    throw new CliError(`${file}: ожидается {"dirs": ["<каталог>", ...]}.`, 1, 'config_invalid');
+  }
+  return json.dirs;
+}
+
+function rememberDir(dir, file = initDirsFile()) {
+  const abs = path.resolve(dir);
+  const dirs = readInitDirs(file);
+  if (dirs.some((d) => path.resolve(expandHome(d)) === abs)) return;
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ dirs: [...dirs, abs] }, null, 2)}\n`);
+}
+
+// fsh init everywhere — тот же init по каждому каталогу из списка. Пропавший каталог —
+// ошибка в отчёте, а не молчаливое удаление из списка: человек сам решит, убрать ли его.
+export function cmdInitEverywhere(commands, opts = {}) {
+  const file = opts.dirsFile ?? initDirsFile();
+  const dirs = readInitDirs(file);
+  if (!dirs.length) throw new CliError(`Список каталогов пуст (${file}). Он пополняется командой fsh init --project-dir <каталог>.`, 1, 'config_invalid');
+  const writes = !opts.check && !opts.dryRun;
+  if (writes && !opts.yes && !opts.asObject && !confirm(`Обновить скилл fsh в ${dirs.length} каталогах из ${file}? [y/N] `, { irreversible: true })) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  const results = dirs.map((d) => {
+    try {
+      return cmdInit(commands, { cfg: {} }, { projectDir: d, check: opts.check, dryRun: opts.dryRun, yes: true, asObject: true, dirsFile: file });
+    } catch (err) {
+      if (!(err instanceof CliError)) throw err;
+      return { ok: false, dir: expandHome(d), error: err.message };
+    }
+  });
+  const result = { ok: results.every((r) => r.ok), file, results };
+  if (opts.asObject) return result;
+  if (opts.json) finish(true, result);
+  else for (const r of results) console.log(`${r.ok ? '✓' : '✗'} ${r.dir}: ${r.error ?? describe(r)}`);
+  return result.ok ? 0 : 1;
+}
+
+const describe = (r) => r.dry_run ? r.plan.join('; ')
+  : r.changed === undefined ? `скилл ${r.state}`
+    : r.changed ? `обновлён (был ${r.state})` : 'актуален';
