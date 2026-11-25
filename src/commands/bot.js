@@ -10,7 +10,7 @@ import { runActionCLI } from '../engine.js';
 import { readRun, patchRunMeta, listRuns, sweepExpiredApprovals, RUNS_DIR } from '../agent/journal.js';
 import { spawnAgent } from '../agent/spawn.js';
 import { resolveAgent } from '../agents.js';
-import { parseClaudeLine, parseAgyLine } from '../agent/stream.js';
+import { parseClaudeLine, parseAgyLine, parseOpencodeLine } from '../agent/stream.js';
 import { listJobs } from '../queue.js';
 import { removeWorktree, makeGit } from '../workspace.js';
 import {
@@ -576,7 +576,7 @@ async function runCommand(parsed, d) {
     }
 
     if (name === 'agent') {
-      const knownAgents = ['cc', 'co', 'cco', 'agy', 'gemini', 'opus', 'claude'];
+      const knownAgents = ['cc', 'co', 'cco', 'opencode', 'agy', 'gemini', 'opus', 'claude'];
       let agentName = null;
       let promptParts = args;
 
@@ -595,12 +595,12 @@ async function runCommand(parsed, d) {
           'Примеры:\n' +
           '• /agent сделай рефакторинг Header.vue\n' +
           '• /agent cc посмотри открытые MR через fsh и создай ветку\n' +
-          '• /agent agy запусти тесты и закоммить через fsh'
+          '• /agent opencode запусти тесты и закоммить через fsh'
         );
         return;
       }
 
-      const activeAgent = agentName || c.agent || 'agy';
+      const activeAgent = agentName || c.agent || 'opencode';
       const projectDir = expandHome(c.projectDir || process.cwd());
       const promptPreview = prompt.length > 200 ? `${prompt.slice(0, 200)}…` : prompt;
 
@@ -652,9 +652,11 @@ async function runAgentViaBot({ agentName, prompt, projectDir, d, parsed }) {
   fire(async () => {
     try {
       const isAgy = agent.family === 'agy';
-      const streamJson = isAgy || (agent.family === 'claude' && !agent.args.includes('--output-format'));
+      const isOpencode = agent.family === 'opencode';
+      const streamJson = isAgy || isOpencode || (agent.family === 'claude' && !agent.args.includes('--output-format'));
       const extraArgs =
         isAgy ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '-p=']
+        : isOpencode ? ['--format', 'json']
         : streamJson ? ['--output-format', 'stream-json', '--verbose', '-p']
         : ['-p'];
 
@@ -692,11 +694,16 @@ async function runAgentViaBot({ agentName, prompt, projectDir, d, parsed }) {
 
       const out = [];
       let resultText = null;
+      let agentError = null;
 
       proc.events?.on?.((ev) => {
         if (ev.t !== 'log') return;
         if (ev.stream === 'stdout' && streamJson) {
-          const parsedLine = isAgy ? parseAgyLine(ev.text) : parseClaudeLine(ev.text);
+          const parsedLine = (isAgy ? parseAgyLine : isOpencode ? parseOpencodeLine : parseClaudeLine)(ev.text);
+          if (parsedLine.error) {
+            agentError = parsedLine.error;
+            out.push(parsedLine.error);
+          }
           if (parsedLine.result !== null) {
             resultText = parsedLine.result;
             return;
@@ -716,8 +723,9 @@ async function runAgentViaBot({ agentName, prompt, projectDir, d, parsed }) {
         if (activeAgents) activeAgents.delete(proc);
       }
 
-      if (!done?.ok) {
-        const how = done?.signal ? `прерван (${done.signal})` : `код ${done?.code ?? '?'}`;
+      // Ошибка модели в потоке — провал при любом коде выхода.
+      if (!done?.ok || agentError) {
+        const how = done?.signal ? `прерван (${done.signal})` : agentError ? 'ошибка модели' : `код ${done?.code ?? '?'}`;
         const tail = out.slice(-10).join('\n');
         await sayTo(chatId, `❌ <b>Агент ${escapeHtml(agent.name)}:</b> ${how}${tail ? `\n\n<pre>${escapeHtml(tail)}</pre>` : ''}`);
         return;

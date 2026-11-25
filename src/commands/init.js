@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { listFlows } from './flow.js';
-import { expandHome } from '../config.js';
+import { configPath, expandHome } from '../config.js';
 import { finish } from '../output.js';
 import { confirm } from '../ui.js';
 import { CliError } from '../errors.js';
@@ -46,7 +46,11 @@ description: Use when в работе всплыл ключ задачи Jira (F
 | --- | --- |
 | «возьми FD-1234 в работу» | \`fsh flow show take-task\`, дальше по протоколу |
 | «что в задаче», «мои задачи», «задачи спринта» | \`fsh jira FD-1234\`, \`fsh jira mine --sprint current\` |
-| «переведи в тестирование», «в ревью» | \`fsh jira move FD-1234 тестирование\` |
+| «переведи в тестирование», «в ревью» | \`fsh jira move FD-1234 тестирование -y\` |
+| «что в поле», «заполни поле», «допиши в поле» | \`fsh jira field FD-1234 "Technical details for QA"\` (чтение), \`fsh jira field FD-1234 "<поле>" --file qa.md -y\`, дописать — \`fsh jira field FD-1234 "<поле>" "строка" --append -y\` |
+| «добавь комментарий» | \`fsh jira comment FD-1234 --file comment.md -y\` |
+| «привяжи к эпику» | \`fsh jira parent FD-1234 FD-7147 -y\` |
+| «заведи задачу» | \`fsh jira create FD Task "<заголовок>" --component Frontend --file desc.md --parent FD-7147 --sprint 4176 --assignee me -y\` |
 | «заполни Technical details for QA», «положи в Контент» | \`fsh flow show fill-jira\` |
 | «запушь задачу», «открой MR» | \`fsh flow show push-task\` |
 | «мои MR», «что с MR», «где конфликты» | \`fsh mrs --author me\`, \`fsh mr <ветка>\` |
@@ -56,7 +60,7 @@ description: Use when в работе всплыл ключ задачи Jira (F
 | «сделай ревью MR <ссылка на пост MM или MR>» | \`fsh flow show review-mr\`: замечания — треды в GitLab и 👀 на пост, без замечаний — approve и ✅ |
 | «что с пайплайном», «задеплой ветку» | \`fsh jobs <mr>\`, \`fsh deploy <ветка>\` |
 | «почини упавший пайплайн», «CI красный» | \`fsh ci-fix <mr>\` |
-| «включи флаг», «какие есть флаги» | \`fsh growthbook list\`, \`fsh growthbook toggle <id> on\` |
+| «включи флаг», «какие есть флаги» | \`fsh growthbook list\`, \`fsh growthbook toggle <id> on -y\` |
 
 Ключ задачи (FD-1234) или номер MR (!2547) в реплике человека — почти всегда сигнал, что работа
 начинается отсюда.
@@ -126,18 +130,22 @@ export function cmdInit(commands, ctx, opts = {}) {
     for (const line of result.plan) console.log(`  ${line}`);
     return result;
   }
+  // Битый список каталогов ловим до записи скилла, а не после.
+  readInitDirs(opts.dirsFile);
   if (state === 'current' && perm === 'present') {
+    rememberDir(dir, opts.dirsFile);
     const result = { ok: true, dir, skill: file, state, permission: perm, changed: false };
     if (!opts.asObject && !opts.json) console.log(`Всё на месте: ${file}`);
     return opts.json ? finish(true, result) : result;
   }
-  if (!opts.yes && !opts.asObject && !confirm(`Записать скилл в ${file}${perm === 'present' ? '' : ` и разрешение ${PERMISSION} в ${settings}`}? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Записать скилл в ${file}${perm === 'present' ? '' : ` и разрешение ${PERMISSION} в ${settings}`}? [y/N] `, { irreversible: true })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
 
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, want);
   if (perm !== 'present') addPermission(settings);
+  rememberDir(dir, opts.dirsFile);
 
   const result = { ok: true, dir, skill: file, state, permission: 'present', changed: true, claude_block: CLAUDE_BLOCK };
   if (opts.asObject) return result;
@@ -178,3 +186,53 @@ const plan = (state, perm, file, settings) => [
   perm === 'present' ? `разрешение ${PERMISSION} уже есть` : `добавить ${PERMISSION} в ${settings}`,
   'напечатать блок для CLAUDE.md проекта',
 ];
+
+// Список каталогов, где стоит скилл, лежит рядом с конфигом fsh: его пополняет каждый fsh init,
+// а fsh init everywhere обходит. Править руками можно — это обычный JSON.
+export const initDirsFile = () => path.join(path.dirname(configPath()), 'init-dirs.json');
+
+export function readInitDirs(file = initDirsFile()) {
+  const json = readJson(file);
+  if (json === null) return [];
+  if (!Array.isArray(json.dirs) || !json.dirs.every((d) => typeof d === 'string')) {
+    throw new CliError(`${file}: ожидается {"dirs": ["<каталог>", ...]}.`, 1, 'config_invalid');
+  }
+  return json.dirs;
+}
+
+function rememberDir(dir, file = initDirsFile()) {
+  const abs = path.resolve(dir);
+  const dirs = readInitDirs(file);
+  if (dirs.some((d) => path.resolve(expandHome(d)) === abs)) return;
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ dirs: [...dirs, abs] }, null, 2)}\n`);
+}
+
+// fsh init everywhere — тот же init по каждому каталогу из списка. Пропавший каталог —
+// ошибка в отчёте, а не молчаливое удаление из списка: человек сам решит, убрать ли его.
+export function cmdInitEverywhere(commands, opts = {}) {
+  const file = opts.dirsFile ?? initDirsFile();
+  const dirs = readInitDirs(file);
+  if (!dirs.length) throw new CliError(`Список каталогов пуст (${file}). Он пополняется командой fsh init --project-dir <каталог>.`, 1, 'config_invalid');
+  const writes = !opts.check && !opts.dryRun;
+  if (writes && !opts.yes && !opts.asObject && !confirm(`Обновить скилл fsh в ${dirs.length} каталогах из ${file}? [y/N] `, { irreversible: true })) {
+    throw new CliError('Отменено.', 0, 'canceled');
+  }
+  const results = dirs.map((d) => {
+    try {
+      return cmdInit(commands, { cfg: {} }, { projectDir: d, check: opts.check, dryRun: opts.dryRun, yes: true, asObject: true, dirsFile: file });
+    } catch (err) {
+      if (!(err instanceof CliError)) throw err;
+      return { ok: false, dir: expandHome(d), error: err.message };
+    }
+  });
+  const result = { ok: results.every((r) => r.ok), file, results };
+  if (opts.asObject) return result;
+  if (opts.json) finish(true, result);
+  else for (const r of results) console.log(`${r.ok ? '✓' : '✗'} ${r.dir}: ${r.error ?? describe(r)}`);
+  return result.ok ? 0 : 1;
+}
+
+const describe = (r) => r.dry_run ? r.plan.join('; ')
+  : r.changed === undefined ? `скилл ${r.state}`
+    : r.changed ? `обновлён (был ${r.state})` : 'актуален';

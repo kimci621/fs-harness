@@ -166,3 +166,36 @@ test('engine: rate-limit агента даёт agent_rate_limited с retry_after
 
   rmSync(root, { recursive: true, force: true });
 });
+
+test('engine: claude-агент запускается с выключенным плагином agent-flow', async () => {
+  // Живой случай: хук agent-flow в одноразовом worktree требует adopt и «да» человека,
+  // headless-агент выходит без коммитов, а его deny на --no-verify рвёт мерж.
+  const root = mkdtempSync(path.join(tmpdir(), 'fs-harness-flow-test-'));
+  const project = path.join(root, 'repo');
+  initGitRepo(project);
+  const fakeSpec = {
+    name: 'test-flow',
+    action: {
+      title: 'Тест agent-flow', target: 'none', writes: false, isolation: 'checkout', prompt: 'commit',
+      agent: { default: 'cc' }, judge: { gate: 'none', role: 'acceptance' },
+      precheck: () => ({ workspace: { project } }),
+      context: () => ({ pattern: 'feat' }), goal: () => 'тест',
+      verify: () => ({ head_sha: '123' }), result: () => ({ ok: true }),
+    },
+  };
+  let args = null;
+  const fakeSpawn = (o) => {
+    args = o.args;
+    const events = createEventStream();
+    events.push({ t: 'log', stream: 'stdout', text: JSON.stringify({ type: 'result', result: 'ok' }) });
+    return { events, result: Promise.resolve({ ok: true, code: 0 }), abort: () => {} };
+  };
+  const run = runAction(fakeSpec, { cfg: { agents: { cc: { bin: 'claude' } } } }, {}, {
+    agent: 'cc', runsDir: path.join(root, 'runs'), noJudge: true, yes: true, spawnAgentImpl: fakeSpawn,
+  });
+  await run.result;
+  const i = args.indexOf('--settings');
+  assert.ok(i >= 0, `нет --settings в ${args.join(' ')}`);
+  assert.equal(JSON.parse(args[i + 1]).enabledPlugins['agent-flow@agent-flow'], false);
+  rmSync(root, { recursive: true, force: true });
+});

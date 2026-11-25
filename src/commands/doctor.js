@@ -28,9 +28,9 @@ export async function cmdDoctor({ repo, host, projectDir, json, asObject, comman
   add('glab', Boolean(glabVersion), glabVersion?.split('\n')[0] || 'не найден в PATH. Установка: brew install glab', true);
 
   add('claude', Boolean(tryExec('which', ['claude'])), tryExec('which', ['claude']) || 'не найден в PATH: без него не работают ни агент, ни судья', true);
-  // agy опционален: без него мастер (fsh ask, клавиша A) берёт профиль cc.
-  const agy = tryExec('which', ['agy']);
-  add('agy', Boolean(agy), agy || 'не найден — мастер fsh будет работать на профиле cc');
+  // opencode опционален: без него мастер (fsh ask, клавиша A) берёт профиль cc.
+  const opencode = tryExec('which', ['opencode']);
+  add('opencode', Boolean(opencode), opencode || 'не найден — мастер fsh будет работать на профиле cc');
 
   let cfg = null;
   try {

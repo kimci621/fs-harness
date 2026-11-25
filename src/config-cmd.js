@@ -6,6 +6,7 @@ import { CliError } from './errors.js';
 
 const AGENT_DESCRIPTIONS = {
   agy: 'Antigravity CLI (Google DeepMind / Antigravity)',
+  opencode: 'opencode CLI (deepseek-v4.1-flash через opencode-go)',
   claude: 'Claude Code (Anthropic по подписке / OAuth)',
   cc: 'Claude Code (алиас claude)',
   cco: 'Claude Code через OpenRouter (~/.openrouter_key)',
@@ -13,9 +14,16 @@ const AGENT_DESCRIPTIONS = {
   ccq: 'Claude Code через Alibaba Qwen (~/.alibaba_key)',
 };
 
-// fsh config init|show|migrate|agent [имя]
-export function cmdConfig(args, opts = {}) {
+// Ключи config get: тот же белый список, что у show --json, секреты сюда не попадают.
+const GET_KEYS = {
+  project: (c) => c.activeProject, repo: (c) => c.repo, host: (c) => c.host, dir: (c) => c.projectDir,
+  targetBranch: (c) => c.targetBranch, branchPattern: (c) => c.branchPattern,
+};
+
+// fsh config init|show|get <ключ>|migrate|agent [имя]
+export function cmdConfig(args, opts = {}, cfg = null) {
   const [sub, ...rest] = args;
+  if (sub === 'get') return get(rest[0], opts, cfg ?? loadConfig(process.env, opts));
   if (sub === 'init') {
     const p = configInit();
     console.log(`Создан ${p}.\nЗаполни projects.<имя>: repo, host, dir, и укажи activeProject.`);
@@ -38,7 +46,16 @@ export function cmdConfig(args, opts = {}) {
   if (sub === 'set' && rest[0] === 'agent') {
     return handleAgent(rest[1], opts);
   }
-  console.log(`Использование: fsh config init|show|migrate|agent [имя]\nКонфиг: ${configPath()}`);
+  console.log(`Использование: fsh config init|show|get <ключ>|migrate|agent [имя]\nКонфиг: ${configPath()}`);
+  return 0;
+}
+
+function get(key, opts, cfg) {
+  if (!Object.hasOwn(GET_KEYS, key ?? '')) throw new CliError(`Использование: fsh config get <${Object.keys(GET_KEYS).join('|')}>.`, 1, 'usage');
+  const result = { ok: true, key, value: GET_KEYS[key](cfg) ?? '' };
+  if (opts.asObject) return result;
+  if (opts.json) finish(true, result);
+  else console.log(result.value);
   return 0;
 }
 

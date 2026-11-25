@@ -104,6 +104,30 @@ test('pickProject: единственный проект активен без a
   assert.equal(pickProject({ version: 2, projects: {} }, { env: {} }).name, '');
 });
 
+test('pickProject: cwd внутри репозитория проекта (и его worktree) выбирает этот проект', () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), 'fs-harness-cwd-'));
+  try {
+    const back = path.join(tmp, 'back');
+    const git = (...a) => execFileSync('git', ['-C', back, ...a], { stdio: 'ignore' });
+    execFileSync('git', ['init', '-q', back]);
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+    git('worktree', 'add', '-q', path.join(tmp, 'back-wt'));
+    execFileSync('mkdir', ['-p', path.join(back, 'sub')]);
+    const cfg = { version: 2, activeProject: 'front', projects: { front: { dir: path.join(tmp, 'front') }, back: { dir: back } } };
+    const env = {};
+    assert.equal(pickProject(cfg, { env, cwd: path.join(back, 'sub') }).name, 'back');
+    assert.equal(pickProject(cfg, { env, cwd: path.join(tmp, 'back-wt') }).name, 'back');
+    // Каталог вне проектов и отсутствие cwd оставляют activeProject.
+    assert.equal(pickProject(cfg, { env, cwd: tmp }).name, 'front');
+    assert.equal(pickProject(cfg, { env }).name, 'front');
+    // Явный выбор сильнее каталога.
+    assert.equal(pickProject(cfg, { env, cwd: back, project: 'front' }).name, 'front');
+    assert.equal(pickProject(cfg, { env: { FS_HARNESS_PROJECT: 'front' }, cwd: back }).name, 'front');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('config migrate: пишет v2 и оставляет .v1.bak рядом', () => {
   withFile(V1, (file) => {
     const { backup } = writeMigrated(file);

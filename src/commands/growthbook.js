@@ -8,15 +8,17 @@ import { CliError } from '../errors.js';
 // эксперименты и метрики живут в вебе, туда мы не лезем.
 export async function cmdGrowthBook(ctx, args, opts = {}) {
   const [sub, ...rest] = args;
-  const gb = ctx.gb();
+  // help без ключа и сети: его читают как раз тогда, когда не понятно, куда и с чем идти.
+  const gb = sub === 'help' ? null : ctx.gb();
   const result =
-    !sub || sub === 'list' ? await list(gb, ctx, opts)
+    sub === 'help' ? { ok: true, help: helpText(ctx.cfg) }
+      : !sub || sub === 'list' ? await list(gb, ctx, opts)
       : sub === 'get' ? await get(gb, rest)
         : sub === 'create' ? await create(gb, ctx, rest, opts)
           : sub === 'toggle' ? await toggle(gb, ctx, rest, opts)
             : sub === 'set' ? await set(gb, rest, opts)
               : sub === 'delete' ? await del(gb, rest, opts)
-                : (() => { throw new CliError('Использование: fsh growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|set <id> <значение>|delete <id>].', 1, 'usage'); })();
+                : (() => { throw new CliError('Использование: fsh growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|set <id> <значение>|delete <id>]. Примеры и формат запроса: fsh growthbook help.', 1, 'usage'); })();
 
   if (opts.asObject) return result;
   if (opts.json) finish(true, result);
@@ -63,7 +65,7 @@ async function create(gb, ctx, [id, state], opts) {
     environments: { [env]: { enabled: on, rules: [] } },
   };
   if (opts.dryRun) return { ok: true, dry_run: true, created: id, body };
-  if (!opts.yes && !opts.asObject && !confirm(`Создать флаг "${id}" (${env}=${on ? 'on' : 'off'})? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Создать флаг "${id}" (${env}=${on ? 'on' : 'off'})? [y/N] `, { irreversible: env === 'production' })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   return { ok: true, created: id, flag: brief(await gb.createFeature(body)) };
@@ -74,7 +76,7 @@ async function toggle(gb, ctx, [id, state], opts) {
   const env = opts.env || ctx.cfg.growthbook.env;
   const on = state === 'on';
   if (opts.dryRun) return { ok: true, dry_run: true, toggled: id, env, enabled: on };
-  if (!opts.yes && !opts.asObject && !confirm(`Флаг "${id}": ${env} → ${on ? 'on' : 'off'}? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Флаг "${id}": ${env} → ${on ? 'on' : 'off'}? [y/N] `, { irreversible: env === 'production' })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   const f = await gb.toggleFeature(id, { [env]: on }, `fsh: ${env} → ${on ? 'on' : 'off'}`);
@@ -92,7 +94,7 @@ async function set(gb, [id, value], opts) {
   const bad = checkValue(f.valueType, value);
   if (bad) throw new CliError(`Флаг "${id}" типа ${f.valueType}: ${bad}`, 1, 'usage');
   if (opts.dryRun) return { ok: true, dry_run: true, set: id, default: value };
-  if (!opts.yes && !opts.asObject && !confirm(`Флаг "${id}": default ${f.defaultValue} → ${value}? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Флаг "${id}": default ${f.defaultValue} → ${value}? [y/N] `, { irreversible: true })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   const after = await gb.updateFeature(id, { defaultValue: value });
@@ -115,7 +117,7 @@ const brief = (f) => ({ id: f.id, type: f.valueType, default: f.defaultValue, en
 async function del(gb, [id], opts) {
   if (!id) throw new CliError('Использование: fsh growthbook delete <id>.', 1, 'usage');
   if (opts.dryRun) return { ok: true, dry_run: true, deleted: id };
-  if (!opts.yes && !opts.asObject && !confirm(`Удалить флаг "${id}" без возможности вернуть? [y/N] `)) {
+  if (!opts.yes && !opts.asObject && !confirm(`Удалить флаг "${id}" без возможности вернуть? [y/N] `, { irreversible: true })) {
     throw new CliError('Отменено.', 0, 'canceled');
   }
   const r = await gb.deleteFeature(id);
@@ -123,7 +125,30 @@ async function del(gb, [id], opts) {
   return { ok: true, deleted: id };
 }
 
+// Справка с тем, за чем агенты лезли в исходники: ключ, хост, тело create.
+function helpText(cfg) {
+  const g = cfg.growthbook ?? {};
+  const base = (g.baseUrl || '<growthbook.baseUrl>').replace(/\/+$/, '');
+  const env = g.env || 'production';
+  const body = { id: 'new-onboarding', valueType: 'boolean', defaultValue: 'true', project: g.project || '<growthbook.project>', environments: { [env]: { enabled: false, rules: [] } } };
+  return [
+    'fsh growthbook list | get <id>',
+    'fsh growthbook create new-onboarding off -y                      # boolean, default true, выключен в окружении',
+    'fsh growthbook create promo-text off --type string --default "Скидка" --env dev -y',
+    'fsh growthbook toggle new-onboarding on --env dev -y',
+    'fsh growthbook set new-onboarding false -y                       # дефолт во всех окружениях',
+    'fsh growthbook delete new-onboarding -y',
+    '',
+    `API: ${base} (growthbook.baseUrl — адрес API, не веб-интерфейса). Окружение по умолчанию: ${env}.`,
+    'Ключ: Authorization: Bearer <ключ>; ищется в env FS_HARNESS_GROWTHBOOK, затем keychain, затем ~/.growthbook_apikey.',
+    `create шлёт POST ${base}/api/v1/features:`,
+    JSON.stringify(body),
+    'Правила и эксперименты (раскатка по аудитории, A/B) fsh не создаёт: только флаг и его включение. Их настраивают в веб-интерфейсе GrowthBook.',
+  ].join('\n');
+}
+
 function render(r) {
+  if (r.help) return void console.log(r.help);
   if (r.flags) {
     if (!r.flags.length) return void console.log('Флагов нет.');
     console.log(table(r.flags.map((f) => [f.id, f.type, f.envs, truncate((f.tags ?? []).join(', '), 30)])));

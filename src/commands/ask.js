@@ -65,13 +65,33 @@ export function buildAskBrief({ run, question, readOnly = false, repoDir = HARNE
   }).text;
 }
 
-// Профиль мастера: --agent > chat.agent из конфига > agy > cc.
-// agy опционален: нет в PATH - молча берём claude-профиль, дефолтный конфиг не ломается.
+// Профиль мастера: --agent > chat.agent из конфига > opencode > cc.
+// opencode опционален: нет в PATH - молча берём claude-профиль, дефолтный конфиг не ломается.
 export function pickChatAgent(cfg, name) {
-  const wanted = name || cfg?.chat?.agent || 'agy';
+  const wanted = name || cfg?.chat?.agent || 'opencode';
   const agent = resolveAgent(cfg, wanted);
-  if (wanted !== 'agy' || hasBin(agent.bin)) return agent;
+  if (!['opencode', 'agy'].includes(wanted) || hasBin(agent.bin)) return agent;
   return resolveAgent(cfg, 'cc');
+}
+
+// Кому задавать вопрос по очереди: выбранный, затем opencode (без него — claude) и claude.
+// Явный --agent не подменяется: человек выбрал его сам.
+export function askAgents(cfg, name) {
+  const chain = name ? [pickChatAgent(cfg, name)] : [pickChatAgent(cfg, null), pickChatAgent(cfg, 'opencode'), resolveAgent(cfg, 'cc')];
+  return chain.filter((a, i) => chain.findIndex((b) => b.name === a.name) === i);
+}
+
+// Агент не ответил (agy отказывает по региону, процесс закрылся) — спрашиваем следующего.
+export async function askWithFallback(agents, ask, note) {
+  for (const [i, agent] of agents.entries()) {
+    try {
+      return { agent, answer: await ask(agent) };
+    } catch (err) {
+      const next = agents[i + 1];
+      if (err.code !== 'agent_failed' || !next) throw err;
+      note(`⚠️ ${agent.name} не ответил (${err.message}), спрашиваю ${next.name}`);
+    }
+  }
 }
 
 function hasBin(bin) {
@@ -88,24 +108,27 @@ export async function cmdAsk(ctx, args, opts = {}) {
     throw new CliError('Использование: fsh ask "<вопрос>" [--run <id>]. Диалог с мастером — клавиша A в fsh tui.', 1, 'usage');
   }
   const run = opts.run ? shapeRun(readRun(opts.run)) : lastFailedRun();
-  const agent = pickChatAgent(ctx.cfg, opts.agent);
-  const chat = startChat({
-    agent,
-    cwd: HARNESS_DIR,
-    env: { ...process.env, ...agent.env },
-    readOnly: true, // без TTY правки не спрашивают и не показывают — только разбор
-    onEvent: (e) => {
-      if (!opts.asObject && !opts.json && e.t === 'activity') process.stderr.write(`\r\x1b[K${e.text}\n`);
-    },
-  });
-  try {
-    const answer = await chat.send(buildAskBrief({ run, question, readOnly: true }));
-    const result = { ok: true, run: run?.id ?? null, error_code: run?.error?.code ?? null, agent: agent.name, answer };
-    if (!opts.asObject && !opts.json) console.log(answer);
-    return result;
-  } finally {
-    chat.close();
-  }
+  const quiet = opts.asObject || opts.json;
+  const ask = async (agent) => {
+    const chat = startChat({
+      agent,
+      cwd: HARNESS_DIR,
+      env: { ...process.env, ...agent.env },
+      readOnly: true, // без TTY правки не спрашивают и не показывают — только разбор
+      onEvent: (e) => {
+        if (!quiet && e.t === 'activity') process.stderr.write(`\r\x1b[K${e.text}\n`);
+      },
+    });
+    try {
+      return await chat.send(buildAskBrief({ run, question, readOnly: true }));
+    } finally {
+      chat.close();
+    }
+  };
+  const { agent, answer } = await askWithFallback(askAgents(ctx.cfg, opts.agent), ask, (line) => process.stderr.write(`${line}\n`));
+  const result = { ok: true, run: run?.id ?? null, error_code: run?.error?.code ?? null, agent: agent.name, answer };
+  if (!quiet) console.log(answer);
+  return result;
 }
 
 // readRun отдаёт сырой ран — приводим к той же форме, что lastFailedRun.

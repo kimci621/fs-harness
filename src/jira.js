@@ -1,4 +1,4 @@
-import { CliError } from './errors.js';
+import { CliError, netError } from './errors.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -34,7 +34,8 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
         });
       } catch (err) {
         lastErr = err;
-        if (attempt === retries) throw new CliError(`Jira недоступна: ${err.message}`, 1, 'api_failed');
+        const net = netError('Jira', err);
+        if (!net.retry || attempt === retries) throw net;
         await sleep(backoff(attempt, sleepMs));
         continue;
       }
@@ -149,6 +150,23 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     // Запись 6. Удаление необратимо, 204 = удалена.
     deleteIssue: (key) =>
       api(`/rest/api/2/issue/${encodeURIComponent(key)}`, { method: 'DELETE', retries: 1, allow404: true }),
+
+    // Типы связей инстанса: name плюс фразы inward/outward («is blocked by» / «blocks»).
+    linkTypes: () => api('/rest/api/2/issueLinkType').then((r) => r?.issueLinkTypes ?? []),
+
+    // Запись 8. Направление в API перевёрнуто относительно фраз: задача из inwardIssue
+    // читается фразой outward («inwardIssue blocks outwardIssue»), поэтому команда сверяет итог чтением.
+    // Ответ — 201 с пустым телом, разбирать нечего.
+    createLink: ({ type, inward, outward }) =>
+      api('/rest/api/2/issueLink', {
+        method: 'POST',
+        body: { type: { name: type }, inwardIssue: { key: inward }, outwardIssue: { key: outward } },
+        raw: true,
+        retries: 1,
+      }).then(() => null),
+
+    issueLinks: (key) =>
+      api(`/rest/api/2/issue/${encodeURIComponent(key)}?fields=issuelinks`).then((r) => r?.fields?.issuelinks ?? []),
 
     // Вложения задачи: id, имя, размер и ссылка на содержимое.
     attachments: (key) =>

@@ -1,4 +1,4 @@
-import { CliError } from './errors.js';
+import { CliError, netError } from './errors.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const backoff = (attempt, unit) => unit * 2 ** (attempt - 1); // 1с, 2с, 4с
@@ -35,7 +35,8 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
         });
       } catch (err) {
         lastErr = err;
-        if (attempt === retries) throw new CliError(`Mattermost недоступен: ${err.message}`, 1, 'api_failed');
+        const net = netError('Mattermost', err);
+        if (!net.retry || attempt === retries) throw net;
         await sleep(backoff(attempt, sleepMs));
         continue;
       }
@@ -109,6 +110,8 @@ export function createMattermost({ baseUrl, token = '', fetchImpl = fetch, sleep
       api('/reactions', { method: 'POST', body: { user_id: userId, post_id: postId, emoji_name: emojiName } }),
 
     patchPost: (postId, message) => api(`/posts/${postId}/patch`, { method: 'PUT', body: { message } }),
+
+    deletePost: (postId) => api(`/posts/${postId}`, { method: 'DELETE' }),
 
     // Все каналы вместе с личками: у бота без команды других и нет.
     allMyChannels: () => api('/users/me/channels'),

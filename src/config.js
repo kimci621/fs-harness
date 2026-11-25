@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CliError } from './errors.js';
 
@@ -71,21 +71,23 @@ export const DEFAULTS = {
       },
     },
     // Планировщик задач: claude на opus с максимальным reasoning effort.
-    opus: { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'xhigh'], fallback: 'agy-high' },
+    opus: { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'xhigh'], fallback: 'opencode' },
     // Профили уровней сложности (tiers ниже). fallback — профиль, на который ран уходит
-    // при рейт-лимите: кончился лимит claude — задачу доделывает agy.
-    'opus-high': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'high'], fallback: 'agy-high' },
-    'sonnet-xhigh': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'xhigh'], fallback: 'agy-high' },
-    'sonnet-low': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'low'], fallback: 'agy-low' },
+    // при рейт-лимите: кончился лимит claude — задачу доделывает opencode.
+    'opus-high': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'opus', '--effort', 'high'], fallback: 'opencode' },
+    'sonnet-xhigh': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'xhigh'], fallback: 'opencode' },
+    'sonnet-low': { bin: 'claude', args: ['--dangerously-skip-permissions', '--model', 'sonnet', '--effort', 'low'], fallback: 'opencode' },
     'agy-high': { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-high'] },
     'agy-low': { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-low'] },
-    // agy (Antigravity CLI) — опционален: нет в PATH, мастер молча берёт cc.
+    // opencode — опционален: нет в PATH, мастер молча берёт cc. Фолбэк claude и исполнитель implement.
+    opencode: { bin: 'opencode', family: 'opencode', args: ['run', '--auto', '-m', 'opencode-go/deepseek-v4.1-flash#max'] },
+    // agy (Antigravity CLI) — запасной вариант, только по явному --agent.
     agy: { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions'] },
-    // Исполнитель задач: gemini flash high через agy.
+    // gemini flash high через agy.
     gemini: { bin: 'agy', family: 'agy', args: ['--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-high'] },
   },
   // Мастер по самому fsh (fsh ask, клавиша A в TUI). Профиль из agents.
-  chat: { agent: 'agy' },
+  chat: { agent: 'opencode' },
   workspace: {
     root: '~/.local/state/fs-harness/worktrees',
     deps: { strategy: 'clone' },
@@ -199,10 +201,10 @@ export function readRawConfig(file = configPath()) {
   }
 }
 
-// Выбор активного проекта: -P > FS_HARNESS_PROJECT > activeProject > единственный.
-export function pickProject(cfgV2, { project, env = process.env } = {}) {
+// Выбор активного проекта: -P > FS_HARNESS_PROJECT > проект каталога cwd > activeProject > единственный.
+export function pickProject(cfgV2, { project, env = process.env, cwd } = {}) {
   const names = Object.keys(cfgV2.projects ?? {});
-  const wanted = project || env.FS_HARNESS_PROJECT || cfgV2.activeProject || (names.length === 1 ? names[0] : '');
+  const wanted = project || env.FS_HARNESS_PROJECT || projectByDir(cfgV2, cwd) || cfgV2.activeProject || (names.length === 1 ? names[0] : '');
   if (!wanted) return { name: '', project: { ...PROJECT_DEFAULT } };
   const found = cfgV2.projects?.[wanted];
   if (!found) {
@@ -213,6 +215,27 @@ export function pickProject(cfgV2, { project, env = process.env } = {}) {
     );
   }
   return { name: wanted, project: { ...PROJECT_DEFAULT, ...found, jira: { ...PROJECT_DEFAULT.jira, ...(found.jira || {}) } } };
+}
+
+// Проект, в чьём репозитории лежит cwd. Корень берётся через --git-common-dir,
+// поэтому worktree (вложенный или соседний) узнаётся как свой основной репозиторий.
+export function projectByDir(cfgV2, cwd) {
+  if (!cwd) return '';
+  let root;
+  try {
+    const common = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    root = realpathSync(path.dirname(common));
+  } catch {
+    return '';
+  }
+  const same = (dir) => {
+    try {
+      return realpathSync(expandHome(dir)) === root;
+    } catch {
+      return false;
+    }
+  };
+  return Object.entries(cfgV2.projects ?? {}).find(([, p]) => p.dir && same(p.dir))?.[0] ?? '';
 }
 
 // Резолв проекта и его связанного бэкенда.
@@ -251,11 +274,11 @@ export function resolveProject(cfgV2, name) {
 
 // Плоские поля (repo, host, projectDir, jira) — алиасы активного проекта:
 // команды про мультипроектность не знают и знать не должны.
-export function loadConfig(env = process.env, { project, file } = {}) {
+export function loadConfig(env = process.env, { project, file, cwd } = {}) {
   const targetFile = file || configPath();
   const raw = readRawConfig(targetFile);
   const v2 = migrateConfig(raw ?? {});
-  const { name, project: p, backend } = resolveProject(v2, { project, env });
+  const { name, project: p, backend } = resolveProject(v2, { project, env, cwd });
   const origin = p.repo && p.host ? null : originOf(p.dir);
 
   const cfg = {

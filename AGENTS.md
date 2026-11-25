@@ -16,7 +16,7 @@ src/resolve.js          поиск MR: по номеру или части им�
 src/pipeline.js         ensureMRPipeline, findJob, deployJobName, mapLimit
 src/ui.js               спиннер, live-таблица, waitJob (опрос джоб)
 src/format.js           иконки статусов, humanize, таблицы, строки MR
-src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto, worktrees, worker, resolve-all
+src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, mr-thread (mr reply/resolve), prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto, worktrees, worker, resolve-all
 src/commands/resolve-all.js все мои открытые MR параллельно под локом MR: conflict в режиме sync → threads → реплика в тред задачи в MM
 src/worktrees.js        инвентаризация и gc временных worktree (orphan, run-done, task)
 src/commands/worktrees.js команда fsh worktrees: список и очистка (gc)
@@ -45,21 +45,21 @@ src/commands/watch.js   fsh watch: один опрос и сообщение н�
 src/agents.js           профили агента: имя → bin/args/env/keyFile, ключ читается при запуске
 src/agent/spawn.js      запуск агента процессом: промпт в stdin, стрим строк, abort, SIGTERM→SIGKILL
 src/agent/events.js     поток событий с pull-семантикой (буфер + курсор на итератор)
-src/agent/stream.js     разбор stream-json: claude (type) и agy (event) — активность, дельты, отчёт
-src/chat.js             многоходовый чат с агентом: живой процесс на NDJSON (claude, agy)
+src/agent/stream.js     разбор stream-json: claude (type), agy (event), opencode (run --format json)
+src/chat.js             многоходовый чат с агентом: живой процесс на NDJSON (claude, agy), процесс на ход (opencode)
 src/commands/ask.js     мастер по самому fsh: бриф об упавшем ране, выбор профиля, read-only из CLI
 src/agent/journal.js    раны в ~/.local/state/fs-harness/runs/<id>/: meta.json (state/error/pid/pre), patchRunMeta/setRunState, listRuns, pidAlive/runIsActive
 src/judge/index.js      judge(): рубрика + профиль → вердикт, фолбэк, ремонтный round-trip
 src/judge/schema.js     zod-схема вердикта, VERDICT_SHAPE, extractJson
 src/judge/payload.js    что показывать судье в роли acceptance
 src/checks.js           коды выхода проверок проекта для судьи; упавшая проверка повторяется (флейк)
-src/judge/providers/    cli (процесс claude) и openai (всё OpenAI-совместимое)
+src/judge/providers/    cli (процесс claude), opencode (opencode run без инструментов, подписка Go) и openai (всё OpenAI-совместимое)
 src/prompts/judge/*.md  рубрики по ролям — файл на роль
 src/prompts/flows/*.md  сценарии работы для агента: протокол на файл, description во front-matter
 src/engine.js           runAction: фазы действия, события, изоляция, гейт судьи; resumeOf — доигрывание упавшего рана в том же worktree/сессии; runActionCLI, judgeRun
 src/publish.js          publish <runId>: доопубликовать упавший на push/build ран без агента и судьи; reconstructPre для ранов без meta.pre
 src/actions/*.js        декларации действий (conflict, ci-fix, threads, review, analyze, implement): precheck/context/verify/publish и блок action
-src/actions/implement.js реализация задачи Jira: план (opus) → код (gemini) → ревью судьёй (до 3) → push + черновик MR; в ревью отправляет fsh task submit
+src/actions/implement.js реализация задачи Jira: план (opus) → код (opencode) → ревью судьёй (до 3) → push + черновик MR; в ревью отправляет fsh task submit
 src/actions/ci-fix.js   починка упавших джоб: выжимка из логов, счётчик попыток в ~/.local/state/fs-harness/ci-fix
 src/prompts.js          шаблоны: loadTemplate/renderTemplate/listTemplates/checkTemplates
 src/registry.js         ЕДИНЫЙ реестр команд: dispatch, help, agent-guide и MCP tools/list генерируются из него
@@ -188,6 +188,9 @@ resolve target → precheck → (skip?) → context → isolate → plan? → pr
 
 - `GL_HELPER_JSON=1` — все команды отдают JSON; side-effect команды — финальный результат `{ok:true, ...}` в stdout, прогресс в stderr. Ошибки: `{ok:false,error:{code,message}}` в stdout, exit ≠ 0.
 - `GL_HELPER_YES=1` — авто-подтверждение (аналог -y).
+- `CLAUDECODE` (ставит Claude Code) — `confirm()` сам отвечает «да», кроме вызовов с `{ irreversible: true }` (jira delete, mm delete, growthbook delete и set, growthbook create/toggle в production, resolve-all, init, worktrees gc, queue clear). Новую необратимую запись помечай так же. Отказ без терминала печатает одну строку с командой повтора (`cancelLine` в `main.js`) и выходит с кодом 1 (`exitCodeFor`).
+- `fsh help` под `CLAUDECODE` — короткая справка `AGENT_HELP` из `commands/agent-guide.js`. Новая пользовательская команда, которую агент должен знать, — пример туда; тест сверяет, что все упомянутые команды есть в реестре.
+- Сетевые сбои Jira и Mattermost идут через `netError` из `errors.js`: `ENOTFOUND`, `ECONNREFUSED`, `EPERM` не ретраятся.
 - `--dry-run` — план без side-effect'ов для run/deploy/действий/commit.
 - `fsh agent-guide` — самодостаточная инструкция, которую агент запускает первой.
 - В командах весь прогресс печатай через `makeLogger(json)` из `output.js`, итог — через `finish(json, obj)`. Ошибки — `CliError(msg, exitCode, code)` с машинным кодом.
@@ -226,10 +229,11 @@ resolve target → precheck → (skip?) → context → isolate → plan? → pr
   печатается `разобраться: fsh ask`.
 - Транспорт выбирается по семейству профиля: `claude` и `agy` держат
   `--input-format stream-json` - **один живой процесс, NDJSON-строка на реплику**, контекст держит
-  сам агент, id сессии не нужен. Отсюда `keepStdin` и `write()` в `spawnAgent`.
-- Профиль: `--agent` > `chat.agent` в конфиге > `agy` > `cc`. **`agy` опционален**: нет в
+  сам агент, id сессии не нужен. Отсюда `keepStdin` и `write()` в `spawnAgent`. `opencode` - процесс
+  на реплику, со второй `--session <id>` из потока.
+- Профиль: `--agent` > `chat.agent` в конфиге > `opencode` > `cc`. **`opencode` опционален**: нет в
   PATH - `pickChatAgent` молча берёт `cc`, дефолтный конфиг без него рабочий. Это и есть условие, на
-  котором `agy` не нарушает ограничение №1.
+  котором `opencode` не нарушает ограничение №1.
 - Права: окно в TUI работает профилем как есть (гейт - человек за клавиатурой, он видит каждый шаг),
   `fsh ask` без TTY снимает `--dangerously-skip-permissions` и ставит режим плана.
 - **В бриф не попадает конфиг ни в каком виде**: в `telegram.bot_token` живой секрет. Кладутся
@@ -276,6 +280,8 @@ Watcher (`fsh watch --daemon`) шлёт сообщение на MR с кнопк
 - `fsh mm reply <KEY> "<текст>"` отвечает в тред задачи: ищет в канале сценария `review` свой
   последний корневой пост с ключом (сообщение `mm review`) и пишет с его `root_id`. Поста нет —
   `not_found` с подсказкой `fsh mm review <KEY>`. `--dry-run` ходит в сеть только на чтение.
+- Поиск поста задачи один: `findTaskPost` в `mm.js`, его зовут `reply` и `task submit` (дубль поста «в ревью»).
+  `mm edit`/`mm delete` проверяют, что пост свой (`user_id` = `me`).
 
 ## Бэкенд в контуре задачи (fitstars-api4)
 

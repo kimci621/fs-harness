@@ -42,9 +42,10 @@ function ctxWith({ mrs = [], created = [], posts = [] } = {}) {
     },
     repo: 'g/p',
     jira: () => ({ issue: async () => ISSUE }),
-    mm: () => ({ post: async (channel, message) => { posts.push({ channel, message }); return { id: 'p1' }; } }),
+    mm: () => ({ me: async () => ({ id: 'me' }), channelPosts: async () => ({ order: [], posts: {} }), post: async (channel, message) => { posts.push({ channel, message }); return { id: 'p1' }; } }),
     g: {
       listOpenMRs: async () => mrs,
+      getMR: async () => READY_MR,
       createMR: async (repo, fields) => { created.push(fields); return { iid: 42, title: fields.title, web_url: 'https://gl/mr/42' }; },
     },
   };
@@ -173,6 +174,8 @@ test('task submit: снимает черновик, переводит Jira, п�
     transition: async (key, id) => { moved.push({ key, id }); done = true; },
   });
 
+  ctx.g.getMR = async () => READY_MR;
+
   const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
   assert.equal(res.draft_removed, true);
   assert.deepEqual(updates, [{ iid: 7, fields: { title: 'FD-1: Починить' } }]);
@@ -182,6 +185,56 @@ test('task submit: снимает черновик, переводит Jira, п�
     channel: 'hn3e14mhebg9jmo5kmnzgbcque',
     message: 'FD-1: Починить\n• MR: https://gl/mr/7\n• Jira FD-1 https://j.example/browse/FD-1',
   }]);
+});
+
+const READY_MR = { iid: 7, has_conflicts: false, blocking_discussions_resolved: true, head_pipeline: { status: 'success' } };
+
+function submitCtx(mr) {
+  const updates = [];
+  const ctx = ctxWith({ mrs: [{ iid: 7, title: 'Draft: FD-1: Починить', web_url: 'https://gl/mr/7' }] });
+  ctx.g.updateMR = async (repo, iid, fields) => { updates.push(fields); return { iid, title: fields.title }; };
+  ctx.g.getMR = async () => mr;
+  let done = false;
+  ctx.jira = () => ({
+    transitions: async () => ({ transitions: [{ id: '31', name: 'В ревью', to: { name: 'Ревью' } }] }),
+    issue: async () => ({ key: 'FD-1', names: {}, fields: { summary: 'Починить', status: { name: done ? 'Ревью' : 'В работе' } } }),
+    transition: async () => { done = true; },
+  });
+  return { ctx, updates };
+}
+
+test('task submit: черновик снимается только с готового MR, иначе остаётся с причиной', async () => {
+  const cases = [
+    [{ ...READY_MR, head_pipeline: { status: 'failed' } }, /пайплайн/],
+    [{ ...READY_MR, head_pipeline: null }, /пайплайн/],
+    [{ ...READY_MR, has_conflicts: true }, /конфликт/],
+    [{ ...READY_MR, blocking_discussions_resolved: false }, /тред/],
+  ];
+  for (const [mr, why] of cases) {
+    const { ctx, updates } = submitCtx(mr);
+    const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+    assert.equal(res.draft_removed, false);
+    assert.deepEqual(updates, []);
+    assert.match(res.steps.find((s) => s.step === 'MR').note, why);
+    assert.equal(res.jira.to, 'Ревью');
+  }
+});
+
+test('task submit: пайплайн manual (зелёный, ждут ручные deploy) — готов, черновик снимается', async () => {
+  const { ctx, updates } = submitCtx({ ...READY_MR, head_pipeline: { status: 'manual' } });
+  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true });
+  assert.equal(res.draft_removed, true);
+  assert.deepEqual(updates, [{ title: 'FD-1: Починить' }]);
+});
+
+test('task submit --keep-draft: готовый MR остаётся черновиком', async () => {
+  const { ctx, updates } = submitCtx(READY_MR);
+  const res = await cmdTask(ctx, ['submit', 'FD-1'], { asObject: true, yes: true, keepDraft: true });
+  assert.equal(res.draft_removed, false);
+  assert.deepEqual(updates, []);
+  assert.match(res.steps.find((s) => s.step === 'MR').note, /--keep-draft/);
+  const plan = await cmdTask(submitCtx(READY_MR).ctx, ['submit', 'FD-1'], { asObject: true, dryRun: true, keepDraft: true });
+  assert.ok(plan.plan.some((l) => /черновик остаётся/.test(l)));
 });
 
 test('task submit: обязательные поля перехода — отказ с подсказкой, MR не трогаем', async () => {

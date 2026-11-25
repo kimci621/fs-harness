@@ -32,7 +32,7 @@ fsh mr-comments <mr|ветка> --open
 ## 4. Запушить
 
 ```
-fsh task push
+fsh task push -y
 ```
 
 Без пуша к шагам 5 и 6 не переходишь.
@@ -62,10 +62,10 @@ glab api -X POST "projects/:id/merge_requests/<iid>/discussions/<id>/notes" -f b
 
 ```
 fsh mm reply FD-XXXX "<текст>" --dry-run   # покажет тред и текст
-fsh mm reply FD-XXXX "<текст>"
+fsh mm reply FD-XXXX "<текст>" -y
 ```
 
-`not_found` — задачу в канал ещё не отписывали: сначала `fsh mm review FD-XXXX`, и то только
+`not_found` — задачу в канал ещё не отписывали: сначала `fsh mm review FD-XXXX -y`, и то только
 если задача правда уехала в ревью. `fsh mm post` для этого не годится, он пишет в канал отдельным
 постом.
 

@@ -1,15 +1,17 @@
+import http from 'node:http';
 import { createGlab } from './glab.js';
 import { loadConfig } from './config.js';
 import { CliError } from './errors.js';
 import { createCtx, findCommand, COMMANDS } from './registry.js';
 import { formatErrorJSON } from './output.js';
+import { AGENT_HELP } from './commands/agent-guide.js';
 
 const FLAGS_USAGE = `Флаги:
   -R, --repo <repo>       Репозиторий (дефолт из конфига / GL_HELPER_REPO)
-  -P, --project <имя>     Проект из конфига (дефолт activeProject / FS_HARNESS_PROJECT)
+  -P, --project <имя>     Проект из конфига (дефолт FS_HARNESS_PROJECT, затем проект текущего каталога, затем activeProject)
   --host <hostname>       GitLab-хост (дефолт из конфига)
   --json                  Вывод в JSON (mrs, mr, jobs, run, deploy) — удобно агентам
-  --agent <профиль>       Агент для действий и commit: cc (по умолчанию), ccq, cco, ccd, agy
+  --agent <профиль>       Агент для действий и commit: cc (по умолчанию), ccq, cco, ccd, opencode, agy
                           Профили живут в конфиге, agents.<имя>. Можно и --agent=cc
   --project-dir <dir>     Каталог проекта для действий (worktree) и commit
   -B, --build-job <имя>   Имя build-джобы (deploy, conflict; дефолт build_image)
@@ -36,17 +38,20 @@ const FLAGS_USAGE = `Флаги:
   --label <метка>         В mrs: только с этой меткой
   --search <текст>        В mrs: поиск по названию и описанию
   --draft / --no-draft    В mrs: только черновики / только готовые; в task push: открыть MR черновиком
+  --keep-draft            В task submit: не снимать черновик с MR (без флага снимается только с готового MR)
   --conflicts             В mrs: только конфликтующие
   --threads               В mrs: только с открытыми тредами
   --pipeline <статус>     В mrs: по статусу пайплайна (failed, success, running, none)
   --sync                  В conflict: синхронизировать ветку с target при отставании
-  --assignee me|<кто>     В mrs — исполнитель MR; в jira — чьи задачи (дефолт me)
-  --sprint current|<имя>  В jira: только задачи спринта
+  --assignee me|<кто>     В mrs — исполнитель MR; в jira — чьи задачи (дефолт me); в jira create — исполнитель
+  --sprint current|<имя>  В jira: только задачи спринта; в jira create — спринт новой задачи (имя или id)
+  --parent <EPIC>         В jira create: родитель (эпик) новой задачи
+  --append                В jira field: дописать к текущему значению с новой строки (текстовые поля)
   --component <значение>  В jira: фильтр по checkbox-полю «Компонент»
   --status <имя>          В jira: только задачи в этом статусе (дефолт — все незакрытые);
                           в task submit: статус Jira для перевода в ревью (дефолт «Ревью»)
   --jql "<запрос>"        В jira: свой JQL вместо собранного из флагов
-  --file <путь|->         В jira field/create: значение из файла или stdin
+  --file <путь|->         В jira field/create/comment, mr reply, mm edit: текст из файла или stdin
   --env <окружение>       В growthbook: окружение флага (дефолт growthbook.env)
   --type <тип>            В growthbook create: тип значения (boolean, string, number, json)
   --default <значение>    В growthbook create: дефолтное значение флага
@@ -56,12 +61,16 @@ const FLAGS_USAGE = `Флаги:
   --older-than <дни>      В worktrees gc: порог возраста для очистки
   --once                  В worker: выполнить текущие задания и выйти
   --concurrency <N>       В worker и resolve-all: число параллельных слотов (дефолт workers.concurrency, 2)
+  --last <N>              В mm thread: только последние N сообщений
+  --since <ISO-время>     В mm thread: только сообщения с этого момента
   --manual                В resolve-all: ждать кнопку Approve в Telegram перед пушем (дефолт — полный цикл без кнопки)
 
 Режим агента (env):
   GL_HELPER_JSON=1        JSON-вывод и структурированные ошибки для агентов
   GL_HELPER_YES=1         Не спрашивать подтверждение (как -y)
-  FS_HARNESS_PROJECT      Активный проект (как -P)`;
+  CLAUDECODE=1            Ставит Claude Code: подтверждения как с -y, кроме необратимых (jira delete, mm delete, growthbook delete и set, growthbook create/toggle в production, resolve-all, init, worktrees gc, queue clear)
+  FS_HARNESS_PROJECT      Активный проект (как -P)
+  FS_HARNESS_WAITS_FILE   Файл fsh wait вместо ~/.local/state/fs-harness/waits.json (тот же нужен fsh up)`;
 
 // USAGE генерируется из реестра — новую команду сюда добавлять не нужно.
 function buildUsage(cfg) {
@@ -75,7 +84,7 @@ function buildUsage(cfg) {
 
 Команды:
 ${commands}
-  help                    Эта справка
+  help [--all]            Эта справка; под Claude Code — короткая для агента, --all — полная
 
 ${FLAGS_USAGE}
 
@@ -85,7 +94,19 @@ ${examples}
 `;
 }
 
+// fetch в node прокси из env сам не берёт, а песочница Claude Code выпускает в сеть только через него.
+// NODE_USE_ENV_PROXY=1 ставим и в env: так дочерние node-процессы получат тот же прокси.
+export function useEnvProxy(env = process.env) {
+  if (!(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy)) return false;
+  // На старом node функции нет: тогда netError подскажет NODE_USE_ENV_PROXY=1.
+  if (typeof http.setGlobalProxyFromEnv !== 'function') return false;
+  http.setGlobalProxyFromEnv(env);
+  env.NODE_USE_ENV_PROXY = '1';
+  return true;
+}
+
 export async function main(argv) {
+  useEnvProxy();
   let opts;
   let rest;
   try {
@@ -101,19 +122,23 @@ export async function main(argv) {
 
   let cfg = null;
   try {
-    cfg = loadConfig(process.env, { project: opts.project });
+    cfg = loadConfig(process.env, { project: opts.project, cwd: opts.projectDir || process.cwd() });
   } catch {
     // конфиг недоступен — покажем справку без падения
   }
 
+  // Под Claude Code — короткая справка для агента, --all — полная.
+  const helpText = () => (!opts.all && process.env.CLAUDECODE
+    ? AGENT_HELP
+    : buildUsage(cfg));
   if (opts.help || rest[0] === 'help') {
-    console.log(buildUsage(cfg));
+    console.log(helpText());
     return 0;
   }
   // Голый fsh в живом терминале — это TUI; в пайпе и в CI — справка.
   if (!rest.length) {
     if (!process.stdout.isTTY || opts.json) {
-      console.log(buildUsage(cfg));
+      console.log(helpText());
       return 0;
     }
     rest = ['tui'];
@@ -128,7 +153,7 @@ export async function main(argv) {
   }
 
   try {
-    cfg ??= loadConfig(process.env, { project: opts.project });
+    cfg ??= loadConfig(process.env, { project: opts.project, cwd: opts.projectDir || process.cwd() });
     const ctx = createCtx({
       g: createGlab(undefined, { host: opts.host || cfg.host }),
       cfg,
@@ -138,10 +163,11 @@ export async function main(argv) {
     return typeof result === 'number' ? result : 0;
   } catch (err) {
     const cliErr = err instanceof CliError ? err : new CliError(String(err?.message || err));
+    const tty = process.stdin.isTTY && !process.env.CLAUDECODE;
     if (opts.json) {
       console.log(formatErrorJSON(cliErr));
     } else {
-      console.error(`\n❌ ${cliErr.message}`);
+      console.error(`\n❌ ${cancelLine(cliErr, argv, { tty })}`);
       // Упавший ран не бросаем на полпути: печатаем, что с ним делать дальше.
       if (cliErr.run) {
         console.error(`   ран: ${cliErr.run}${cliErr.runDir ? ` · ${cliErr.runDir}` : ''}`);
@@ -153,8 +179,21 @@ export async function main(argv) {
         console.error('   разобраться: fsh ask "почему упало"');
       }
     }
-    return cliErr.exitCode ?? 1;
+    return exitCodeFor(cliErr, { tty });
   }
+}
+
+// Без терминала отмену никто не выбирал сам: для вызывающего это отказ, а не успех.
+export function exitCodeFor(err, { tty }) {
+  return err.code === 'canceled' && !tty ? 1 : err.exitCode ?? 1;
+}
+
+const shellArg = (a) => (/^[\p{L}\p{N}_@%+=:,./-]+$/u.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`);
+
+// Отказ confirm() без терминала: агенты читают хвост вывода, поэтому команда повтора — в той же строке.
+export function cancelLine(err, argv, { tty }) {
+  if (tty || err.code !== 'canceled' || err.message !== 'Отменено.') return err.message;
+  return `Отменено. Повтори с -y: fsh ${argv.map(shellArg).join(' ')} -y`;
 }
 
 function parseArgs(argv) {
@@ -189,6 +228,7 @@ function parseArgs(argv) {
     else if (a === '--keep-worktree') opts.keepWorktree = true;
     else if (a === '--rebuild') opts.rebuild = true;
     else if (a === '--dry-run') opts.dryRun = true;
+    else if (a === '--all') opts.all = true;
     else if (a === '--daemon') opts.daemon = true;
     else if (a === '--auto-execute') opts.autoExecute = true;
     else if (a === '--no-judge') opts.noJudge = true;
@@ -200,6 +240,8 @@ function parseArgs(argv) {
     else if (a === '--note') opts.note = av[++i];
     else if (a === '--file') opts.file = av[++i];
     else if (a === '--attach') opts.attach = true;
+    else if (a === '--append') opts.append = true;
+    else if (a === '--parent') opts.parent = av[++i];
     else if (a === '--post') opts.post = true;
     else if (a === '--channel') opts.channel = av[++i];
     else if (a === '--out') opts.out = av[++i];
@@ -220,6 +262,7 @@ function parseArgs(argv) {
     else if (a === '--search') opts.search = av[++i];
     else if (a === '--draft') opts.draft = true;
     else if (a === '--no-draft') opts.draft = false;
+    else if (a === '--keep-draft') opts.keepDraft = true;
     else if (a === '--conflicts') opts.conflicts = true;
     else if (a === '--sync') opts.sync = true;
     else if (a === '--threads') opts.threads = true;
@@ -231,6 +274,8 @@ function parseArgs(argv) {
     else if (a === '--once') opts.once = true;
     else if (a === '--concurrency') opts.concurrency = Number(av[++i]);
     else if (a === '--manual') opts.manual = true;
+    else if (a === '--last') opts.last = Number(av[++i]);
+    else if (a === '--since') opts.since = av[++i];
     else if (a === '-h' || a === '--help') opts.help = true;
     else if (a.startsWith('-')) throw new CliError(`Неизвестный флаг "${a}". См. fsh help.`);
     else rest.push(a);

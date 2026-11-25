@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createJira, ISSUE_KEY, fieldByName, fieldIdByName, fieldText, editKind, editValueFor, openSprints } from '../src/jira.js';
 import { CliError } from '../src/errors.js';
-import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition, pickSprint, boardOf } from '../src/commands/jira.js';
+import { cmdJira, MY_ISSUES_JQL, buildJql, pickTransition, pickSprint, boardOf, pickLinkType } from '../src/commands/jira.js';
 
 // Подменённый fetch: отдаёт заготовленные ответы по порядку и пишет, что спрашивали.
 function fakeFetch(responses) {
@@ -379,8 +379,11 @@ test('jira field: неизвестное имя, незаполняемое по
     () => cmdJira(ctxWith(j), ['field', 'FD-1', 'Priority', 'Срочно'], { asObject: true, yes: true }),
     (e) => e.code === 'usage' && /Доступно: High/.test(e.message),
   );
+  // Без значения field читает поле; пустое значение — это пустой --file.
+  const emptyFile = path.join(mkdtempSync(path.join(tmpdir(), 'fsh-e-')), 'empty.txt');
+  writeFileSync(emptyFile, '  \n');
   await assert.rejects(
-    () => cmdJira(ctxWith(j), ['field', 'FD-1', 'Labels'], { asObject: true, yes: true }),
+    () => cmdJira(ctxWith(j), ['field', 'FD-1', 'Labels'], { asObject: true, yes: true, file: emptyFile }),
     (e) => e.code === 'usage' && /значение пустое/.test(e.message),
   );
   assert.deepEqual(j.stored, {});
@@ -544,4 +547,250 @@ test('jira attach get: имя вложения из Jira — чужой ввод
   assert.deepEqual(j.done.at(-1), ['get', 'https://j.example/a/7']);
 
   await assert.rejects(() => cmdJira(ctxWith(j), ['attach', 'get', 'FD-1', 'нет-такого'], { asObject: true, out: dir }), (e) => e.code === 'usage');
+});
+
+// --- связи ---
+
+const LINK_TYPES = [
+  { id: '1', name: 'Blocks', outward: 'blocks', inward: 'is blocked by' },
+  { id: '2', name: 'Relates', outward: 'relates to', inward: 'relates to' },
+  { id: '3', name: 'Cloners', outward: 'clones', inward: 'is cloned by' },
+];
+
+test('pickLinkType: имя, фраза outward и inward; неоднозначное и чужое — ошибка со списком', () => {
+  assert.deepEqual([pickLinkType(LINK_TYPES, 'blocks').type.name, pickLinkType(LINK_TYPES, 'blocks').asInward], ['Blocks', false]);
+  assert.deepEqual([pickLinkType(LINK_TYPES, 'Is Blocked By').type.name, pickLinkType(LINK_TYPES, 'is blocked by').asInward], ['Blocks', true]);
+  assert.equal(pickLinkType(LINK_TYPES, 'blocked').asInward, true);
+  assert.deepEqual([pickLinkType(LINK_TYPES, 'relates').type.name, pickLinkType(LINK_TYPES, 'relates').asInward], ['Relates', false]);
+  assert.throws(() => pickLinkType(LINK_TYPES, 'is'), (e) => e.code === 'usage' && /нескольким/.test(e.message));
+  assert.throws(() => pickLinkType(LINK_TYPES, 'дублирует'), (e) => e.code === 'usage' && /Blocks \(blocks \/ is blocked by\)/.test(e.message));
+});
+
+// Поддельная Jira связей: созданная связь появляется у задач так, как её показывает настоящая Jira —
+// у inwardIssue в связях стоит outwardIssue, и наоборот. flip портит направление для проверки read-back.
+function fakeLinks({ flip = false } = {}) {
+  const created = [];
+  const byKey = {};
+  return {
+    created,
+    linkTypes: async () => LINK_TYPES,
+    createLink: async ({ type, inward, outward }) => {
+      created.push({ type, inward, outward });
+      const [a, b] = flip ? [outward, inward] : [inward, outward];
+      (byKey[a] ??= []).push({ type: { name: type }, outwardIssue: { key: b } });
+      (byKey[b] ??= []).push({ type: { name: type }, inwardIssue: { key: a } });
+    },
+    issueLinks: async (key) => byKey[key] ?? [],
+  };
+}
+
+test('jira link: «FD-2 blocks FD-1» — FD-2 в inwardIssue, read-back со стороны FD-2', async () => {
+  const j = fakeLinks();
+  const res = await cmdJira(ctxWith(j), ['link', 'FD-2', 'blocks', 'FD-1'], { asObject: true, yes: true });
+  assert.deepEqual(j.created, [{ type: 'Blocks', inward: 'FD-2', outward: 'FD-1' }]);
+  assert.deepEqual([res.link, res.type, res.url], ['FD-2 blocks FD-1', 'Blocks', 'https://j.example/browse/FD-2']);
+});
+
+test('jira link: фраза inward разворачивает задачи в запросе', async () => {
+  const j = fakeLinks();
+  const res = await cmdJira(ctxWith(j), ['link', 'FD-1', 'is', 'blocked', 'by', 'FD-2'], { asObject: true, yes: true });
+  assert.deepEqual(j.created, [{ type: 'Blocks', inward: 'FD-2', outward: 'FD-1' }]);
+  assert.equal(res.link, 'FD-1 is blocked by FD-2');
+});
+
+test('jira link: dry-run не пишет, обратное направление после записи — ошибка, мусор — подсказка', async () => {
+  const dry = fakeLinks();
+  const res = await cmdJira(ctxWith(dry), ['link', 'FD-2', 'relates', 'FD-1'], { asObject: true, dryRun: true });
+  assert.deepEqual([res.dry_run, res.link], [true, 'FD-2 relates to FD-1']);
+  assert.deepEqual(dry.created, []);
+
+  await assert.rejects(
+    () => cmdJira(ctxWith(fakeLinks({ flip: true })), ['link', 'FD-2', 'blocks', 'FD-1'], { asObject: true, yes: true }),
+    (e) => e.code === 'api_failed' && /FD-2 is blocked by FD-1/.test(e.message),
+  );
+  for (const args of [['link', 'FD-2', 'FD-1'], ['link', 'FD-2', 'blocks', 'мусор'], ['link', 'FD-2', 'blocks', 'FD-2']]) {
+    await assert.rejects(() => cmdJira(ctxWith(fakeLinks()), args, { asObject: true, yes: true }), (e) => e.code === 'usage');
+  }
+});
+
+test('jira.js: связи — типы GET-ом, создание POST в /issueLink, связи задачи из fields=issuelinks', async () => {
+  const { j, calls } = jira([
+    { status: 200, body: { issueLinkTypes: LINK_TYPES } },
+    { status: 201, body: null },
+    { status: 200, body: { fields: { issuelinks: [{ id: '7' }] } } },
+  ]);
+  assert.equal((await j.linkTypes()).length, 3);
+  await j.createLink({ type: 'Blocks', inward: 'FD-2', outward: 'FD-1' });
+  assert.deepEqual(await j.issueLinks('FD-2'), [{ id: '7' }]);
+  assert.equal(calls[0].url, 'https://j.invalid/rest/api/2/issueLinkType');
+  assert.deepEqual([calls[1].url, calls[1].method, calls[1].body], [
+    'https://j.invalid/rest/api/2/issueLink',
+    'POST',
+    { type: { name: 'Blocks' }, inwardIssue: { key: 'FD-2' }, outwardIssue: { key: 'FD-1' } },
+  ]);
+  assert.equal(calls[2].url, 'https://j.invalid/rest/api/2/issue/FD-2?fields=issuelinks');
+});
+
+test('jira link: такая связь уже есть — второй раз не создаётся', async () => {
+  const j = fakeLinks();
+  await cmdJira(ctxWith(j), ['link', 'FD-2', 'blocks', 'FD-1'], { asObject: true, yes: true });
+  const again = await cmdJira(ctxWith(j), ['link', 'FD-1', 'is blocked by', 'FD-2'], { asObject: true, yes: true });
+  assert.equal(again.existed, true);
+  assert.equal(j.created.length, 1);
+});
+
+// --- агентские удобства: синонимы, чтение поля, родитель, флаги create -------
+
+test('jira: синонимы show/view/search/transition и справка голой подкоманды', async () => {
+  const issue = { key: 'FD-1', fields: { summary: 'S', status: { name: 'Open' } } };
+  const seen = [];
+  const j = {
+    issue: async () => issue,
+    comments: async () => ({ comments: [] }),
+    searchJql: async ({ jql }) => { seen.push(jql); return { issues: jql.startsWith('parent') ? [] : [issue], cursor: null }; },
+  };
+  for (const sub of ['show', 'view']) {
+    const r = await cmdJira(ctxWith(j), [sub, 'FD-1'], { asObject: true });
+    assert.equal(r.issue.key, 'FD-1');
+  }
+  const found = await cmdJira(ctxWith(j), ['search', 'project = FD AND status = Open'], { asObject: true });
+  assert.equal(found.jql, 'project = FD AND status = Open');
+
+  const moved = await cmdJira(ctxWith(fakeJira()), ['transition', 'FD-1', 'тестирование'], { asObject: true, yes: true });
+  assert.equal(moved.to, 'Тестирование');
+
+  for (const sub of ['create', 'field', 'parent', 'search']) {
+    const help = await cmdJira(ctxWith({}), [sub], { asObject: true });
+    assert.match(help.usage, new RegExp(`fsh jira ${sub} `));
+  }
+});
+
+test('jira field: человек ищется и по accountId, «Исполнитель» — это Assignee, латиница не выдумывается', async () => {
+  const j = {
+    ...fakeFields({ assignee: { name: 'Assignee', schema: { type: 'user', system: 'assignee' } } }),
+    assignableUsers: async () => [{ accountId: '712020:fee71ae5', displayName: 'Амир Латипов' }],
+  };
+  await cmdJira(ctxWith(j), ['field', 'FD-1', 'Assignee', '712020:fee71ae5'], { asObject: true, yes: true });
+  assert.deepEqual(j.stored.assignee, { accountId: '712020:fee71ae5' });
+  delete j.stored.assignee;
+  await cmdJira(ctxWith(j), ['field', 'FD-1', 'Исполнитель', 'Амир'], { asObject: true, yes: true });
+  assert.deepEqual(j.stored.assignee, { accountId: '712020:fee71ae5' });
+  await assert.rejects(
+    () => cmdJira(ctxWith(j), ['field', 'FD-1', 'Исполнитель', 'Amir Latipov'], { asObject: true, yes: true }),
+    (e) => e.code === 'usage' && /Амир Латипов/.test(e.message) && /accountId/.test(e.message),
+  );
+});
+
+test('jira field: accountId вне первых 50 назначаемых уходит в Jira как есть', async () => {
+  const j = {
+    ...fakeFields({ assignee: { name: 'Assignee', schema: { type: 'user', system: 'assignee' } } }),
+    assignableUsers: async () => [{ accountId: '557058:other', displayName: 'Кто-то' }],
+  };
+  await cmdJira(ctxWith(j), ['field', 'FD-1', 'Assignee', '712020:fee71ae5-539f-4d46-8831-f6ead07c3a95'], { asObject: true, yes: true });
+  assert.deepEqual(j.stored.assignee, { accountId: '712020:fee71ae5-539f-4d46-8831-f6ead07c3a95' });
+});
+
+// Поддельная Jira с картой имён: чтение поля идёт через issue(expand=names).
+function fakeNamed(fields) {
+  const j = fakeFields();
+  Object.assign(j.stored, fields);
+  const names = { customfield_10242: 'Technical details for QA', description: 'Description', labels: 'Labels' };
+  return { ...j, issue: async () => ({ key: 'FD-1', names, fields: { ...j.stored } }) };
+}
+
+test('jira field без значения — чтение как есть, без записи; --json отдаёт сырое значение', async () => {
+  const j = fakeNamed({ customfield_10242: 'h3. Шаги\n# открыть', description: 'текст' });
+  let wrote = false;
+  j.updateIssue = async () => { wrote = true; };
+  const r = await cmdJira(ctxWith(j), ['field', 'FD-1', 'technical details for qa'], { asObject: true });
+  assert.deepEqual([r.read, r.field_id, r.text, r.value], [true, 'customfield_10242', 'h3. Шаги\n# открыть', 'h3. Шаги\n# открыть']);
+  const d = await cmdJira(ctxWith(j), ['field', 'FD-1', 'Описание'], { asObject: true });
+  assert.equal(d.text, 'текст');
+  await assert.rejects(() => cmdJira(ctxWith(j), ['field', 'FD-1', 'Нет такого'], { asObject: true }), (e) => e.code === 'usage' && /Technical details for QA/.test(e.message));
+  assert.equal(wrote, false);
+});
+
+test('jira field --append дописывает текст с новой строки, нетекстовое поле — ошибка', async () => {
+  const j = fakeNamed({ customfield_10242: 'h3. Было\n' });
+  const r = await cmdJira(ctxWith(j), ['field', 'FD-1', 'Technical details for QA', '* новая строка'], { asObject: true, yes: true, append: true });
+  assert.equal(j.stored.customfield_10242, 'h3. Было\n* новая строка');
+  assert.equal(r.written, 'h3. Было\n* новая строка');
+  const empty = fakeNamed({});
+  await cmdJira(ctxWith(empty), ['field', 'FD-1', 'Technical details for QA', 'первая'], { asObject: true, yes: true, append: true });
+  assert.equal(empty.stored.customfield_10242, 'первая');
+  await assert.rejects(
+    () => cmdJira(ctxWith(j), ['field', 'FD-1', 'Labels', 'x'], { asObject: true, yes: true, append: true }),
+    (e) => e.code === 'usage' && /--append/.test(e.message),
+  );
+});
+
+function fakeParent({ sticks = true } = {}) {
+  const done = [];
+  let parent = null;
+  return {
+    done,
+    issue: async () => ({ key: 'FD-1', fields: { parent: parent ? { key: parent } : undefined } }),
+    updateIssue: async (key, fields) => { done.push(['update', key, fields]); if (sticks) parent = fields.parent.key; },
+  };
+}
+
+test('jira parent: ставит эпик через поле parent и сверяет чтением; field Parent ведёт туда же', async () => {
+  const j = fakeParent();
+  const dry = await cmdJira(ctxWith(j), ['parent', 'FD-1', 'FD-100'], { asObject: true, dryRun: true });
+  assert.deepEqual([dry.dry_run, dry.to], [true, 'FD-100']);
+  assert.deepEqual(j.done, []);
+  const r = await cmdJira(ctxWith(j), ['parent', 'FD-1', 'FD-100'], { asObject: true, yes: true });
+  assert.deepEqual([r.from, r.to], ['без родителя', 'FD-100']);
+  assert.deepEqual(j.done, [['update', 'FD-1', { parent: { key: 'FD-100' } }]]);
+
+  const viaField = fakeParent();
+  await cmdJira(ctxWith(viaField), ['field', 'FD-1', 'Parent', 'FD-7'], { asObject: true, yes: true });
+  assert.deepEqual(viaField.done, [['update', 'FD-1', { parent: { key: 'FD-7' } }]]);
+
+  await assert.rejects(() => cmdJira(ctxWith(fakeParent({ sticks: false })), ['parent', 'FD-1', 'FD-100'], { asObject: true, yes: true }), (e) => e.code === 'api_failed');
+  await assert.rejects(() => cmdJira(ctxWith(j), ['parent', 'FD-1', 'эпик'], { asObject: true, yes: true }), (e) => e.code === 'usage');
+});
+
+test('jira create --parent --sprint --assignee: задача по правилам команды одной командой', async () => {
+  const j = {
+    ...fakeCrud(),
+    createTypes: async () => [{ id: '10001', name: 'Task' }],
+    boards: async () => ({ values: [{ id: 1 }] }),
+    sprints: async () => ({ values: [{ id: 4176, name: 'Канбан доска Growth' }] }),
+    projectUsers: async () => [],
+    myself: async () => ({ accountId: 'me1', displayName: 'Я' }),
+  };
+  const created = [];
+  const moved = [];
+  j.createIssue = async (fields) => { created.push(fields); return { key: 'FD-9' }; };
+  j.moveToSprint = async (id, keys) => { moved.push([id, keys]); };
+  const opts = { asObject: true, yes: true, parent: 'FD-100', sprint: '4176', assignee: 'me' };
+
+  const dry = await cmdJira(ctxWith(j), ['create', 'FD', 'task', 'новая'], { ...opts, dryRun: true });
+  assert.deepEqual([dry.parent, dry.sprint, dry.assignee], ['FD-100', '4176', 'me']);
+  assert.deepEqual(created, []);
+
+  const r = await cmdJira(ctxWith(j), ['create', 'FD', 'task', 'новая'], opts);
+  assert.equal(r.key, 'FD-9');
+  assert.deepEqual(created[0].parent, { key: 'FD-100' });
+  assert.deepEqual(moved, [[4176, ['FD-9']]]);
+  assert.deepEqual(created[0].assignee, { accountId: 'me1' });
+
+  // Опечатка в спринте или исполнителе ловится до создания, а не оставляет задачу наполовину.
+  await assert.rejects(() => cmdJira(ctxWith(j), ['create', 'FD', 'task', 'новая'], { ...opts, sprint: 'нет такого' }), (e) => e.code === 'usage');
+  await assert.rejects(() => cmdJira(ctxWith(j), ['create', 'FD', 'task', 'новая'], { ...opts, assignee: 'Amir' }), (e) => e.code === 'usage');
+  assert.equal(created.length, 1);
+
+  // Спринт не принялся уже после создания — ошибка называет ключ созданной задачи.
+  j.moveToSprint = async () => { throw new Error('500'); };
+  await assert.rejects(() => cmdJira(ctxWith(j), ['create', 'FD', 'task', 'новая'], opts), (e) => /FD-9 создана/.test(e.message));
+});
+
+test('jira comment --file: длинный текст из файла или stdin, а не из argv', async () => {
+  const j = fakeWriter();
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'fsh-c-')), 'c.md');
+  writeFileSync(file, 'строка 1\nстрока 2\n');
+  const r = await cmdJira(ctxWith(j), ['comment', 'FD-1'], { asObject: true, yes: true, file });
+  assert.equal(r.comment, 'строка 1\nстрока 2');
+  assert.deepEqual(j.done.at(-1), ['comment', 'FD-1', 'строка 1\nстрока 2']);
 });

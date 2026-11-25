@@ -106,7 +106,7 @@ export const conflictAction = {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'номер MR или часть имени ветки' },
-        agent: { type: 'string', description: 'какой агент решает конфликт (имя профиля из конфига: cc, ccq, cco, ccd, agy)' },
+        agent: { type: 'string', description: 'какой агент решает конфликт (имя профиля из конфига: cc, ccq, cco, ccd, opencode, agy)' },
       },
       required: ['query'],
     },
@@ -258,9 +258,11 @@ export const conflictAction = {
       const freshMR = await g.getMR(repo, mr.iid);
       const pipeline = await ensureMRPipeline(g, repo, freshMR || mr);
       const jobs = await g.getJobs(repo, pipeline.id);
-      const build = findJob(jobs, opts.buildJob ?? 'build_image');
+      // resolve-all и watch флаг не передают: имя джобы тогда из конфига проекта.
+      const buildJob = opts.buildJob || opts.cfg?.buildJob || 'build_image';
+      const build = findJob(jobs, buildJob);
       if (!build) {
-        throw new CliError(`Build-джоба "${opts.buildJob ?? 'build_image'}" не найдена в пайплайне #${pipeline.id}.\nДоступные: ${jobs.map((j) => j.name).join(', ')}`, 1, 'job_not_found');
+        throw new CliError(`Build-джоба "${buildJob}" не найдена в пайплайне #${pipeline.id}.\nДоступные: ${jobs.map((j) => j.name).join(', ')}`, 1, 'job_not_found');
       }
       say(`▶ Запускаю build: ${build.name} (#${build.id}) в пайплайне #${pipeline.id}`);
       const started = await startJob(g, repo, build);

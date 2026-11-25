@@ -7,7 +7,7 @@ import { finish } from '../output.js';
 import { confirm } from '../ui.js';
 import { CliError } from '../errors.js';
 import { issueUrl, pickTransition } from './jira.js';
-import { postReview } from './mm.js';
+import { findTaskPost, permalink, postReview } from './mm.js';
 
 // Ветки, в которые нельзя ни переключаться работой, ни пушить задачу.
 // targetBranch проекта добавляется к списку на месте.
@@ -205,11 +205,15 @@ async function submit(ctx, [maybeKey], opts) {
 
   const to = t ? t.to?.name ?? t.name : from;
   const info = { ok: true, key, branch, mr: { iid: mr.iid, web_url: mr.web_url }, jira: { from, to } };
+  // Черновик ставят и по внешней причине (ждём бэк, контент, флаг): снимаем только с готового MR.
+  const keepWhy = wasDraft ? (opts.keepDraft ? 'остаётся черновиком (--keep-draft)' : notReady(await ctx.g.getMR(ctx.repo, mr.iid))) : null;
+  const unDraft = wasDraft && !keepWhy;
+  const mrNote = !wasDraft ? 'уже не черновик' : unDraft ? 'черновик снят' : `${keepWhy}; снять потом: glab mr update ${mr.iid} --ready`;
   if (opts.dryRun) {
     return { ...info, dry_run: true, plan: [
       ...selfFill.map((f) => `Jira ${key}: «${f.name}» ← я`),
       t ? `Jira ${key}: ${from} → ${to}` : `Jira ${key}: перехода «${statusName}» нет, статус не трогаю`,
-      wasDraft ? `PUT /merge_requests/${mr.iid}: снять черновик (title: ${title})` : `MR !${mr.iid} уже не черновик`,
+      unDraft ? `PUT /merge_requests/${mr.iid}: снять черновик (title: ${title})` : `MR !${mr.iid}: ${wasDraft ? `черновик остаётся — ${keepWhy}` : mrNote}`,
       'сообщение в Mattermost (сценарий review)',
     ] };
   }
@@ -238,11 +242,34 @@ async function submit(ctx, [maybeKey], opts) {
   for (const n of flow.requiredFields ?? []) if (fieldIdByName(before, n)) steps.push({ step: `«${n}»`, ok: true, note: 'заполнено' });
   if (flow.mrBlocks?.length) steps.push({ step: 'описание MR', ok: true, note: flow.mrBlocks.join(', ') });
 
-  const updated = wasDraft ? await ctx.g.updateMR(ctx.repo, mr.iid, { title }) : mr;
-  steps.push({ step: 'MR', ok: true, note: wasDraft ? 'черновик снят' : 'уже не черновик' });
-  const posted = await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
-  steps.push({ step: 'Mattermost', ok: Boolean(posted?.ok), note: posted?.scenario || posted?.channel || '' });
-  return { ...info, title: updated?.title ?? title, draft_removed: wasDraft, jira: { from, to: now, transition: t?.name ?? null }, posted, steps };
+  const updated = unDraft ? await ctx.g.updateMR(ctx.repo, mr.iid, { title }) : mr;
+  steps.push({ step: 'MR', ok: true, note: mrNote });
+  // Повторный submit не должен звать ревьюеров второй раз: отвечают в тред первого поста.
+  const prior = await findTaskPost(ctx, key, opts).catch((err) => {
+    throw new CliError(`Jira и MR уже сдвинуты, но пост в Mattermost не отправлен: не проверить, был ли он (${err.message}). `
+      + `Отправь сам из каталога задачи (MR берётся по текущей ветке): fsh mm review ${key}`, 1, 'api_failed');
+  });
+  const existed = prior.root ? { ok: true, existed: true, post_id: prior.root.id, post_url: await permalink(ctx, prior.root.id, prior.target) } : null;
+  const posted = existed ?? await postReview(ctx, { iid: mr.iid, mrUrl: mr.web_url, key, title: updated?.title ?? title }, opts);
+  const mmNote = existed ? `уже есть: ${existed.post_url ?? existed.post_id}` : posted?.scenario || posted?.channel || '';
+  steps.push({ step: 'Mattermost', ok: Boolean(posted?.ok), note: mmNote });
+  return { ...info, title: updated?.title ?? title, draft_removed: unDraft, jira: { from, to: now, transition: t?.name ?? null }, posted, steps };
+}
+
+const CHECKING = ['unchecked', 'checking', 'preparing', 'cannot_be_merged_recheck'];
+
+// Почему MR ещё не готов к снятию черновика; null — готов.
+function notReady(mr) {
+  // manual — всё прошло, ждут только ручные джобы (build/deploy в fitstars-nuxt).
+  const status = mr?.head_pipeline?.status;
+  if (!['success', 'manual'].includes(status)) return `черновик оставлен: пайплайн ${status ?? 'не запускался'}`;
+  // Пока слияние не перепроверено, has_conflicts=false врёт: на проекте 36 так и с конфликтом (recheck).
+  if (CHECKING.includes(mr.merge_status) || CHECKING.includes(mr.detailed_merge_status)) {
+    return 'черновик оставлен: GitLab ещё проверяет слияние';
+  }
+  if (mr.has_conflicts) return 'черновик оставлен: конфликт с целевой веткой';
+  if (mr.blocking_discussions_resolved === false) return 'черновик оставлен: есть нерешённые треды';
+  return null;
 }
 
 // Поля по названию из taskFlow.requiredFields. Поля нет у типа задачи (Tech task) — не требуем.

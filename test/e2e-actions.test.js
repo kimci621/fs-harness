@@ -61,6 +61,9 @@ before(() => {
   // мерж, и без отдельной ветки следующие conflict-тесты уйдут в skip.
   git(['branch', 'conflict-stage', 'source'], project);
   git(['push', 'origin', 'conflict-stage'], project);
+  // `conflict-cfg-build` — своя ветка тесту «build-джоба из конфига проекта», по той же причине.
+  git(['branch', 'conflict-cfg-build', 'source'], project);
+  git(['push', 'origin', 'conflict-cfg-build'], project);
   // `ci-src` — ветка для ci-fix: он в неё пушит фикс.
   git(['branch', 'ci-src', 'source'], project);
   git(['push', 'origin', 'ci-src'], project);
@@ -346,6 +349,23 @@ test('conflict: build-джоба ещё created (стадия tests идёт) �
   assert.equal(res.ok, true);
   assert.equal(res.build.status, 'success');
   assert.deepEqual(calls.played, [5], 'manual-джоба не сыграна после того, как стадия дошла');
+});
+
+test('conflict: build-джоба берётся из buildJob конфига проекта, когда флага нет', async () => {
+  // Живой случай: resolve-all не передаёт buildJob, а в fitstars-backend джоба зовётся build_docker.
+  const { g, calls } = makeG({
+    getMR: async (_repo, iid) => ({
+      iid: Number(iid), title: 'тестовый MR', web_url: 'http://x/mr', sha: 'abc',
+      source_branch: 'conflict-cfg-build', target_branch: 'target', head_pipeline: null,
+    }),
+    getJobs: async () => [{ id: 6, name: 'build_docker', stage: 'build', status: calls.played.length ? 'success' : 'manual', web_url: 'http://x/j6' }],
+    getJob: async (_repo, id) => ({ id, name: 'build_docker', status: 'success', web_url: 'http://x/j6' }),
+  });
+  const o = opts({ agent: 'conflict-bot', makeProvider: fakeJudge('approve'), intervalMs: 5 });
+  o.cfg = { ...o.cfg, buildJob: 'build_docker' };
+  const res = await runActionCLI(conflictAction, { g, repo: 'r/r' }, ['7'], o);
+  assert.equal(res.ok, true);
+  assert.deepEqual(calls.played, [6], 'build_docker из конфига не запущена');
 });
 
 test('conflict: конфликтов нет — skip, агент не запускается', async () => {

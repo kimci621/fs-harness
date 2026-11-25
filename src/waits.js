@@ -1,6 +1,6 @@
 // fsh wait — список «жду ответа» на один день: тред Mattermost или комментарии задачи Jira.
 // Проверяет его демон watch: ответ пришёл — сообщение в Telegram и пункт снят; день сменился — снят молча.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -10,23 +10,45 @@ import { getTelegramTarget } from './notify.js';
 import { sendMessage } from './tgbot.js';
 
 export const WAITS_FILE = path.join(homedir(), '.local', 'state', 'fs-harness', 'waits.json');
+// Песочница Claude Code в ~/.local/state не пускает: путь переносится env, одинаковым у агента и fsh up.
+export const waitsFile = (env = process.env) => env.FS_HARNESS_WAITS_FILE || WAITS_FILE;
 const JIRA_KEY = /^[A-Z][A-Z0-9]+-\d+$/;
 
 export const today = (ms = Date.now()) => new Date(ms).toLocaleDateString('sv');
 
-export function readWaits(file = WAITS_FILE) {
-  if (!existsSync(file)) return [];
+export function readWaits(file = waitsFile()) {
+  let text;
   try {
-    const list = JSON.parse(readFileSync(file, 'utf8'));
+    text = readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw accessError(err, file);
+  }
+  try {
+    const list = JSON.parse(text);
     return Array.isArray(list) ? list : [];
   } catch {
     return [];
   }
 }
 
-export function writeWaits(list, file = WAITS_FILE) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(list, null, 2)}\n`);
+export function writeWaits(list, file = waitsFile()) {
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(list, null, 2)}\n`);
+  } catch (err) {
+    throw accessError(err, file);
+  }
+}
+
+function accessError(err, file) {
+  if (err.code !== 'EPERM' && err.code !== 'EACCES') return err;
+  return new CliError(
+    `Нет доступа к файлу ожиданий ${file} (${err.code}). В песочнице задай другой путь: FS_HARNESS_WAITS_FILE=<файл> `
+      + '— тот же и у fsh up, иначе демон пункт не увидит.',
+    1,
+    'permission_denied',
+  );
 }
 
 export function makeWait(kind, ref, { project = '', from = null, note = '', now = Date.now() } = {}) {
@@ -85,7 +107,7 @@ export function replyText(w, reply) {
 }
 
 // Шаг демона: файл пуст — ни сети, ни записи.
-export async function runWaits({ loadCfg, env, makeCtx, file = WAITS_FILE, now = Date.now(), log = () => {}, fetchImpl }) {
+export async function runWaits({ loadCfg, env, makeCtx, file = waitsFile(env), now = Date.now(), log = () => {}, fetchImpl }) {
   const list = readWaits(file);
   if (!list.length) return { keep: [], done: [] };
   const target = getTelegramTarget(loadCfg(env, {}));
@@ -107,7 +129,7 @@ export async function runWaits({ loadCfg, env, makeCtx, file = WAITS_FILE, now =
   return res;
 }
 
-export async function cmdWait(ctx, [sub = 'list', kind, ref], opts = {}, { file = WAITS_FILE, now = Date.now() } = {}) {
+export async function cmdWait(ctx, [sub = 'list', kind, ref], opts = {}, { file = waitsFile(), now = Date.now() } = {}) {
   const list = readWaits(file);
   if (sub === 'add') {
     const w = makeWait(kind, ref, { project: ctx.cfg?.activeProject ?? '', from: opts.from, note: opts.note, now });

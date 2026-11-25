@@ -80,7 +80,7 @@ export async function cmdWorktrees(ctx, args = [], opts = {}) {
       return result;
     }
 
-    if (!opts.yes && !opts.json && !confirm(`Удалить ${candidates.length} worktree? [y/N] `)) {
+    if (!opts.yes && !confirm(`Удалить ${candidates.length} worktree? [y/N] `, { irreversible: true })) {
       throw new CliError('Отменено.', 1, 'canceled');
     }
 

@@ -1,6 +1,7 @@
 import { cmdMRS } from './commands/mrs.js';
 import { cmdMR } from './commands/mr.js';
 import { cmdMRComments } from './commands/mr-comments.js';
+import { cmdMRThread } from './commands/mr-thread.js';
 import { cmdJobs } from './commands/jobs.js';
 import { cmdRun } from './commands/run.js';
 import { cmdDeploy } from './commands/deploy.js';
@@ -19,7 +20,7 @@ import { cmdJira } from './commands/jira.js';
 import { cmdTask } from './commands/task.js';
 import { cmdGrowthBook } from './commands/growthbook.js';
 import { cmdFlow } from './commands/flow.js';
-import { cmdInit } from './commands/init.js';
+import { cmdInit, cmdInitEverywhere } from './commands/init.js';
 import { cmdWatch, cmdWatchDaemon, cmdWatchInstall } from './commands/watch.js';
 import { cmdWait, renderWait } from './waits.js';
 import { cmdQueue } from './commands/queue.js';
@@ -105,10 +106,12 @@ export const COMMANDS = [
   },
   {
     name: 'mr',
-    usage: 'mr <ветка|номер>',
-    description: 'Один MR в том же формате (часть имени ветки, неточный поиск)',
-    example: 'fsh mr special-offer',
-    run: (ctx, args, opts) => withRepoHost(ctx, () => cmdMR(ctx.g, ctx.repo, args[0], { json: opts.json })),
+    usage: 'mr <ветка|номер> | mr reply <mr> <#N|id треда> (--file <путь>|"<текст>") | mr resolve <mr> <#N|id треда>',
+    description: 'Один MR в том же формате (часть имени ветки, неточный поиск); reply — ответ в тред ревью, resolve — закрыть тред (номер треда из mr-comments)',
+    example: 'fsh mr special-offer\n  fsh mr reply 2547 "#2" --file reply.md -y\n  fsh mr resolve 2547 "#2" -y',
+    run: (ctx, args, opts) => withRepoHost(ctx, () => (['reply', 'resolve'].includes(args[0])
+      ? cmdMRThread(ctx.g, ctx.repo, args[0], args.slice(1), opts)
+      : cmdMR(ctx.g, ctx.repo, args[0], { json: opts.json }))),
     mcp: {
       description: 'Один MR по номеру (!2547, 2547) или части имени ветки (неточный поиск). Только чтение.',
       inputSchema: {
@@ -213,8 +216,8 @@ export const COMMANDS = [
   fromAction(implementAction),
   {
     name: 'jira',
-    usage: 'jira [mine|<KEY>|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|field <KEY> "<поле>" <значение>|attach <KEY> [файл...]|attach get <KEY> [имя]|create <ПРОЕКТ> <тип> <summary>|delete <KEY>]',
-    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, смена статуса и спринта, комментарий, запись любого поля, вложения (список, аплоад, выгрузка), создание и удаление задачи',
+    usage: 'jira [mine|<KEY>|show <KEY>|search "<JQL>"|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|--file|field <KEY> "<поле>" [значение] [--append]|parent <KEY> <EPIC>|attach <KEY> [файл...]|attach get <KEY> [имя]|create <ПРОЕКТ> <тип> <summary> [--parent --sprint --assignee]|link <KEY> <тип> <KEY2>|delete <KEY>]',
+    description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, поиск по JQL, смена статуса и спринта, комментарий, чтение и запись (или дописывание) любого поля, родитель-эпик, вложения (список, аплоад, выгрузка), создание с эпиком, спринтом и исполнителем, связь и удаление задачи',
     example: 'fsh jira mine --sprint current --component Frontend',
     run: (ctx, args, opts) => cmdJira(ctx, args, opts),
     mcp: {
@@ -228,7 +231,7 @@ export const COMMANDS = [
   },
   {
     name: 'task',
-    usage: 'task start <KEY> | task push [KEY] [--target <ветка>] | task submit [KEY] [--status <имя>] | task judge [KEY]',
+    usage: 'task start <KEY> | task push [KEY] [--target <ветка>] | task submit [KEY] [--status <имя>] [--keep-draft] | task judge [KEY]',
     description: 'Взять задачу в работу (ветка feature/<KEY> от целевой), запушить её с открытием MR, отправить в ревью команде, показать приёмку судьи',
     example: 'fsh task start FD-7719',
     run: (ctx, args, opts) => cmdTask(ctx, args, opts),
@@ -253,9 +256,9 @@ export const COMMANDS = [
   },
   {
     name: 'growthbook',
-    usage: 'growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|set <id> <значение>|delete <id>]',
-    description: 'Фича-флаги GrowthBook: список, один флаг, создание, включение/выключение в окружении, дефолтное значение, удаление',
-    example: 'fsh growthbook toggle new-onboarding on --env production',
+    usage: 'growthbook [list|get <id>|create <id> <on|off>|toggle <id> <on|off>|set <id> <значение>|delete <id>|help]',
+    description: 'Фича-флаги GrowthBook: список, один флаг, создание, включение/выключение в окружении, дефолтное значение, удаление; help — примеры, ключ, хост и тело create',
+    example: 'fsh growthbook toggle new-onboarding on --env production\n  fsh growthbook create new-onboarding off -y\n  fsh growthbook help',
     run: (ctx, args, opts) => cmdGrowthBook(ctx, args, opts),
     mcp: {
       description: 'Фича-флаги GrowthBook. list/get — только чтение; create создаёт boolean-флаг, toggle включает или выключает флаг в окружении, set меняет дефолтное значение (из поля default) во всех окружениях, delete удаляет флаг необратимо (меняет продакшен-поведение приложения).',
@@ -297,7 +300,7 @@ export const COMMANDS = [
         type: 'object',
         properties: {
           dir: { type: 'string', description: 'каталог репозитория (по умолчанию текущий)' },
-          agent: { type: 'string', description: 'профиль агента из конфига (cc, ccq, cco, ccd, agy)' },
+          agent: { type: 'string', description: 'профиль агента из конфига (cc, ccq, cco, ccd, opencode, agy)' },
         },
       },
       call: (ctx, a) => {
@@ -329,10 +332,14 @@ export const COMMANDS = [
   },
   {
     name: 'init',
-    usage: 'init [--check] [--project-dir <dir>]',
-    description: 'Поставить в проект скилл fsh (.claude/skills/fsh) и разрешение на запуск; --check сверяет с реестром',
+    usage: 'init [everywhere] [--check] [--project-dir <dir>]',
+    description: 'Поставить в проект скилл fsh (.claude/skills/fsh) и разрешение на запуск; everywhere — обновить во всех каталогах из init-dirs.json рядом с конфигом fsh; --check сверяет с реестром',
     example: 'fsh init --project-dir ~/Projects/fitstars-frontend',
-    run: (ctx, args, opts) => cmdInit(COMMANDS, ctx, opts),
+    run: (ctx, args, opts) => {
+      if (args[0] === 'everywhere' && args.length === 1) return cmdInitEverywhere(COMMANDS, opts);
+      if (args.length) throw new CliError(`Неизвестные аргументы init: ${args.join(' ')}. Есть только: init everywhere.`, 1, 'usage');
+      return cmdInit(COMMANDS, ctx, opts);
+    },
   },
   {
     name: 'doctor',
@@ -355,8 +362,8 @@ export const COMMANDS = [
   },
   {
     name: 'mm',
-    usage: 'mm [login <логин>|whoami|channels [строка]|post <сценарий|канал> "<текст>"|review [KEY]|reply <KEY|permalink> "<текст>"|thread <permalink>|react <permalink> <эмодзи>]',
-    description: 'Сообщения в Mattermost от своего имени: вход по паролю, проверка сессии, поиск канала, отправка в канал, сценарий «задача уехала в ревью», ответ в тред задачи, чтение треда по ссылке, реакция на пост',
+    usage: 'mm [login <логин>|whoami|channels [строка]|post <сценарий|канал|@ник> "<текст>"|review [KEY]|reply <KEY|permalink> "<текст>"|thread <permalink> [--last N] [--since <дата>]|react <permalink> <эмодзи>|edit <permalink> "<текст>"|delete <permalink>]',
+    description: 'Сообщения в Mattermost от своего имени: вход по паролю, проверка сессии, поиск канала, отправка в канал или в личку (@ник) с permalink поста в ответе, сценарий «задача уехала в ревью», ответ в тред задачи, чтение треда по ссылке (хвост --last, свежее --since), реакция на пост, правка и удаление своего поста',
     example: 'fsh mm review FD-7655 --dry-run',
     run: (ctx, args, opts) => cmdMM(ctx, args, opts),
     // MCP-инструмента намеренно нет: запись в общий чат не должна уходить мимо человека,
@@ -391,10 +398,10 @@ export const COMMANDS = [
   },
   {
     name: 'config',
-    usage: 'config init|show|migrate|agent [имя]',
-    description: 'Настроить/показать конфиг, перевести на v2 или выбрать активного агента',
-    example: 'fsh config agent agy',
-    run: (ctx, args, opts) => cmdConfig(args, opts),
+    usage: 'config init|show|get <ключ>|migrate|agent [имя]',
+    description: 'Настроить/показать конфиг, одно значение (get repo|host|dir|project|targetBranch|branchPattern), перевести на v2 или выбрать активного агента',
+    example: 'fsh config get repo\n  fsh config agent opencode',
+    run: (ctx, args, opts) => cmdConfig(args, opts, ctx.cfg),
   },
   {
     name: 'watch',

@@ -206,7 +206,7 @@ export const reviewAction = {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'номер MR или часть имени ветки' },
-        agent: { type: 'string', description: 'какой агент ревьюит (имя профиля из конфига: cc, ccq, cco, ccd, agy)' },
+        agent: { type: 'string', description: 'какой агент ревьюит (имя профиля из конфига: cc, ccq, cco, ccd, opencode, agy)' },
         post: { type: 'boolean', description: 'отправить треды с замечаниями в GitLab' },
       },
       required: ['query'],
