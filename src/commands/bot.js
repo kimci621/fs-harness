@@ -19,7 +19,7 @@ import {
   escapeHtml, formatMRTelegram, formatMRCard, formatJobsTelegram,
   formatCommentsTelegram, formatTasksListTelegram, formatTaskCardTelegram,
   formatStatusTelegram, formatWatchTelegram, formatHelpTelegram,
-  findFixButton, formatResolveAllTelegram, BOT_COMMANDS, tgCall,
+  findFixButton, issueFixButton, fixButtons, sendButtons, formatResolveAllTelegram, BOT_COMMANDS, tgCall,
 } from '../tgbot.js';
 import { cmdResolveAll } from './resolve-all.js';
 import { runQaDeploy } from './qa-bot.js';
@@ -223,6 +223,21 @@ async function runFixCallback(cb, d) {
     await sayTo(cb.chatId, `⏳ По !${cb.iid} resolve-all уже идёт, жду его итога.`);
     return;
   }
+  // Провал приходит со свежей кнопкой на тот же MR: старая могла протухнуть, пока шёл прогон.
+  const sayRetry = async (text) => {
+    let nonce;
+    try {
+      nonce = issueFixButton(stateRoot, { project: button.project, repo: button.repo, iid: cb.iid });
+    } catch (e) {
+      d.log?.(`кнопка «Повторить» не выдана: ${e.message}`);
+      return sayTo(cb.chatId, text);
+    }
+    try {
+      await sendButtons(t.token, cb.chatId, text, fixButtons(cb.iid, nonce, '🔁 Повторить'), { fetchImpl });
+    } catch (e) {
+      d.log?.(`ответ не ушёл: ${e.message}`);
+    }
+  };
   fixing.add(key);
   await answer('Запускаю');
   await sayTo(cb.chatId, `▶ resolve-all <b>!${cb.iid}</b>: merge target → треды → реплика в MM. Итог пришлю сюда.`);
@@ -232,9 +247,10 @@ async function runFixCallback(cb, d) {
     try {
       const ctx = makeCtx(loadCfg(env, button.project ? { project: button.project } : {}));
       const res = await resolveAll(ctx, { only: [cb.iid], yes: true, asObject: true, runsDir, signal: ac.signal });
-      await sayTo(cb.chatId, formatResolveAllTelegram(res, cb.iid));
+      const text = formatResolveAllTelegram(res, cb.iid);
+      await (text.startsWith('❌') ? sayRetry(text) : sayTo(cb.chatId, text));
     } catch (e) {
-      await sayTo(cb.chatId, `❌ resolve-all !${cb.iid} упал: ${escapeHtml(e.message)}\nПовтори кнопкой или <code>fsh resolve-all ${cb.iid}</code>.`);
+      await sayRetry(`❌ resolve-all !${cb.iid} упал: ${escapeHtml(e.message)}\nПовтори кнопкой ниже или <code>fsh resolve-all ${cb.iid}</code>.`);
     } finally {
       activeAgents?.delete(ac);
       fixing.delete(key);

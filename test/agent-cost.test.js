@@ -199,3 +199,43 @@ test('engine: claude-агент запускается с выключенным
   assert.equal(JSON.parse(args[i + 1]).enabledPlugins['agent-flow@agent-flow'], false);
   rmSync(root, { recursive: true, force: true });
 });
+
+test('engine: упавший процесс агента — transient, ошибка в потоке agy — нет', async () => {
+  // Живой случай: claude получил пустой stdin и вышел с кодом 1 за 2с; повтор через минуты проходит.
+  const root = mkdtempSync(path.join(tmpdir(), 'fs-harness-transient-test-'));
+  const project = path.join(root, 'repo');
+  initGitRepo(project);
+  const spec = {
+    name: 'test-transient',
+    action: {
+      title: 'Тест сбоя', target: 'none', writes: false, isolation: 'checkout', prompt: 'commit',
+      agent: { default: 'cc' }, judge: { gate: 'none', role: 'acceptance' },
+      precheck: () => ({ workspace: { project } }),
+      context: () => ({ pattern: 'feat' }), goal: () => 'тест',
+      verify: () => ({ head_sha: '123' }), result: () => ({ ok: true }),
+    },
+  };
+  const spawnWith = (line, code) => () => {
+    const events = createEventStream();
+    events.push({ t: 'log', stream: line.stream, text: line.text });
+    return { events, result: Promise.resolve({ ok: false, code }), abort: () => {} };
+  };
+  const failOf = async (agent, spawn) => {
+    const cfg = { agents: { cc: { bin: 'claude' }, ag: { bin: 'agy', family: 'agy' } } };
+    const run = runAction(spec, { cfg }, {}, { agent, cfg, runsDir: path.join(root, 'runs'), noJudge: true, yes: true, spawnAgentImpl: spawn });
+    return run.result.then(() => assert.fail('ран не упал'), (e) => e);
+  };
+
+  const crashed = await failOf('cc', spawnWith({ stream: 'stderr', text: 'Error: Input must be provided either through stdin' }, 1));
+  assert.equal(crashed.code, 'agent_failed');
+  assert.equal(crashed.transient, true);
+
+  const limited = await failOf('cc', spawnWith({ stream: 'stderr', text: '429 Too Many Requests, retry after 90 seconds' }, 1));
+  assert.equal(limited.code, 'agent_rate_limited');
+  assert.equal(limited.transient, true);
+
+  const answered = await failOf('ag', spawnWith({ stream: 'stdout', text: JSON.stringify({ event: 'result', result: { status: 'ERROR', error: 'нет доступа к репо' } }) }, 0));
+  assert.equal(answered.code, 'agent_failed');
+  assert.ok(!answered.transient, 'ответ агента об ошибке — не временный сбой');
+  rmSync(root, { recursive: true, force: true });
+});

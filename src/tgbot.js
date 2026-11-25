@@ -211,7 +211,7 @@ export function findFixButton(root, iid, nonce, now = Date.now()) {
   return b && b.iid === iid && now - b.at < FIX_BUTTON_TTL_MS ? b : null;
 }
 
-export const fixButtons = (iid, nonce) => [[{ text: '🔧 Обновить и разобрать', callback_data: `fix:${iid}:${nonce}` }]];
+export const fixButtons = (iid, nonce, text = '🔧 Обновить и разобрать') => [[{ text, callback_data: `fix:${iid}:${nonce}` }]];
 
 // Одно сообщение на MR за опрос: что случилось с ним с прошлого снимка.
 export function formatWatchEvent(e, repo) {

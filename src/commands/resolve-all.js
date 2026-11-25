@@ -53,7 +53,7 @@ export async function findCandidates(ctx, probe, only = []) {
 
 // Провал действия: id рана, где упало и чем доигрывать. Дошёл до verify, но не судья — значит publish.
 export function failure(err, runsDir) {
-  const out = { status: 'failed', code: err.code ?? 'failed', error: err.message };
+  const out = { status: 'failed', code: err.code ?? 'failed', error: err.message, ...(err.transient ? { transient: true, retry_after: err.retry_after ?? null } : {}) };
   if (!err.run) return out;
   let verified = false;
   try {

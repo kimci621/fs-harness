@@ -16,6 +16,19 @@ import { runWaits } from '../waits.js';
 
 const BOT_STATE_ROOT = path.join(homedir(), '.local', 'state', 'fs-harness');
 
+// Временный сбой autoResolve демон повторяет сам: не больше двух раз на событие, пауза от 5 минут.
+const MAX_AUTO_RETRIES = 2;
+const RETRY_DELAY_MS = 5 * 60_000;
+
+// Через сколько повторить разбор MR; null — сбой не временный или работы нет.
+// Временный: упал процесс агента, рейт-лимит, MR занят другим процессом.
+export function retryDelayMs(res, iid) {
+  const e = (res?.mrs ?? []).find((m) => m.iid === iid);
+  const bad = e?.sync ? [e.sync, e.threads].filter((s) => ['failed', 'locked'].includes(s?.status)) : [];
+  if (!bad.length || !bad.every((s) => s.status === 'locked' || s.transient)) return null;
+  return Math.max(RETRY_DELAY_MS, ...bad.map((s) => (s.retry_after ?? 0) * 1000));
+}
+
 // fsh watch — один опрос моих MR: новые треды ко мне, появившийся конфликт, отставание через порог.
 // Только уведомляет: одно сообщение на MR с кнопкой resolve-all для fsh bot. Очередь и воркер не трогает.
 export async function cmdWatch(ctx, { json, asObject, file, probe, stateRoot = BOT_STATE_ROOT, fetchImpl = fetch } = {}) {
@@ -109,29 +122,79 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
   const last = new Map();
   // autoResolve: разборы идут по одному в очереди, повтор того же MR в очередь не встаёт.
   let chain = Promise.resolve();
-  const queued = new Set();
+  // MR в очереди → номер повтора; новое событие сбрасывает его в 0.
+  const queued = new Map();
   const ac = new AbortController();
   const resolveAll = deps.resolveAllImpl || cmdResolveAll;
-  const say = deps.sayImpl || (async (cfg, text) => {
+  const stateRoot = deps.stateRoot ?? BOT_STATE_ROOT;
+  const say = deps.sayImpl || (async (cfg, text, buttons) => {
     const t = getTelegramTarget(cfg);
-    if (t) await sendMessage(t.token, t.chatId, text);
+    if (!t) return;
+    if (buttons) await sendButtons(t.token, t.chatId, text, buttons);
+    else await sendMessage(t.token, t.chatId, text);
   });
-  const autoResolve = (cfg, e) => {
+  const schedule = deps.schedule || ((fn, ms) => {
+    const t = setTimeout(fn, ms);
+    t.unref?.();
+    return () => clearTimeout(t);
+  });
+  // Отложенные повторы: MR → отмена таймера.
+  // ponytail: живут в памяти, перезапуск демона их теряет; станет важно — хранить в state-файле.
+  const retries = new Map();
+  const autoResolve = (cfg, e, attempt = 0) => {
     const key = `${cfg.repo}!${e.iid}`;
-    if (queued.has(key)) return;
-    queued.add(key);
+    // Разбор уже в очереди: новое событие делает его разбором события, счёт повторов с нуля.
+    if (queued.has(key)) {
+      if (attempt === 0) queued.set(key, 0);
+      return;
+    }
+    // Новое событие важнее отложенного повтора: разбор идёт сейчас.
+    retries.get(key)?.();
+    retries.delete(key);
+    queued.set(key, attempt);
     chain = chain.then(async () => {
       if (stopped) return;
       log(`${stamp()} ${cfg.repo}: resolve-all !${e.iid}…`);
-      // Событие уже в снимке: упавший разбор демон сам не повторит, и это надо сказать прямо.
-      const manual = `🙋 Сам больше не возьмусь: снова возьму только на новой реплике или новом конфликте.\nДоделать руками: <code>fsh resolve-all ${e.iid}${cfg.activeProject ? ` -P ${cfg.activeProject}` : ''}</code>`;
+      const cmd = `<code>fsh resolve-all ${e.iid}${cfg.activeProject ? ` -P ${cfg.activeProject}` : ''}</code>`;
+      // Событие уже в снимке: дальше разбор сам не начнётся, и это надо сказать прямо.
+      const giveUp = (text) => {
+        let buttons;
+        // Кнопку жмёт fsh bot, а он без allowlist не стартует: без списка кнопка была бы мёртвой.
+        if ((cfg.telegram?.allowed_user_ids ?? []).length) {
+          try {
+            buttons = fixButtons(e.iid, issueFixButton(stateRoot, { project: cfg.activeProject ?? '', repo: cfg.repo, iid: e.iid }), '🔁 Повторить');
+          } catch (err) {
+            log(`${stamp()} ${cfg.repo}: кнопка «Повторить» не выдана — ${err.message}`);
+          }
+        }
+        const how = buttons ? `Повторить: кнопка ниже или ${cmd}` : `Доделать руками: ${cmd}`;
+        return say(cfg, `${text}\n\n🙋 Сам больше не возьмусь: снова возьму только на новой реплике или новом конфликте.\n${how}`, buttons);
+      };
       try {
         const res = await resolveAll(makeCtx(cfg), { only: [e.iid], yes: true, asObject: true, signal: ac.signal });
         const text = formatResolveAllTelegram(res, e.iid);
-        await say(cfg, text.startsWith('❌') ? `${text}\n\n${manual}` : text);
+        if (!text.startsWith('❌')) return await say(cfg, text);
+        const n = queued.get(key);
+        const delay = n < MAX_AUTO_RETRIES && !stopped ? retryDelayMs(res, e.iid) : null;
+        if (delay == null) return await giveUp(text);
+        // Telegram моргнул — повтор всё равно нужен: он про MR, а не про сообщение.
+        await say(cfg, `${text}\n\n🔁 Сбой временный: повторю сам через ${Math.round(delay / 60_000)} мин (повтор ${n + 1} из ${MAX_AUTO_RETRIES}).`)
+          .catch((err) => log(`${stamp()} ${cfg.repo}: сообщение о повторе не ушло — ${err.message}`));
+        retries.set(key, schedule(() => {
+          retries.delete(key);
+          // Пока ждали, человек мог выключить автоматику или убрать проект: конфиг читаем заново.
+          let fresh;
+          try {
+            fresh = loadCfg(env, { project: cfg.activeProject });
+          } catch (err) {
+            return log(`${stamp()} ${cfg.repo}: повтор !${e.iid} отменён — конфиг не читается: ${err.message}`);
+          }
+          if (fresh.watch?.enabled === false || !fresh.watch?.autoResolve) return log(`${stamp()} ${cfg.repo}: повтор !${e.iid} отменён — autoResolve выключен`);
+          autoResolve(fresh, e, n + 1);
+        }, delay));
       } catch (err) {
         log(`${stamp()} ${cfg.repo}: resolve-all !${e.iid} упал — ${err.message}`);
-        await say(cfg, `❌ resolve-all !${e.iid} упал: ${escapeHtml(err.message)}\n\n${manual}`).catch(() => {});
+        await giveUp(`❌ resolve-all !${e.iid} упал: ${escapeHtml(err.message)}`).catch(() => {});
       } finally {
         queued.delete(key);
       }
@@ -272,6 +335,8 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
     process.off('SIGTERM', stop);
   }
   await chain;
+  for (const cancel of retries.values()) cancel();
+  retries.clear();
   log(`${stamp()} watcher остановлен.`);
   return { ok: true, cycles: cycle, projects: names };
 }
