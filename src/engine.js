@@ -36,6 +36,9 @@ export const SESSION_ARGS = {
   opencode: { start: () => [], resume: (id) => ['--session', id] },
 };
 
+// Headless-claude без agent-flow: его хуки ждут «да» человека и запрещают --no-verify, ран встаёт.
+const CLAUDE_HEADLESS_ARGS = ['--settings', JSON.stringify({ enabledPlugins: { 'agent-flow@agent-flow': false } })];
+
 // Что агент получает вместе с просьбой доделать: решение судьи, находки и границы.
 export function reviseMessage(verdict) {
   const findings = (verdict.findings ?? []).map(
@@ -105,7 +108,7 @@ export async function spawnSession(x, text, { resume = false, agentName, session
   const spawn = x.opts?.spawnAgentImpl || spawnAgent;
   const proc = spawn({
     bin: agent.bin,
-    args: [...agent.args, ...sessionArgs, ...extraArgs],
+    args: [...agent.args, ...(agent.family === 'claude' ? CLAUDE_HEADLESS_ARGS : []), ...sessionArgs, ...extraArgs],
     input,
     cwd: ws.dir,
     env: { ...process.env, CLAUDE_ROUTER_OFF: '1', ...agent.env, GL_HELPER_MR: String(x.target?.iid ?? ''), GL_HELPER_REPO: ctx.repo ?? '' },
