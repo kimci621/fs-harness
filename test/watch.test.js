@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { diffSnapshots, pollOnce, stateFile, daemonSecretIssues, SNAPSHOT_VERSION } from '../src/watch.js';
@@ -340,4 +340,165 @@ test('демон: autoResolve сам зовёт resolve-all по событию,
   assert.deepEqual(resolved, ['org/front!7']);
   assert.equal(said.length, 1);
   assert.match(said[0], /!7: работы нет/);
+});
+
+// Временный сбой (упал процесс агента, рейт-лимит, MR занят) демон повторяет сам, но не больше двух раз.
+const autoCfg = (telegram = {}) => (env, { project } = {}) => ({
+  projects: { front: {} }, activeProject: project ?? '', repo: 'org/front',
+  watch: { enabled: true, intervalSeconds: 10, autoResolve: true }, judge: { roles: {}, profiles: {} }, telegram,
+});
+const failed = (sync) => ({ ok: false, mrs: [{ iid: 7, sync: { status: 'failed', error: 'упал', ...sync }, threads: { status: 'not_needed' }, mm: { status: 'not_needed' } }] });
+const runDaemon = async ({ results, telegram, events = () => [{ iid: 7 }], cycles = 1, stateRoot, loadCfg, sayImpl }) => {
+  const said = [];
+  const scheduled = [];
+  const cancelled = [];
+  const calls = [];
+  let clock = 0;
+  await cmdWatchDaemon({}, {
+    env: {}, loadCfg: loadCfg ?? autoCfg(telegram), makeCtx: (cfg) => ({ cfg, repo: cfg.repo }),
+    poll: async () => ({ events: events(), notified: 1 }),
+    resolveAllImpl: async () => { calls.push(clock); return results.shift(); },
+    sayImpl: async (cfg, text, buttons) => { said.push({ text, buttons }); await sayImpl?.(text); },
+    schedule: (fn, ms) => { const s = { fn, ms }; scheduled.push(s); return () => cancelled.push(s); },
+    stateRoot,
+    runWaitsImpl: async () => {},
+    sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)); },
+    now: () => clock, cycles, log: () => {},
+  });
+  return { said, scheduled, cancelled, calls };
+};
+const settle = () => new Promise((r) => setTimeout(r, 20));
+
+test('демон: временный сбой повторяется через 5 минут, после двух повторов — «не возьмусь» с кнопкой «Повторить»', async () => {
+  const stateRoot = mkdtempSync(path.join(tmpdir(), 'fs-harness-retry-'));
+  const results = [failed({ transient: true }), failed({ transient: true }), failed({ transient: true })];
+  const d = await runDaemon({ results, telegram: { allowed_user_ids: [1] }, stateRoot });
+  assert.equal(d.scheduled.length, 1);
+  assert.equal(d.scheduled[0].ms, 5 * 60_000);
+  assert.match(d.said[0].text, /повторю сам через 5 мин \(повтор 1 из 2\)/);
+  assert.equal(d.said[0].buttons, undefined, 'пока повтор впереди, кнопка не нужна');
+  d.scheduled[0].fn();
+  await settle();
+  assert.equal(d.scheduled.length, 2);
+  assert.match(d.said[1].text, /повтор 2 из 2/);
+  d.scheduled[1].fn();
+  await settle();
+  assert.equal(d.scheduled.length, 2, 'третьего повтора нет');
+  assert.equal(d.said.length, 3);
+  assert.match(d.said[2].text, /Сам больше не возьмусь/);
+  const [[btn]] = d.said[2].buttons;
+  assert.equal(btn.text, '🔁 Повторить');
+  assert.match(btn.callback_data, /^fix:7:/);
+  assert.ok(findFixButton(stateRoot, 7, btn.callback_data.split(':')[2]), 'nonce кнопки не выдан');
+  rmSync(stateRoot, { recursive: true, force: true });
+});
+
+test('демон: результат плох (нет коммитов, судья) — повтора нет; без allowlist — без кнопки', async () => {
+  const d = await runDaemon({ results: [failed({ code: 'agent_failed' })] });
+  await settle();
+  assert.equal(d.scheduled.length, 0);
+  assert.match(d.said[0].text, /Сам больше не возьмусь/);
+  assert.equal(d.said[0].buttons, undefined);
+});
+
+test('демон: рейт-лимит ждёт retry_after, MR занят — тоже временный', async () => {
+  const d = await runDaemon({ results: [failed({ transient: true, retry_after: 1800 })] });
+  await settle();
+  assert.equal(d.scheduled[0].ms, 1800_000);
+  const locked = { ok: false, mrs: [{ iid: 7, sync: { status: 'locked' }, threads: { status: 'locked' }, mm: { status: 'not_needed' }, error: 'MR занят' }] };
+  const l = await runDaemon({ results: [locked] });
+  await settle();
+  assert.equal(l.scheduled.length, 1);
+});
+
+test('демон: новое событие по MR отменяет отложенный повтор, остановка снимает таймеры', async () => {
+  let n = 0;
+  const results = [failed({ transient: true }), failed({ transient: true })];
+  const d = await runDaemon({ results, events: () => (n++ < 2 ? [{ iid: 7 }] : []), cycles: 2 });
+  await settle();
+  assert.equal(d.calls.length, 2, 'новое событие запускает разбор сразу');
+  assert.equal(d.scheduled.length, 2);
+  assert.deepEqual(d.cancelled, [d.scheduled[0], d.scheduled[1]], 'первый повтор отменён событием, второй — остановкой');
+});
+
+test('демон: кнопку выдать не удалось — итог уходит без кнопки, очередь живёт дальше', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fs-harness-retry-'));
+  writeFileSync(path.join(dir, 'file'), 'x');
+  let n = 0;
+  const d = await runDaemon({
+    results: [failed({ code: 'agent_failed' }), failed({ code: 'agent_failed' })],
+    telegram: { allowed_user_ids: [1] }, stateRoot: path.join(dir, 'file', 'state'),
+    events: () => (n++ === 0 ? [{ iid: 7 }] : [{ iid: 8 }]), cycles: 2,
+  });
+  assert.equal(d.calls.length, 2, 'второй MR разобран');
+  assert.equal(d.said[0].buttons, undefined);
+  assert.match(d.said[0].text, /Доделать руками/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('демон: новое событие, пока повтор ждёт в очереди, сбрасывает счёт повторов', async () => {
+  const said = [];
+  const scheduled = [];
+  const calls = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let cycle = 0;
+  const evs = [[{ iid: 7 }], [{ iid: 9 }], [{ iid: 7 }]];
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  await cmdWatchDaemon({}, {
+    env: {}, loadCfg: autoCfg(), makeCtx: (cfg) => ({ cfg, repo: cfg.repo }),
+    poll: async () => ({ events: evs[cycle++] ?? [], notified: 0 }),
+    resolveAllImpl: async (ctx, o) => {
+      calls.push(o.only[0]);
+      if (o.only[0] === 9) { await gate; return { ok: true, mrs: [] }; }
+      return failed({ transient: true });
+    },
+    sayImpl: async (cfg, text) => said.push(text),
+    schedule: (fn) => { scheduled.push(fn); return () => {}; },
+    runWaitsImpl: async () => {},
+    // цикл 2: !9 занял очередь, повтор !7 встал за ним; цикл 3: новое событие по !7, потом !9 отпускаем
+    sleep: async () => { await tick(); if (cycle === 2) scheduled[0](); if (cycle === 3) release(); await tick(); },
+    now: () => cycle * 20_000, cycles: 4, log: () => {},
+  });
+  await tick();
+  assert.deepEqual(calls, [7, 9, 7]);
+  assert.match(said.at(-1), /повтор 1 из 2/);
+});
+
+test('демон: повтор не идёт, если autoResolve выключили, пока он ждал', async () => {
+  let off = false;
+  const loadCfg = (env, o) => {
+    const cfg = autoCfg()(env, o);
+    if (off) cfg.watch.autoResolve = false;
+    return cfg;
+  };
+  const d = await runDaemon({ results: [failed({ transient: true }), failed({ transient: true })], loadCfg });
+  off = true;
+  d.scheduled[0].fn();
+  await settle();
+  assert.equal(d.calls.length, 1);
+});
+
+test('демон: сообщение «повторю» не ушло — повтор всё равно взведён, «не возьмусь» не шлётся', async () => {
+  const d = await runDaemon({
+    results: [failed({ transient: true })],
+    sayImpl: async (text) => { if (/повторю сам/.test(text)) throw new Error('telegram 502'); },
+  });
+  await settle();
+  assert.equal(d.scheduled.length, 1);
+  assert.equal(d.cancelled.length, 1, 'таймер снят только остановкой демона');
+  assert.ok(!d.said.some((s) => /Сам больше не возьмусь/.test(s.text)));
+});
+
+test('демон: конфиг сломали, пока повтор ждал, — повтор отменён, демон не падает', async () => {
+  let broken = false;
+  const loadCfg = (env, o) => {
+    if (broken && o?.project) throw new Error('Проекта "front" нет в конфиге');
+    return autoCfg()(env, o);
+  };
+  const d = await runDaemon({ results: [failed({ transient: true })], loadCfg });
+  broken = true;
+  assert.doesNotThrow(() => d.scheduled[0].fn());
+  await settle();
+  assert.equal(d.calls.length, 1);
 });

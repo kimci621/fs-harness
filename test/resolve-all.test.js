@@ -132,3 +132,13 @@ test('resolve-all: тред, где я ответил последним, раб
   const c = await findCandidates({ ...ctx(), g }, probe);
   assert.deepEqual(c.map((x) => x.iid), [2, 3]);
 });
+
+test('failure: временный сбой несёт transient и retry_after, обычный — нет', async () => {
+  const { failure } = await import('../src/commands/resolve-all.js');
+  const crash = Object.assign(new CliError('Агент cc завершился с кодом 1 за 2с.', 1, 'agent_failed'), { transient: true });
+  assert.equal(failure(crash).transient, true);
+  const limited = Object.assign(new CliError('рейт-лимит', 1, 'agent_rate_limited'), { transient: true, retry_after: 90 });
+  assert.equal(failure(limited).retry_after, 90);
+  const noCommits = new CliError('Агент не создал коммитов в worktree.', 1, 'agent_failed');
+  assert.equal(failure(noCommits).transient, undefined);
+});

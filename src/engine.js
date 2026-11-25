@@ -180,10 +180,13 @@ export async function spawnSession(x, text, { resume = false, agentName, session
       const retryAfter = extractRetryAfter(combined);
       const err = new CliError(`Агент ${agent.name} превысил рейт-лимит (retry after ${retryAfter}s).${where}`, 1, 'agent_rate_limited');
       err.retry_after = retryAfter;
+      err.transient = true;
       err.keepWorktree = true;
       throw err;
     }
     const err = new CliError(`Агент ${agent.name} ${how} за ${fmtDuration(Date.now() - startedAt)}.${where}`, 1, 'agent_failed');
+    // Упал сам процесс, а не агент ответил ошибкой: такой сбой watch повторяет сам.
+    err.transient = !agentError;
     err.keepWorktree = true;
     throw err;
   }

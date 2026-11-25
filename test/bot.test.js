@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { cmdBot } from '../src/commands/bot.js';
@@ -538,5 +538,48 @@ test('bot: кнопка fix при занятом файловом локе MR �
   lock.release();
   assert.equal(called, false);
   assert.deepEqual(f.log.filter((x) => x.method === 'answerCallbackQuery').map((a) => a.body.text), ['Уже идёт']);
+  rmSync(localState, { recursive: true, force: true });
+});
+
+test('bot: прогон по кнопке fix упал — итог с кнопкой «Повторить» на тот же MR', async () => {
+  const { issueFixButton, findFixButton } = await import('../src/tgbot.js');
+  const f = makeFetch();
+  f.setResult('sendMessage', { message_id: 2 });
+  const localState = mkdtempSync(path.join(tmpdir(), 'fs-harness-bot-fix-'));
+  const nonce = issueFixButton(localState, { project: 'p', repo: 'r/repo', iid: 7 });
+  f.pushUpdates([]);
+  f.pushUpdates([{ update_id: 40, callback_query: { id: 'c40', data: `fix:7:${nonce}`, from: { id: MY_ID }, message: { chat: { id: 555 }, message_id: 2 } } }]);
+  await cmdBot({}, {
+    env: {}, loadCfg: () => cfgBase(), fetchImpl: f.fetchImpl, sleep, log, cycles: 1, runsDir, stateRoot: localState, locksRoot: path.join(localState, 'locks'),
+    makeCtx: (cfg) => ({ g: {}, repo: cfg.repo, cfg }),
+    resolveAll: async () => ({ ok: false, mrs: [{ iid: 7, sync: { status: 'failed', error: 'Агент cc завершился с кодом 1' }, threads: { status: 'not_needed' }, mm: { status: 'not_needed' } }] }),
+  });
+  const sent = f.log.filter((x) => x.method === 'sendMessage').map((m) => m.body);
+  const final = sent.find((b) => /❌/.test(b.text));
+  assert.ok(final, sent.map((b) => b.text).join(' | '));
+  const [[btn]] = final.reply_markup?.inline_keyboard ?? [[]];
+  assert.equal(btn?.text, '🔁 Повторить');
+  const [, iid, fresh] = btn.callback_data.split(':');
+  assert.equal(iid, '7');
+  assert.equal(findFixButton(localState, 7, fresh)?.project, 'p', 'новая кнопка ведёт в тот же проект');
+  rmSync(localState, { recursive: true, force: true });
+});
+
+test('bot: кнопку «Повторить» выдать не удалось — итог провала всё равно приходит', async () => {
+  const { issueFixButton } = await import('../src/tgbot.js');
+  const f = makeFetch();
+  f.setResult('sendMessage', { message_id: 2 });
+  const localState = mkdtempSync(path.join(tmpdir(), 'fs-harness-bot-fix-'));
+  const nonce = issueFixButton(localState, { project: 'p', repo: 'r/repo', iid: 7 });
+  chmodSync(path.join(localState, 'fix-buttons.json'), 0o444);
+  f.pushUpdates([]);
+  f.pushUpdates([{ update_id: 41, callback_query: { id: 'c41', data: `fix:7:${nonce}`, from: { id: MY_ID }, message: { chat: { id: 555 }, message_id: 2 } } }]);
+  await cmdBot({}, {
+    env: {}, loadCfg: () => cfgBase(), fetchImpl: f.fetchImpl, sleep, log, cycles: 1, runsDir, stateRoot: localState, locksRoot: path.join(localState, 'locks'),
+    makeCtx: (cfg) => ({ g: {}, repo: cfg.repo, cfg }),
+    resolveAll: async () => ({ ok: false, mrs: [{ iid: 7, sync: { status: 'failed', error: 'Агент cc завершился с кодом 1' }, threads: { status: 'not_needed' }, mm: { status: 'not_needed' } }] }),
+  });
+  const sent = f.log.filter((x) => x.method === 'sendMessage').map((m) => m.body);
+  assert.ok(sent.some((b) => /❌/.test(b.text)), sent.map((b) => b.text).join(' | '));
   rmSync(localState, { recursive: true, force: true });
 });
