@@ -55,6 +55,7 @@ resolve-all: {ok, mrs:[{iid, branch, target, sync:{status,runId?}, threads:{stat
 review:  {ok, run, mr, review:"<текст находок>", judge:{...}|{skipped:true}}
 analyze: {ok, run, issue, analysis:"<текст разбора>"}
 jira:    {ok, issues:[{key,summary,status,type,priority,updated}]} | {ok, issue:{...}, comments:[...]}
+          | board: {ok, project, board:{id,name}, jql, columns:[{name, statuses:[{id,name,category}], truncated}], sprints:[{id,name,state}], issues:[{key,summary,status,status_id,assignee,assignee_id,labels,sprint:{id,name,state}|null,parent:{key,summary,type}|null,epic:{key,summary}|null,url,...}], truncated}
 commit:  {ok, dir, branch, commit:{hash,message}}
 prompts: {ok, prompts:[{name,source,overridden,vars}]} | {ok, name, source, body|text}
 doctor:  {ok, checks:[{name,ok,critical,detail}]}
