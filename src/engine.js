@@ -443,6 +443,8 @@ export function runAction(spec, ctx, input, opts = {}) {
     runDir = { id: saved.id, dir: saved.dir };
     x.run = runDir;
     meta = { ...m, error: null, state: 'running', pid: process.pid };
+    // Сразу на диск: иначе до первой записи gc видит failed и сносит worktree под агентом
+    patchRunMeta(runDir, { state: 'running', pid: process.pid, error: null });
     x.pre = m.pre;
     x.plan = saved.read('plan.md') ?? null;
 

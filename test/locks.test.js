@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { acquireLock, releaseLock, listLocks, lockKey } from '../src/locks.js';
+import { acquireLock, releaseLock, listLocks, lockKey, gcLocks, runSingle } from '../src/locks.js';
 
 let root;
 
@@ -98,4 +98,36 @@ test('locks: listLocks возвращает список локов с флаг�
   assert.equal(found.stale, false);
 
   lock.release();
+});
+
+test('gcLocks: убирает локи мёртвых процессов, живые не трогает', () => {
+  const gcRoot = mkdtempSync(path.join(tmpdir(), 'fs-harness-locks-gc-'));
+  try {
+    const dead = acquireLock({ root: gcRoot, key: 'gc:dead', pid: 99999999 });
+    const alive = acquireLock({ root: gcRoot, key: 'gc:alive', pid: process.pid });
+
+    const removed = gcLocks({ root: gcRoot });
+
+    assert.deepEqual(removed.map((l) => l.key), ['gc_dead']);
+    assert.equal(existsSync(dead.file), false, 'лок мёртвого pid удалён');
+    assert.equal(existsSync(alive.file), true, 'лок живого pid остался');
+  } finally {
+    rmSync(gcRoot, { recursive: true, force: true });
+  }
+});
+
+test('runSingle: второй экземпляр той же команды не стартует, после первого - стартует', async () => {
+  let done;
+  const first = runSingle('bot', () => new Promise((r) => { done = r; }), { root });
+  await assert.rejects(runSingle('bot', async () => 'второй', { root }), { code: 'already_running' });
+  // Другая команда своим локом не мешает
+  assert.equal(await runSingle('qa-bot', async () => 'ok', { root }), 'ok');
+  done('первый');
+  assert.equal(await first, 'первый');
+  assert.equal(await runSingle('bot', async () => 'снова', { root }), 'снова');
+});
+
+test('runSingle: лок мёртвого процесса без срока давности перехватывается', async () => {
+  acquireLock({ root, key: 'daemon-watch', pid: 999999 });
+  assert.equal(await runSingle('watch', async () => 'ok', { root }), 'ok');
 });

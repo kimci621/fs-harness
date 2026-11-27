@@ -141,3 +141,67 @@ test('listWorktrees: классифицирует run-alive, run-done, orphan и
   assert.equal(existsSync(dirAlive), true, 'run-alive остался');
   assert.equal(existsSync(dirTask), true, 'task остался');
 });
+
+test('gcWorktrees: упавший ран без локальной работы убирается через сутки, с работой ждёт срока', async () => {
+  const now = Date.now();
+  const twoDaysAgo = now - 2 * 86400000;
+  const wt2 = path.join(root, 'worktrees-failed');
+  const runs2 = path.join(root, 'runs-failed');
+  const projDir = path.join(wt2, 'project');
+  mkdirSync(projDir, { recursive: true });
+
+  const addRun = (name, state, created = twoDaysAgo) => {
+    const dir = path.join(projDir, name);
+    const branch = `fs-harness/${name}`;
+    git(['worktree', 'add', '-b', branch, dir, 'main'], project);
+    mkdirSync(path.join(runs2, name), { recursive: true });
+    writeFileSync(
+      path.join(runs2, name, 'meta.json'),
+      JSON.stringify({ id: name, state, worktree: dir, branch, action: 'conflict', mr: 9, created_at: new Date(created).toISOString() }),
+    );
+    return dir;
+  };
+
+  // Агент упал сразу: ни правок, ни коммитов
+  const empty = addRun('conflict-9-empty', 'failed');
+  // То же, но упал меньше суток назад: ран ещё можно доиграть через resume
+  const recent = addRun('conflict-9-recent', 'failed', now);
+  // Незакоммиченная правка
+  const dirty = addRun('conflict-9-dirty', 'failed');
+  writeFileSync(path.join(dirty, 'f.txt'), 'changed\n');
+  // Коммит, которого нет на remote
+  const unpushed = addRun('conflict-9-unpushed', 'failed');
+  writeFileSync(path.join(unpushed, 'g.txt'), 'new\n');
+  git(['add', 'g.txt'], unpushed);
+  git(['commit', '-m', 'work'], unpushed);
+  // Коммит на ветке рана, а HEAD отсоединён на запушенный main
+  const detached = addRun('conflict-9-detached', 'failed');
+  writeFileSync(path.join(detached, 'h.txt'), 'new\n');
+  git(['add', 'h.txt'], detached);
+  git(['commit', '-m', 'work'], detached);
+  git(['checkout', '--detach', 'main'], detached);
+  // Мерж в пользу ours не закоммичен: дерево чистое, но есть MERGE_HEAD
+  git(['branch', 'side-9', 'main'], project);
+  const side = path.join(root, 'side-9');
+  git(['worktree', 'add', side, 'side-9'], project);
+  writeFileSync(path.join(side, 'f.txt'), 'theirs\n');
+  git(['commit', '-am', 'theirs'], side);
+  const merging = addRun('conflict-9-merging', 'failed');
+  git(['merge', '--no-commit', '-s', 'ours', 'side-9'], merging);
+  assert.equal(git(['status', '--porcelain'], merging), '', 'дерево мержа чистое');
+  // Успешный ран, worktree сохранён явно: правило упавших его не касается
+  const kept = addRun('conflict-9-kept', 'done', now);
+  // Свежий каталог без рана в журнале (ран мог ещё не записать meta.json)
+  const fresh = path.join(projDir, 'conflict-9-fresh');
+  git(['worktree', 'add', '-b', 'fs-harness/conflict-9-fresh', fresh, 'main'], project);
+
+  const opts = { root: wt2, runsRoot: runs2, projectDirs: [project], olderThanDays: 7, now };
+  const planned = await gcWorktrees({ ...opts, dryRun: true });
+  assert.deepEqual(planned.map((w) => w.dir), [empty]);
+  assert.match(planned[0].reason, /без локальной работы/);
+
+  const deleted = await gcWorktrees({ ...opts, dryRun: false });
+  assert.deepEqual(deleted.map((w) => w.dir), [empty]);
+  assert.equal(existsSync(empty), false, 'пустой упавший удалён');
+  for (const d of [recent, dirty, unpushed, detached, merging, kept, fresh]) assert.equal(existsSync(d), true, `${path.basename(d)} остался`);
+});

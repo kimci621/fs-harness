@@ -8,6 +8,7 @@ import { cmdResolveAll } from './resolve-all.js';
 import { gitProbe } from './resolve-all.js';
 import { loadConfig, expandHome } from '../config.js';
 import { gcWorktrees } from '../worktrees.js';
+import { gcLocks } from '../locks.js';
 import { createGlab } from '../glab.js';
 import { createCtx } from '../registry.js';
 import { listAuto, advanceTask } from '../auto.js';
@@ -232,6 +233,12 @@ export async function cmdWatchDaemon(opts = {}, deps = {}) {
           }
         } catch (err) {
           log(`${stamp()} gc worktrees не удался: ${err.message}`);
+        }
+        try {
+          const freed = (deps.gcLocksImpl || gcLocks)({ root: deps.locksRoot });
+          if (freed.length) log(`${stamp()} gc: удалено ${freed.length} локов мёртвых процессов`);
+        } catch (err) {
+          log(`${stamp()} gc locks не удался: ${err.message}`);
         }
       }
 

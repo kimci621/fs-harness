@@ -134,6 +134,7 @@ export function listWorktrees({
       age_days,
       ...(sizes ? { size_mb } : {}),
       status,
+      run_state: meta?.state ?? null,
     });
   }
 
@@ -162,7 +163,23 @@ export function resolveProjectDir(dir, projectDirs = []) {
   return projectDirs[0] || null;
 }
 
-// Очистка старых worktree: orphan и run-done старше olderThanDays,
+// Локальная работа: незакоммиченные правки, начатый merge/rebase/cherry-pick или коммиты
+// HEAD и ветки рана, которых нет ни в одной удалённой ветке.
+const IN_PROGRESS = ['MERGE_HEAD', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'rebase-merge', 'rebase-apply'];
+export function hasLocalWork(dir, branch = null) {
+  const git = makeGit(dir);
+  try {
+    if (git(['status', '--porcelain'])) return true;
+    if (IN_PROGRESS.some((m) => existsSync(path.resolve(dir, git(['rev-parse', '--git-path', m]))))) return true;
+    const heads = ['HEAD'];
+    if (branch && git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], dir, { allowFail: true })) heads.push(branch);
+    return git(['rev-list', '--count', ...heads, '--not', '--remotes']) !== '0';
+  } catch {
+    return true; // не смогли проверить — считаем, что работа есть
+  }
+}
+
+// Очистка старых worktree: orphan и run-done старше olderThanDays, упавшие раны без локальной работы,
 // а также закрытые/смёрдженные task-worktree.
 export async function gcWorktrees({
   root = WORKTREE_ROOT,
@@ -184,6 +201,9 @@ export async function gcWorktrees({
     if (wt.status === 'orphan' || wt.status === 'run-done') {
       if (wt.age_days >= olderThanDays) {
         candidates.push({ ...wt, reason: `${wt.status} старше ${olderThanDays} дн (${wt.age_days} дн)` });
+      } else if (wt.run_state === 'failed' && wt.age_days >= 1 && !hasLocalWork(wt.dir, wt.branch)) {
+        // Агент упал, ничего не сделав: сутки на resume, потом копия проекта не нужна
+        candidates.push({ ...wt, reason: 'упавший ран без локальной работы старше суток' });
       }
     } else if (wt.status === 'task') {
       let shouldDelete = false;

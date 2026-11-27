@@ -502,3 +502,24 @@ test('демон: конфиг сломали, пока повтор ждал, �
   await settle();
   assert.equal(d.calls.length, 1);
 });
+
+test('демон: сбой уборки локов не роняет цикл, корень локов берётся из deps', async () => {
+  const cfg = { projects: { front: {} }, repo: 'org/front', watch: { enabled: true, intervalSeconds: 10 }, telegram: {} };
+  const roots = [];
+  const logs = [];
+  await cmdWatchDaemon({}, {
+    env: {},
+    loadCfg: () => cfg,
+    makeCtx: () => ({ cfg, repo: 'org/front' }),
+    poll: async () => ({ events: [], notified: 0 }),
+    sleep: async () => {},
+    now: () => 10 * 3600_000,
+    cycles: 1,
+    log: (m) => logs.push(m),
+    gcWorktreesImpl: async () => [],
+    locksRoot: '/нет/такого',
+    gcLocksImpl: ({ root }) => { roots.push(root); throw new Error('ENOTDIR'); },
+  });
+  assert.deepEqual(roots, ['/нет/такого']);
+  assert.ok(logs.some((m) => /gc locks не удался: ENOTDIR/.test(m)), logs.join('\n'));
+});
