@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { CliError } from './errors.js';
 
 export const LOCKS_ROOT = path.join(homedir(), '.local', 'state', 'fs-harness', 'locks');
 export const DEFAULT_STALE_MS = 60 * 60 * 1000; // 60 минут
@@ -121,6 +122,36 @@ export function releaseLock({ root = LOCKS_ROOT, key, pid = process.pid } = {}) 
   } catch {
     return false;
   }
+}
+
+// Один экземпляр долгоживущей команды (bot, watch --daemon, qa-bot) на машину: второй запуск падает сразу.
+// Срока давности нет: демон живёт сутками, держателя проверяем только по живости pid.
+// ponytail: переиспользованный ОС pid чужого процесса сочтётся живым держателем; лечится удалением файла лока.
+export async function runSingle(name, fn, { root = LOCKS_ROOT } = {}) {
+  const lock = acquireLock({ root, key: `daemon-${name}`, staleMs: Infinity });
+  if (!lock.acquired) {
+    throw new CliError(`fsh ${name} уже запущен (pid ${lock.holder?.pid}), второй экземпляр не стартую.`, 1, 'already_running');
+  }
+  try {
+    return await fn();
+  } finally {
+    lock.release();
+  }
+}
+
+// Уборка локов мёртвых процессов: acquire их и так перехватывает, но файл без уборки лежит вечно.
+export function gcLocks({ root = LOCKS_ROOT } = {}) {
+  const removed = [];
+  for (const lock of listLocks({ root })) {
+    if (lock.alive) continue;
+    try {
+      // Перечитываем перед удалением: лок мог перехватить живой процесс
+      if (JSON.parse(readFileSync(lock.file, 'utf8')).pid !== lock.pid) continue;
+      rmSync(lock.file, { force: true });
+      removed.push(lock);
+    } catch { /* уже удалён */ }
+  }
+  return removed;
 }
 
 // Диагностический список активных и протухших локов

@@ -18,9 +18,9 @@ src/ui.js               спиннер, live-таблица, waitJob (опрос
 src/format.js           иконки статусов, humanize, таблицы, строки MR
 src/commands/*.js       по файлу на команду: mrs, mr, jobs, run, deploy, commit, doctor, ask, agent-guide, mr-comments, mr-thread (mr reply/resolve), prompts, jira, task, growthbook, flow, init, mm, runs, retry, resume, publish, revise, bot, auto, worktrees, worker, resolve-all
 src/commands/resolve-all.js все мои открытые MR параллельно под локом MR: conflict в режиме sync → threads → реплика в тред задачи в MM
-src/worktrees.js        инвентаризация и gc временных worktree (orphan, run-done, task)
+src/worktrees.js        инвентаризация и gc временных worktree (orphan, run-done, task; упавший ран без локальной работы — через сутки)
 src/commands/worktrees.js команда fsh worktrees: список и очистка (gc)
-src/locks.js            файловые локи по ветке/MR (<repo>:<branch>|<repo>:mr<iid>) для сериализации
+src/locks.js            файловые локи по ветке/MR (<repo>:<branch>|<repo>:mr<iid>) для сериализации; gcLocks убирает локи мёртвых pid (часовой цикл демона)
 src/worker.js           пул воркеров: параллельное исполнение заданий очереди (concurrency, attempts)
 src/commands/worker.js  команда fsh worker: ручной и фоновый запуск воркеров
 src/costs.js          накопитель расходов по ранам и задачам (costs.jsonl), sumCosts / appendCost

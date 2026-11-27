@@ -91,6 +91,14 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
 
     comments: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/comment?maxResults=50`),
 
+    // История изменений, старые записи первыми. Длинная история — последние 100 записей.
+    changelog: async (key) => {
+      const path = `/rest/api/2/issue/${encodeURIComponent(key)}/changelog`;
+      const first = await api(`${path}?maxResults=100`);
+      if (first?.isLast !== false) return first?.values ?? [];
+      return (await api(`${path}?startAt=${Math.max(0, first.total - 100)}&maxResults=100`))?.values ?? [];
+    },
+
     // expand=transitions.fields: без него в переходе не видно обязательных полей экрана,
     // и submit не может сказать, чего не хватает, до POST.
     transitions: (key) => api(`/rest/api/2/issue/${encodeURIComponent(key)}/transitions?expand=transitions.fields`),
@@ -111,11 +119,21 @@ export function createJira({ baseUrl, email, token, fetchImpl = fetch, sleepMs =
     // Колонки доски — не статусы проекта: это настройка доски, и именно её человек видит в Jira.
     boardConfig: (boardId) => api(`/rest/agile/1.0/board/${boardId}/configuration`),
 
+    // Все статусы инстанса: колонка доски знает статусы только по id, имя и категория — отсюда.
+    allStatuses: () => api('/rest/api/2/status'),
+
+    // Все поля инстанса: id спринтового поля в каждой Jira свой, ищется по типу.
+    fieldList: () => api('/rest/api/2/field'),
+
     sprints: (boardId) => api(`/rest/agile/1.0/board/${boardId}/sprint?state=active,future&maxResults=50`),
+    sprint: (sprintId) => api(`/rest/agile/1.0/sprint/${encodeURIComponent(sprintId)}`),
 
     // Запись 2. Через agile-API, а не PUT поля: id спринтового customfield у каждого проекта свой.
     moveToSprint: (sprintId, keys) =>
       api(`/rest/agile/1.0/sprint/${sprintId}/issue`, { method: 'POST', body: { issues: keys }, retries: 1 }),
+
+    // Запись: убрать задачи из спринтов в бэклог доски.
+    moveToBacklog: (keys) => api('/rest/agile/1.0/backlog/issue', { method: 'POST', body: { issues: keys }, retries: 1 }),
 
     // Запись 3. v2 принимает тело комментария обычным текстом, ADF собирать не надо.
     addComment: (key, text) =>

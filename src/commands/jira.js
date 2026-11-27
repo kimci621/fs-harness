@@ -65,6 +65,27 @@ export function pickSprint(sprints, name) {
   );
 }
 
+// Спринт для переноса. Число, которого нет в списке доски, — id спринта другой доски проекта:
+// берём его напрямую, а не ищем как кусок имени («99» иначе попало бы в «Спринт 99»).
+// Спринт обязан быть с доски этого проекта: опечатка в id не должна унести задачу в чужой проект.
+async function resolveSprint(j, boardId, name, project) {
+  const { values = [] } = (await j.sprints(boardId)) ?? {};
+  const text = String(name).trim();
+  if (/^\d+$/.test(text) && !values.some((s) => String(s.id) === text || s.name === text)) {
+    const s = await j.sprint(text);
+    if (!['active', 'future'].includes(s?.state)) {
+      throw new CliError(`Спринт ${text} ${s?.name ? `"${s.name}" ` : ''}закрыт: переносить можно в активный или будущий.`, 1, 'usage');
+    }
+    const { values: boards = [] } = (await j.boards(project)) ?? {};
+    if (!boards.some((b) => b.id === s.originBoardId)) {
+      const list = values.map((v) => `${v.id} ${v.name}`).join(', ') || 'нет активных и будущих';
+      throw new CliError(`Спринт ${text} "${s.name}" не с доски проекта ${project}. Спринты доски: ${list}.`, 1, 'usage');
+    }
+    return s;
+  }
+  return pickSprint(values, name);
+}
+
 // Доска задачи: у спринта в самой задаче она уже указана, иначе ищем по ключу проекта.
 export async function boardOf(j, issue) {
   const fromSprint = openSprints(fieldByName(issue, 'Sprint'))[0]?.boardId;
@@ -78,7 +99,7 @@ export async function boardOf(j, issue) {
 // Справка подкоманды: печатается на голый вызов и в ошибках использования.
 const SUB_USAGE = {
   move: 'fsh jira move <KEY> <статус> -y, например fsh jira move FD-7647 "В тестирование" -y',
-  sprint: 'fsh jira sprint <KEY> <спринт|id> -y',
+  sprint: 'fsh jira sprint <KEY> <спринт|id|backlog> -y',
   comment: 'fsh jira comment <KEY> "<текст>" -y или fsh jira comment <KEY> --file <путь|-> -y',
   field: 'fsh jira field <KEY> "<поле>" — прочитать; fsh jira field <KEY> "<поле>" <значение>|--file <путь|-> [--append] -y — записать',
   parent: 'fsh jira parent <KEY> <EPIC> -y',
@@ -87,7 +108,9 @@ const SUB_USAGE = {
   link: 'fsh jira link <KEY> <тип или фраза> <KEY2> -y',
   delete: 'fsh jira delete <KEY> -y',
   search: 'fsh jira search "<JQL>"',
+  board: 'fsh jira board <ПРОЕКТ> [--jql "<условие JQL>"] --json',
   one: 'fsh jira show <KEY>',
+  history: 'fsh jira history <KEY>',
 };
 
 const ACCOUNT_ID = /^(\d+:[0-9a-f-]{8,}|[0-9a-f]{24})$/;
@@ -137,6 +160,10 @@ export async function cmdJira(ctx, args, opts = {}) {
             ? await del(j, rest, ctx, opts)
           : query === 'link'
             ? await link(j, rest, ctx, opts)
+          : query === 'board'
+            ? await board(j, rest, ctx, opts)
+          : query === 'history'
+            ? await history(j, rest[0], ctx)
           : !query || query === 'mine'
             ? await mine(j, { ...opts, componentField: ctx.cfg.jira?.componentField }, ctx)
             : await one(j, query, ctx);
@@ -177,6 +204,8 @@ async function move(j, [key, ...words], ctx, { yes, asObject, dryRun } = {}) {
 }
 
 // Запись в Jira: перенос задачи в спринт. Список спринтов берётся с доски задачи.
+const BACKLOG = /^(backlog|бэклог)$/i;
+
 async function sprint(j, [key, ...words], ctx, { yes, asObject, dryRun } = {}) {
   const name = words.join(' ').trim();
   if (!key || !ISSUE_KEY.test(key) || !name) {
@@ -184,8 +213,15 @@ async function sprint(j, [key, ...words], ctx, { yes, asObject, dryRun } = {}) {
   }
   const issue = await j.issue(key);
   const from = openSprints(fieldByName(issue, 'Sprint')).map((s) => s.name).join(', ') || 'без спринта';
-  const { values = [] } = (await j.sprints(await boardOf(j, issue))) ?? {};
-  const s = pickSprint(values, name);
+  if (BACKLOG.test(name)) {
+    if (dryRun) return { ok: true, dry_run: true, key, from, to: 'бэклог', backlog: true };
+    if (!yes && !asObject && !confirm(`${key}: ${from} → бэклог. Переносим? [y/N] `)) {
+      throw new CliError('Отменено.', 0, 'canceled');
+    }
+    await j.moveToBacklog([key]);
+    return { ok: true, key, from, to: 'бэклог', backlog: true, url: issueUrl(ctx, key) };
+  }
+  const s = await resolveSprint(j, await boardOf(j, issue), name, key.split('-')[0]);
   if (dryRun) return { ok: true, dry_run: true, key, from, to: s.name, sprint_id: s.id };
   if (!yes && !asObject && !confirm(`${key}: ${from} → ${s.name}. Переносим? [y/N] `)) {
     throw new CliError('Отменено.', 0, 'canceled');
@@ -311,8 +347,7 @@ const ASSIGNEE_META = { name: 'Assignee', schema: { type: 'user', system: 'assig
 async function projectSprint(j, project, name) {
   const { values: boards = [] } = (await j.boards(project)) ?? {};
   if (!boards.length) throw new CliError(`У проекта ${project} нет доски — спринт назначать некуда.`, 1, 'api_failed');
-  const { values = [] } = (await j.sprints(boards[0].id)) ?? {};
-  return pickSprint(values, name);
+  return resolveSprint(j, boards[0].id, name, project);
 }
 
 // Форма значения по типу поля: списки строк через запятую, число числом,
@@ -529,6 +564,131 @@ async function link(j, args, ctx, { yes, asObject, dryRun } = {}) {
   return { ok: true, key: from, link: sentence, type: type.name, target: to, url: issueUrl(ctx, from) };
 }
 
+// Доска проекта для внешних досок (bb): колонки из конфигурации доски Jira, задачи — запросом на каждую колонку.
+// Один общий запрос не годится: тысячи задач бэклога FD вытесняют из выдачи задачи в работе.
+// Больше COLUMN_MAX карточек колонка не покажет, флаг truncated у колонки; сузить можно условием --jql.
+export const COLUMN_MAX = 100;
+const PROJECT_KEY = /^[A-Z][A-Z0-9_]*$/i;
+const SPRINT_FIELD = 'com.pyxis.greenhopper.jira:gh-sprint';
+
+// Активные и будущие спринты доски. Канбан-доска без спринтов отвечает 400 «does not support sprints»:
+// это не сбой, а пустой список. Остальные ошибки идут наверх.
+async function boardSprints(j, boardId) {
+  try {
+    const { values = [] } = (await j.sprints(boardId)) ?? {};
+    return values.map((s) => ({ id: s.id, name: s.name, state: s.state }));
+  } catch (err) {
+    if (err?.code === 'api_failed' && / → 400\b/.test(err.message)) return [];
+    throw err;
+  }
+}
+
+async function board(j, [project], ctx, { jql } = {}) {
+  if (!PROJECT_KEY.test(project ?? '')) throw new CliError(`Использование: ${SUB_USAGE.board}.`, 1, 'usage');
+  const { values: boards = [] } = (await j.boards(project)) ?? {};
+  if (!boards.length) throw new CliError(`У проекта ${project} нет доски.`, 1, 'api_failed');
+  const [conf, statuses, allFields, sprints] = await Promise.all([
+    j.boardConfig(boards[0].id),
+    j.allStatuses(),
+    j.fieldList(),
+    boardSprints(j, boards[0].id),
+  ]);
+  const byId = new Map((statuses ?? []).map((s) => [String(s.id), s]));
+  const sprintField = (allFields ?? []).find((f) => f.schema?.custom === SPRINT_FIELD)?.id ?? null;
+  const columns = (conf?.columnConfig?.columns ?? []).map((c) => ({
+    name: c.name,
+    statuses: (c.statuses ?? []).map(({ id }) => ({
+      id: String(id),
+      name: byId.get(String(id))?.name ?? null,
+      category: byId.get(String(id))?.statusCategory?.key ?? null,
+    })),
+  }));
+  const scope = `project = ${quote(project)}${jql ? ` AND (${jql})` : ''} AND (statusCategory != Done OR statusCategoryChangedDate >= -14d)`;
+  const fields = ['summary', 'status', 'updated', 'issuetype', 'priority', 'parent', 'assignee', 'labels', ...(sprintField ? [sprintField] : [])];
+  const pages = await Promise.all(columns.map((c) => (c.statuses.length
+    ? j.searchJql({ jql: `${scope} AND status in (${c.statuses.map((s) => s.id).join(', ')}) ORDER BY Rank ASC`, fields, max: COLUMN_MAX, cursor: null })
+    : { issues: [], cursor: null })));
+  const found = pages.flatMap((p) => (p.issues ?? []).slice(0, COLUMN_MAX));
+  const epics = await parentEpics(j, found.map(parentOf).filter((p) => p && !isEpic(p)).map((p) => p.key));
+  return {
+    ok: true,
+    project,
+    board: { id: boards[0].id, name: boards[0].name },
+    jql: scope,
+    columns: columns.map((c, i) => ({ ...c, truncated: Boolean(pages[i].cursor) })),
+    sprints,
+    issues: found.map((i) => {
+      const open = sprintField ? openSprints(i.fields?.[sprintField])[0] : null;
+      const parent = parentOf(i);
+      return {
+        ...brief(i),
+        parent,
+        epic: !parent ? null : isEpic(parent) ? epicRef(parent) : epics.get(parent.key) ?? null,
+        status_id: String(i.fields?.status?.id ?? ''),
+        assignee: i.fields?.assignee?.displayName ?? null,
+        assignee_id: i.fields?.assignee?.accountId ?? null,
+        labels: i.fields?.labels ?? [],
+        sprint: open ? { id: open.id, name: open.name, state: open.state } : null,
+        url: issueUrl(ctx, i.key),
+      };
+    }),
+    truncated: pages.some((p) => Boolean(p.cursor)),
+  };
+}
+
+// Родитель с типом: по типу страница отличает эпик от задачи над подзадачей.
+const parentOf = (issue) => {
+  const p = issue.fields?.parent;
+  return p ? { key: p.key, summary: p.fields?.summary ?? '', type: p.fields?.issuetype?.name ?? '—' } : null;
+};
+const isEpic = (p) => p?.type?.toLowerCase() === 'epic';
+const textOrNull = (v) => (typeof v === 'string' && v.trim() ? v : null);
+
+const epicRef = (p) => ({ key: p.key, summary: p.summary });
+
+// Эпик задачи: родитель, если он эпик, иначе родитель родителя (у подзадачи).
+async function epicOf(j, parent) {
+  if (!parent) return null;
+  if (isEpic(parent)) return epicRef(parent);
+  const grand = parentOf(await j.issue(parent.key));
+  return isEpic(grand) ? epicRef(grand) : null;
+}
+
+// Эпики родителей-не-эпиков (задач над подзадачами) для доски: по запросу на 100 ключей.
+async function parentEpics(j, keys) {
+  const unique = [...new Set(keys)];
+  const chunks = [];
+  for (let i = 0; i < unique.length; i += 100) chunks.push(unique.slice(i, i + 100));
+  const pages = await Promise.all(chunks.map((c) => j.searchJql({ jql: `key in (${c.join(', ')})`, fields: ['parent'], max: 100, cursor: null })));
+  const epics = new Map();
+  for (const i of pages.flatMap((p) => p.issues ?? [])) {
+    const p = parentOf(i);
+    if (isEpic(p)) epics.set(i.key, epicRef(p));
+  }
+  return epics;
+}
+
+const HISTORY_VALUE_MAX = 300;
+// Только собственный ключ: без него it.toString вернул бы метод Object.prototype.
+const own = (o, k) => (Object.hasOwn(o, k) ? o[k] : null);
+const clip = (v) => (v === null || v === undefined ? null : v.length > HISTORY_VALUE_MAX ? `${v.slice(0, HISTORY_VALUE_MAX - 1)}…` : v);
+
+// Только чтение: кто, когда и что поменял в задаче.
+async function history(j, key, ctx) {
+  if (!ISSUE_KEY.test(key ?? '')) throw new CliError(`Использование: ${SUB_USAGE.history}.`, 1, 'usage');
+  const values = await j.changelog(key);
+  return {
+    ok: true,
+    key,
+    history: values.map((h) => ({
+      author: h.author?.displayName ?? 'Jira',
+      created: h.created,
+      items: (h.items ?? []).map((it) => ({ field: it.field, from: clip(own(it, 'fromString')), to: clip(own(it, 'toString')) })),
+    })),
+    url: issueUrl(ctx, key),
+  };
+}
+
 async function one(j, key, ctx) {
   if (!ISSUE_KEY.test(key)) {
     throw new CliError(`"${key}" не похоже на ключ задачи (FD-7647). Использование: fsh jira [mine|<KEY>].`, 1, 'usage');
@@ -537,6 +697,7 @@ async function one(j, key, ctx) {
   const { comments = [] } = (await j.comments(key)) ?? {};
   // Дети эпика в fields.subtasks не попадают, parent = KEY находит и их, и сабтаски.
   const { issues: children = [] } = await j.searchJql({ jql: `parent = ${key} ORDER BY status`, fields: ['summary', 'status'], max: 100 });
+  const parent = parentOf(issue);
   return {
     ok: true,
     issue: {
@@ -544,6 +705,13 @@ async function one(j, key, ctx) {
       description: issue.fields?.description ?? '',
       assignee: issue.fields?.assignee?.displayName ?? null,
       reporter: issue.fields?.reporter?.displayName ?? null,
+      parent,
+      epic: await epicOf(j, parent),
+      labels: issue.fields?.labels ?? [],
+      team: fieldText(fieldByName(issue, 'Team')) || null,
+      content: textOrNull(fieldByName(issue, 'Контент')),
+      qa: textOrNull(fieldByName(issue, 'Technical details for QA')),
+      sprint: (([s]) => (s ? { id: s.id, name: s.name, state: s.state } : null))(openSprints(fieldByName(issue, 'Sprint'))),
       subtasks: children.map((t) => ({ key: t.key, summary: t.fields?.summary ?? '', status: t.fields?.status?.name ?? '—' })),
       url: issueUrl(ctx, key),
     },
@@ -567,6 +735,24 @@ function render(r, ctx) {
     console.log(`${r.link}${r.existed ? ' — связь уже была' : r.dry_run ? ' — не связано (dry-run)' : ' — связано'}`);
     return;
   }
+  if (r.history) {
+    if (!r.history.length) return void console.log(`${r.key}: изменений нет.`);
+    for (const h of r.history) {
+      for (const it of h.items) {
+        console.log(`${humanize(h.created)} · ${h.author} · ${it.field}: ${truncate(String(it.from ?? '—').replace(/\n/g, ' '), 60)} → ${truncate(String(it.to ?? '—').replace(/\n/g, ' '), 60)}`);
+      }
+    }
+    return;
+  }
+  if (r.columns) {
+    console.log(`${r.project} · ${r.board.name} · ${r.issues.length}${r.truncated ? '+ (часть колонок обрезана, сузь --jql)' : ''} задач`);
+    for (const c of r.columns) {
+      const names = new Set(c.statuses.map((s) => s.name));
+      const keys = r.issues.filter((i) => names.has(i.status)).map((i) => i.key);
+      console.log(`\n${c.name} (${keys.length}${c.truncated ? '+' : ''})${keys.length ? `: ${keys.join(', ')}` : ''}`);
+    }
+    return;
+  }
   if (r.project) {
     console.log(`${r.project}: задача типа ${r.type} ${r.dry_run ? 'не создана (dry-run)' : `создана: ${r.key}`}`);
     console.log(truncate(r.summary, 80));
@@ -576,7 +762,7 @@ function render(r, ctx) {
     console.log(`${r.key}: ${r.dry_run ? 'не удалён (dry-run)' : 'удалён'}${r.transition ? '' : ''}`.trim());
     return;
   }
-  if (r.transition || r.sprint_id || r.parent) {
+  if (r.transition || r.sprint_id || r.backlog || r.parent) {
     console.log(`${r.key}: ${r.from} → ${r.to}${r.dry_run ? ' (dry-run, ничего не менял)' : ''}`);
     return;
   }
@@ -612,7 +798,17 @@ function render(r, ctx) {
   console.log(`${issue.key} · ${issue.summary}`);
   console.log(`${issue.type} · ${issue.status} · ${issue.priority} · ${issue.assignee ?? 'без исполнителя'} · ${humanize(issue.updated)}`);
   console.log(issueUrl(ctx, issue.key));
+  const extra = [
+    issue.epic && `эпик ${issue.epic.key} ${issue.epic.summary}`,
+    issue.parent && !(issue.epic && issue.epic.key === issue.parent.key) && `родитель ${issue.parent.key}`,
+    issue.sprint && `спринт ${issue.sprint.name}`,
+    issue.team && `команда ${issue.team}`,
+    issue.labels?.length && `метки ${issue.labels.join(', ')}`,
+  ].filter(Boolean);
+  if (extra.length) console.log(extra.join(' · '));
   if (issue.description) console.log(`\n${issue.description}`);
+  if (issue.content) console.log(`\nКонтент:\n${issue.content}`);
+  if (issue.qa) console.log(`\nTechnical details for QA:\n${issue.qa}`);
   if (!comments.length) return;
   console.log(`\nКомментарии (${comments.length}):`);
   for (const c of comments) {

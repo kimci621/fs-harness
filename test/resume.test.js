@@ -192,3 +192,37 @@ test('resume: неизвестный runId — run_not_found', async () => {
   const r = runAction(spec([]), {}, {}, opts({ resumeOf: 'нет-такого' }));
   await assert.rejects(() => r.result, (e) => e.code === 'run_not_found');
 });
+
+test('resume: пока агент доигрывает, meta на диске уже running с pid', async () => {
+  const dir = mkdtempSync(path.join(root, 'snap-'));
+  const ownRuns = path.join(dir, 'runs');
+  const bin = path.join(dir, 'bin');
+  const marker = path.join(dir, 'was-here');
+  const snapshot = path.join(dir, 'meta-during-resume.json');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, 'claude'), [
+    '#!/bin/sh',
+    'cat > /dev/null',
+    `if [ -f ${marker} ]; then`,
+    `  cat ${ownRuns}/*/meta.json > ${snapshot}`,
+    `  echo 'строка три' >> f.txt`,
+    `  git -c user.name=t -c user.email=t@e.st commit -am 'доиграно' >/dev/null`,
+    `  echo готово`,
+    `  exit 0`,
+    `fi`,
+    `touch ${marker}`,
+    `exit 3`,
+  ].join('\n') + '\n', { mode: 0o755 });
+  process.env.PATH = `${bin}:${process.env.PATH}`;
+
+  const published = [];
+  const first = runAction(spec(published), {}, {}, opts({ runsDir: ownRuns, makeProvider: fakeJudge('approve') }));
+  await assert.rejects(() => first.result, (e) => e instanceof CliError && e.code === 'agent_failed');
+
+  const second = runAction(spec(published), {}, {}, opts({ runsDir: ownRuns, resumeOf: first.id, makeProvider: fakeJudge('approve') }));
+  await second.result;
+
+  const during = JSON.parse(readFileSync(snapshot, 'utf8'));
+  assert.equal(during.state, 'running', 'gc видит живой ран, а не failed');
+  assert.equal(during.pid, process.pid);
+});

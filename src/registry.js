@@ -44,6 +44,7 @@ import { readSecret } from './secrets.js';
 import { buildAgentGuide, cmdAgentGuide } from './commands/agent-guide.js';
 import { cmdConfig } from './config-cmd.js';
 import { CliError } from './errors.js';
+import { runSingle } from './locks.js';
 import { cmdUp } from './commands/up.js';
 import { cmdQaBot } from './commands/qa-bot.js';
 
@@ -216,7 +217,7 @@ export const COMMANDS = [
   fromAction(implementAction),
   {
     name: 'jira',
-    usage: 'jira [mine|<KEY>|show <KEY>|search "<JQL>"|move <KEY> <статус>|sprint <KEY> <спринт>|comment <KEY> <текст>|--file|field <KEY> "<поле>" [значение] [--append]|parent <KEY> <EPIC>|attach <KEY> [файл...]|attach get <KEY> [имя]|create <ПРОЕКТ> <тип> <summary> [--parent --sprint --assignee]|link <KEY> <тип> <KEY2>|delete <KEY>]',
+    usage: 'jira [mine|<KEY>|show <KEY>|search "<JQL>"|move <KEY> <статус>|sprint <KEY> <спринт|backlog>|comment <KEY> <текст>|--file|field <KEY> "<поле>" [значение] [--append]|parent <KEY> <EPIC>|attach <KEY> [файл...]|attach get <KEY> [имя]|create <ПРОЕКТ> <тип> <summary> [--parent --sprint --assignee]|link <KEY> <тип> <KEY2>|delete <KEY>|board <ПРОЕКТ> [--jql "<условие>"]|history <KEY>]',
     description: 'Задачи Jira: список с фильтрами, одна задача с комментариями, поиск по JQL, смена статуса и спринта, комментарий, чтение и запись (или дописывание) любого поля, родитель-эпик, вложения (список, аплоад, выгрузка), создание с эпиком, спринтом и исполнителем, связь и удаление задачи',
     example: 'fsh jira mine --sprint current --component Frontend',
     run: (ctx, args, opts) => cmdJira(ctx, args, opts),
@@ -412,7 +413,7 @@ export const COMMANDS = [
     run: (ctx, args, opts) => (args[0] === 'install'
       ? cmdWatchInstall(ctx, opts)
       : opts.daemon
-        ? cmdWatchDaemon(opts)
+        ? runSingle('watch', () => cmdWatchDaemon(opts))
         : withProject(ctx, () => cmdWatch(ctx, { json: opts.json }))),
   },
   {
@@ -526,7 +527,7 @@ export const COMMANDS = [
     description: 'Telegram-бот (long-polling): /mrs /watch /status /run и кнопки Approve/Revise/Reject. Запускать вручную или из юнита, как watch --daemon',
     example: 'fsh bot',
     // Демон ходит по конфигу сам; MCP-инструмента нет — бот и есть поверхность человека.
-    run: (ctx, args, opts) => cmdBot(opts),
+    run: (ctx, args, opts) => runSingle('bot', () => cmdBot(opts)),
   },
   {
     name: 'up',
@@ -540,7 +541,7 @@ export const COMMANDS = [
     usage: 'qa-bot',
     description: 'Бот тестировщика в личке Mattermost: контекст задачи Jira, ответы по коду и флагам (агент только читает), тег при багах, деплой на dev',
     example: 'fsh qa-bot',
-    run: (ctx, args, opts) => cmdQaBot(opts),
+    run: (ctx, args, opts) => runSingle('qa-bot', () => cmdQaBot(opts)),
   },
   {
     name: 'auto',
